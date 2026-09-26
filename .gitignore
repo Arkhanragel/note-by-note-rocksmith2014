@@ -1,0 +1,16 @@
+# Build output
+bin/
+obj/
+*.user
+.vs/
+
+# Python
+.venv/
+__pycache__/
+
+# Data extracted from the game. Copyrighted material, never commit it.
+charts/
+docs/dlc_scan.txt
+*.wem
+*.ogg
+*.psarc
