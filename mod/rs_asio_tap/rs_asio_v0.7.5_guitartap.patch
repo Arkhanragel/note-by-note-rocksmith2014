@@ -1,0 +1,66 @@
+diff --git a/RS_ASIO/RSAsioAudioClient.cpp b/RS_ASIO/RSAsioAudioClient.cpp
+index db9e39f..c564af4 100644
+--- a/RS_ASIO/RSAsioAudioClient.cpp
++++ b/RS_ASIO/RSAsioAudioClient.cpp
+@@ -8,6 +8,7 @@
+ #include "RSAsioAudioRenderClient.h"
+ #include "RSAsioAudioCaptureClient.h"
+ #include "AudioProcessing.h"
++#include "GuitarTap.h" // Note-by-Note
+ 
+ RSAsioAudioClient::RSAsioAudioClient(RSAsioDevice& asioDevice)
+ 	: m_AsioDevice(asioDevice)
+@@ -615,6 +616,19 @@ void RSAsioAudioClient::OnAsioBufferSwitch(unsigned buffIdx)
+ 			}
+ 		}
+ 
++		// Note-by-Note: share the raw guitar signal (game channel 0, before software volume)
++		// through the GuitarTap shared-memory ring buffer.
++		if (!m_ChannelMap.empty() && m_ChannelMap[0] >= 0)
++		{
++			const ASIOChannelInfo* tapInfo = m_AsioSharedHost.GetInputChannelInfo(m_ChannelMap[0]);
++			ASIOBufferInfo* tapBuffer = m_AsioSharedHost.GetInputBuffer(m_ChannelMap[0]);
++			if (tapInfo && tapBuffer)
++			{
++				GuitarTap::Write(this, tapBuffer->buffers[buffIdx], tapInfo->type, GetAsioSampleTypeNumBytes(tapInfo->type),
++					m_bufferNumFrames, m_WaveFormat.Format.nSamplesPerSec);
++			}
++		}
++
+ 		if (doSoftwareVolume)
+ 		{
+ 			const DWORD totalSamples = m_bufferNumFrames * m_WaveFormat.Format.nChannels;
+diff --git a/RS_ASIO/RS_ASIO.vcxproj b/RS_ASIO/RS_ASIO.vcxproj
+index 7dd82b3..8b20145 100644
+--- a/RS_ASIO/RS_ASIO.vcxproj
++++ b/RS_ASIO/RS_ASIO.vcxproj
+@@ -180,6 +180,8 @@
+     <ClInclude Include="Patcher.h" />
+     <ClInclude Include="RSAsioAudioCaptureClient.h" />
+     <ClInclude Include="RSAsioAudioClient.h" />
++    <ClInclude Include="GuitarTap.h" />
++    <ClInclude Include="GuitarTapShared.h" />
+     <ClInclude Include="RSAsioAudioClientServiceBase.h" />
+     <ClInclude Include="RSAsioAudioRenderClient.h" />
+     <ClInclude Include="RSAsioAudioEndpointVolume.h" />
+@@ -217,6 +219,7 @@
+     <ClCompile Include="Patcher_21a8959a.cpp" />
+     <ClCompile Include="RSAsioAudioCaptureClient.cpp" />
+     <ClCompile Include="RSAsioAudioClient.cpp" />
++    <ClCompile Include="GuitarTap.cpp" />
+     <ClCompile Include="RSAsioAudioClientServiceBase.cpp" />
+     <ClCompile Include="RSAsioAudioEndpointVolume.cpp" />
+     <ClCompile Include="RSAsioAudioRenderClient.cpp" />
+diff --git a/RS_ASIO/dllmain.cpp b/RS_ASIO/dllmain.cpp
+index 7cb694f..fef2892 100644
+--- a/RS_ASIO/dllmain.cpp
++++ b/RS_ASIO/dllmain.cpp
+@@ -22,7 +22,7 @@ BOOL APIENTRY DllMain( HMODULE hModule,
+ 		DisableThreadLibraryCalls(hModule);
+ 
+ 		rslog::InitLog();
+-		rslog::info_ts() << " - Wrapper DLL loaded (v0.7.5)" << std::endl;
++		rslog::info_ts() << " - Wrapper DLL loaded (v0.7.5 + Note-by-Note GuitarTap)" << std::endl;
+ 		InitPatcher();
+ 		PatchOriginalCode();
+ 		break;

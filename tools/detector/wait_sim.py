@@ -54,6 +54,35 @@ def live_blocks(device: int, channel: int):
             yield q.get()
 
 
+def tap_blocks():
+    """
+    Yield 256-sample blocks from the GuitarTap shared memory, i.e. the guitar signal inside the running
+    game, written by our RS_ASIO build (see mod/common/GuitarTapShared.h for the layout).
+    """
+    import mmap
+    import struct
+    header = struct.Struct("<IIIIqIII7I")  # magic, version, sampleRate, capacity, writePos, pid, blockFrames, lastTick, reserved
+    capacity = 1 << 16
+    size = header.size + 4 * capacity
+    m = mmap.mmap(-1, size, tagname="Local\\NoteByNote_GuitarInput")
+    magic, _, sr, cap, write_pos, *_ = header.unpack_from(m, 0)
+    if magic != 0x314E424E:
+        raise SystemExit("GuitarTap not active: is the game running with our RS_ASIO build installed?")
+    if sr != SR:
+        print(f"Note: the tap runs at {sr} Hz (the analysis assumes {SR} Hz)")
+    read_pos = write_pos
+    ring = np.frombuffer(m, dtype=np.float32, count=capacity, offset=header.size)
+    while True:
+        write_pos = header.unpack_from(m, 0)[4]
+        if write_pos - read_pos > capacity // 2:  # we fell far behind: skip ahead
+            read_pos = write_pos - BLOCK
+        while write_pos - read_pos >= BLOCK:
+            idx = (np.arange(read_pos, read_pos + BLOCK) & (capacity - 1))
+            yield ring[idx].astype(np.float64)
+            read_pos += BLOCK
+        time.sleep(0.002)
+
+
 def wav_blocks(path: str):
     """Yield 256-sample blocks from a mono 16-bit WAV (as written by --record)."""
     with wave.open(path, "rb") as w:
@@ -100,7 +129,8 @@ def cmd_log(args):
     tracker = NoteTracker(make_config(args, args.bass))
     recorded: list[np.ndarray] = []
     print(f"Logging channel {args.channel} for {args.duration:.0f}s. Play single notes.", flush=True)
-    for block in live_blocks(args.device, args.channel):
+    source = tap_blocks() if args.source == "tap" else live_blocks(args.device, args.channel)
+    for block in source:
         if args.record:
             recorded.append(block)
         ev = tracker.process(block)
@@ -246,6 +276,8 @@ def main():
     ap.add_argument("--start", type=int, default=0, help="play: target index to start from")
     ap.add_argument("--duration", type=float, default=60.0, help="log: seconds to record")
     ap.add_argument("--record", default=None, help="log: save the raw audio to this .wav")
+    ap.add_argument("--source", choices=["interface", "tap"], default="interface",
+                    help="log: 'tap' = read the guitar from the running game (our RS_ASIO build)")
     ap.add_argument("--bass", action="store_true", help="bass range (longer window, lower fmin)")
     ap.add_argument("--threshold", type=float, default=0.15, help="YIN threshold (lower = stricter)")
     ap.add_argument("--gate", type=float, default=-45.0, help="ignore signal below this level (dBFS)")
@@ -253,7 +285,7 @@ def main():
     ap.add_argument("--stable-legato", type=int, default=6, help="blocks needed for a change without a pick attack")
     ap.add_argument("--rel-gate", type=float, default=18.0, help="ignore frames this many dB below the last attack peak")
     args = ap.parse_args()
-    if args.mode in ("monitor", "log", "play") and args.device is None:
+    if args.mode in ("monitor", "log", "play") and args.device is None and args.source != "tap":
         args.device = find_focusrite()
     try:
         {"monitor": cmd_monitor, "log": cmd_log, "analyze": cmd_analyze, "play": cmd_play}[args.mode](args)

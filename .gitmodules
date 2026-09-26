@@ -4,3 +4,6 @@
 [submodule "external/minhook"]
 	path = external/minhook
 	url = https://github.com/TsudaKageyu/minhook.git
+[submodule "external/rs_asio"]
+	path = external/rs_asio
+	url = https://github.com/mdias/rs_asio.git
