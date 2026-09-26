@@ -371,26 +371,105 @@ static void LogStretch() {
 // bottoms out around 25% speed, which is not a freeze. So: pause the music itself.
 // ExecuteActionOnEvent applies an action (Stop/Pause/Resume...) to everything that a previously
 // posted event started. "Play_<songkey>" is the event that started the song's music.
+//
+// Test 4: ExecuteActionOnEvent("Play_<key>", Pause, <all objects>) returned AK_Fail (2). This older
+// Wwise apparently needs the exact game object and/or playing ID. So we FIND the song's playback:
+//   - Every PostEvent returns a "playing ID", and Wwise hands those out counting up from 1.
+//   - GetEventIDFromPlayingID(pid) tells which event started a playback (0 = not playing).
+//   - An event's ID is the 32-bit FNV-1 hash of its lowercase name (that's how Wwise turns names
+//     into IDs), so we compute the ID of "play_<key>" and scan playing IDs until one matches.
+//   - GetGameObjectFromPlayingID(pid) then gives the game object it plays on.
+// Then several ways to pause are tried in order and logged, and the first that succeeds is reused.
 namespace addr {
 constexpr uintptr_t kExecuteActionOnEventChar = 0x00AC49E0;
-}
+constexpr uintptr_t kExecuteActionOnEventId = 0x00AC4930;
+constexpr uintptr_t kGetEventIDFromPlayingID = 0x00ABFE80;
+constexpr uintptr_t kGetGameObjectFromPlayingID = 0x00ABFEA0;
+constexpr uintptr_t kGetPlayingIDsFromGameObject = 0x00ABFEC0;
+}  // namespace addr
 using ExecuteActionOnEventChar_t = AKRESULT(__cdecl*)(const char*, int /*AkActionOnEventType*/, AkGameObjectID,
                                                        AkTimeMs, int /*curve*/, AkPlayingID);
+using ExecuteActionOnEventId_t = AKRESULT(__cdecl*)(AkUniqueID, int, AkGameObjectID, AkTimeMs, int, AkPlayingID);
+using GetEventIDFromPlayingID_t = AkUniqueID(__cdecl*)(AkPlayingID);
+using GetGameObjectFromPlayingID_t = AkGameObjectID(__cdecl*)(AkPlayingID);
+using GetPlayingIDsFromGameObject_t = AKRESULT(__cdecl*)(AkGameObjectID, AkUInt32*, AkPlayingID*);
 constexpr int kActionPause = 1, kActionResume = 2;
 
+static AkUniqueID WwiseHash(const std::string& name) {  // FNV-1, 32 bit, lowercase (Wwise's GetIDFromString)
+    uint32_t h = 2166136261u;
+    for (char c : name) { h *= 16777619u; h ^= (uint8_t)tolower((unsigned char)c); }
+    return h;
+}
+
+static AkPlayingID g_songPid = 0;          // playing ID of the song's music (0 = not found yet)
+static AkGameObjectID g_songObj = 0;
+static std::string g_songPidKey;           // song the cached pid belongs to
+
+static bool FindSongPlayback(const std::string& ev, AkUniqueID evId) {
+    auto evOf = (GetEventIDFromPlayingID_t)(g_base + addr::kGetEventIDFromPlayingID);
+    auto objOf = (GetGameObjectFromPlayingID_t)(g_base + addr::kGetGameObjectFromPlayingID);
+    auto idsOf = (GetPlayingIDsFromGameObject_t)(g_base + addr::kGetPlayingIDsFromGameObject);
+
+    if (g_songPid && g_songPidKey == ev && evOf(g_songPid) == evId) return true;  // cached and still playing
+
+    // 1) Cheap check first: what's playing on the object RSMods calls the song object (0x1234)?
+    AkPlayingID ids[64];
+    AkUInt32 n = 64;
+    AKRESULT r = idsOf(kSongGameObject, &n, ids);
+    Log(">>> find: GetPlayingIDsFromGameObject(0x1234) -> result=%d n=%u", r, n);
+    for (AkUInt32 i = 0; i < n && i < 64; ++i) {
+        AkUniqueID e = evOf(ids[i]);
+        Log(">>> find:   pid=%u event=0x%08X%s", ids[i], e, e == evId ? "  <== the song" : "");
+        if (e == evId) { g_songPid = ids[i]; g_songObj = kSongGameObject; g_songPidKey = ev; return true; }
+    }
+
+    // 2) Scan playing IDs, newest first. The counter only goes up, so the song is likely a recent
+    //    ID, but everything since the game started (UI sounds etc.) has used IDs too.
+    DWORD t0 = GetTickCount();
+    for (AkPlayingID pid = 3000000; pid >= 1; --pid) {
+        if (evOf(pid) == evId) {
+            g_songPid = pid;
+            g_songObj = objOf(pid);
+            g_songPidKey = ev;
+            Log(">>> find: scan found pid=%u on game object 0x%X (%lu ms)", pid, (unsigned)g_songObj, GetTickCount() - t0);
+            return true;
+        }
+    }
+    Log(">>> find: scan found nothing up to pid 3000000 (%lu ms)", GetTickCount() - t0);
+    return false;
+}
+
 static void PauseMusic(bool pause) {
-    uintptr_t f = g_base + addr::kExecuteActionOnEventChar;
-    if (!LooksLikeFunctionStart(f)) { LogBytes("ExecuteActionOnEvent", f); Log(">>> pause: function check failed"); return; }
+    for (uintptr_t f : {addr::kExecuteActionOnEventChar, addr::kExecuteActionOnEventId, addr::kGetEventIDFromPlayingID,
+                        addr::kGetGameObjectFromPlayingID, addr::kGetPlayingIDsFromGameObject}) {
+        if (!LooksLikeFunctionStart(g_base + f)) { LogBytes("Wwise fn", g_base + f); Log(">>> pause: function check failed"); return; }
+    }
     char key[96];
     if (!GetSongKey(key, sizeof(key))) strcpy_s(key, g_lastSongKey);
     if (!key[0]) { Log(">>> pause: no song key yet (select a song in the song list first)"); return; }
     std::string ev = std::string("Play_") + key;
+    AkUniqueID evId = WwiseHash(ev);
+    int action = pause ? kActionPause : kActionResume;
+    const char* what = pause ? "PAUSE" : "RESUME";
     float t = -1;
     GetSongTime(&t);
-    auto exec = (ExecuteActionOnEventChar_t)f;
-    // AK_INVALID_GAME_OBJECT = act on this event on every game object; 0 ms transition = instant.
-    AKRESULT r = exec(ev.c_str(), pause ? kActionPause : kActionResume, AK_INVALID_GAME_OBJECT, 0, 4, 0);
-    Log(">>> %s %s -> result=%d (1=success)  song t=%.3f", pause ? "PAUSE" : "RESUME", ev.c_str(), r, t);
+    Log(">>> %s %s (event id 0x%08X) at song t=%.3f", what, ev.c_str(), evId, t);
+
+    auto execChar = (ExecuteActionOnEventChar_t)(g_base + addr::kExecuteActionOnEventChar);
+    auto execId = (ExecuteActionOnEventId_t)(g_base + addr::kExecuteActionOnEventId);
+
+    // Strategy A: by name, on the song object 0x1234
+    AKRESULT r = execChar(ev.c_str(), action, kSongGameObject, 0, 4, 0);
+    Log(">>>   A: by name, obj 0x1234                -> %d", r);
+    if (r == 1) return;
+
+    // Strategy B/C: find the exact playback, then act on it
+    if (!FindSongPlayback(ev, evId)) return;
+    r = execId(evId, action, g_songObj, 0, 4, g_songPid);
+    Log(">>>   B: by id, obj 0x%X, pid %u        -> %d", (unsigned)g_songObj, g_songPid, r);
+    if (r == 1) return;
+    r = execId(evId, action, g_songObj, 0, 4, 0);
+    Log(">>>   C: by id, obj 0x%X, any pid       -> %d", (unsigned)g_songObj, r);
 }
 
 // ------------------------------------------------------------------------------------ main loop
@@ -400,8 +479,10 @@ static bool GameFocused() {
     return pid == GetCurrentProcessId();
 }
 
-static bool Pressed(int vk, bool& wasDown) {  // true on the key-down edge only
-    bool down = (GetAsyncKeyState(vk) & 0x8000) != 0;
+// Test keys are Ctrl + a number key. Plain F-keys clashed: F10 = the Windows menu bar (froze the
+// rendering), F12 = the Steam screenshot key, and F11 caused a white flash in the game.
+static bool Pressed(int vk, bool& wasDown) {  // true on the key-down edge of Ctrl+vk only
+    bool down = (GetAsyncKeyState(vk) & 0x8000) != 0 && (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
     bool edge = down && !wasDown;
     wasDown = down;
     return edge;
@@ -433,12 +514,11 @@ static DWORD WINAPI MainThread(LPVOID) {
     // functions, and neither needs code patching. InstallHooks() stays in the file for later.
     g_setRtpcOk = LooksLikeFunctionStart(g_base + addr::kSetRtpcChar);
     g_getRtpcOk = LooksLikeFunctionStart(g_base + addr::kGetRtpcChar);
-    Log("Keys: F3 mark | F5 slower | F6 speed 100%% | F7 PAUSE music | F8 RESUME music | "
-        "F9 stretch effect ON/OFF | F12 unload probe");
+    Log("Keys (hold Ctrl): Ctrl+1 mark | Ctrl+2 slower | Ctrl+3 speed 100%% | Ctrl+4 PAUSE music | Ctrl+5 RESUME music | Ctrl+6 stretch effect ON/OFF | Ctrl+0 unload probe");
 
     const float speeds[] = {100, 75, 50, 25, 10, 5, 1};
     int speedIdx = 0, mark = 0;
-    bool k3 = false, k5 = false, k6 = false, k7 = false, k8 = false, k9 = false, k12 = false;
+    bool k1 = false, k2 = false, k3 = false, k4 = false, k5 = false, k6 = false, k0 = false;
 
     char lastMenu[96] = "", lastKey[96] = "";
     float lastT = -1, rateT = -1;
@@ -480,14 +560,14 @@ static DWORD WINAPI MainThread(LPVOID) {
         }
 
         if (!GameFocused()) continue;
-        if (Pressed(VK_F5, k5)) { if (speedIdx < 6) ++speedIdx; SetSpeed(speeds[speedIdx]); }
-        if (Pressed(VK_F6, k6)) { speedIdx = 0; SetSpeed(100); }
-        if (Pressed(VK_F3, k3)) Log("==================== MARK %d (t=%.3f) ====================", ++mark, lastT);
-        if (Pressed(VK_F7, k7)) PauseMusic(true);
-        if (Pressed(VK_F8, k8)) PauseMusic(false);
+        if (Pressed('2', k2)) { if (speedIdx < 6) ++speedIdx; SetSpeed(speeds[speedIdx]); }
+        if (Pressed('3', k3)) { speedIdx = 0; SetSpeed(100); }
+        if (Pressed('1', k1)) Log("==================== MARK %d (t=%.3f) ====================", ++mark, lastT);
+        if (Pressed('4', k4)) PauseMusic(true);
+        if (Pressed('5', k5)) PauseMusic(false);
         // (F10 is NOT used: it's the Windows menu-bar key, and it froze the game's rendering in test 2.)
-        if (Pressed(VK_F9, k9)) { static bool fxOn = false; fxOn = !fxOn; SetTimeStretchEffect(fxOn); }
-        if (Pressed(VK_F12, k12)) break;
+        if (Pressed('6', k6)) { static bool fxOn = false; fxOn = !fxOn; SetTimeStretchEffect(fxOn); }
+        if (Pressed('0', k0)) break;
     }
 
     // F12: unload, so a rebuilt probe can be injected without restarting the game.
@@ -495,7 +575,7 @@ static DWORD WINAPI MainThread(LPVOID) {
     // game's own reaction to the F11 key.)
     MH_Uninitialize();  // harmless if hooks were never installed
     Sleep(300);
-    Log("Probe unloaded (F12).");
+    Log("Probe unloaded (Ctrl+0).");
     { std::lock_guard<std::mutex> lock(g_logMutex); fclose(g_log); g_log = nullptr; }
     FreeLibraryAndExitThread(g_self, 0);
 }
