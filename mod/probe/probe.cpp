@@ -859,6 +859,26 @@ static AKRESULT SongVolume(float v) {
     return r;
 }
 
+// Test 18: the mute did nothing audible (SetGameObjectOutputBusVolume is probably mislabeled too).
+// Disassembly around PostEvent/SeekOnEvent (each function queues a Wwise message; the type number
+// identifies it) showed the REAL ExecuteActionOnEvent(AkUniqueID, action, obj, ms, curve, playingID)
+// at rva 0xAC4900 (message type 0x20; the char*/wchar_t* wrappers at 0xAC4980/0xAC49B0 hash the
+// name and call it). So we pause the exact playback the clock follows.
+namespace addr {
+constexpr uintptr_t kExecuteActionOnEventIdReal = 0x00AC4900;
+}
+
+static AKRESULT SongAction(int action) {
+    uintptr_t prov = FindProvider();
+    if (!prov || !FnOk(addr::kExecuteActionOnEventIdReal, "ExecuteActionOnEvent(id) real", false) ||
+        !FnOk(addr::kGetEventIDFromPlayingID, "GetEventIDFromPlayingID", false)) return -1;
+    AkPlayingID pid = *(AkPlayingID*)(prov + 0xCC);
+    AkUniqueID ev = ((GetEventIDFromPlayingID_t)(g_base + addr::kGetEventIDFromPlayingID))(pid);
+    AKRESULT r = ((ExecuteActionOnEventId_t)(g_base + addr::kExecuteActionOnEventIdReal))(ev, action, kSongGameObject, 0, 4, pid);
+    Log(">>> ExecuteActionOnEvent(0x%08X, %s, obj 0x1234, pid %u) -> %d", ev, action == kActionPause ? "Pause" : "Resume", pid, r);
+    return r;
+}
+
 static float g_freezeT = -1;
 
 static void Freeze(bool on) {
@@ -866,12 +886,14 @@ static void Freeze(bool on) {
     if (!prov) { Log(">>> freeze: provider not found (is a song playing?)"); return; }
     if (on) {
         GetSongTime(&g_freezeT);
-        SongVolume(0.0f);
+        SongAction(kActionPause);
         *(volatile uint8_t*)(prov + 0xDA) = 1;
         Log(">>> FREEZE at t=%.3f (provider 0x%08X)", g_freezeT, (unsigned)prov);
     } else {
-        if (g_freezeT >= 0) SeekSong((AkTimeMs)(g_freezeT * 1000.0f));
-        SongVolume(1.0f);
+        // Test 19: with the seek here, music and highway ended up out of sync. With a real pause
+        // there's no drift to correct, and SeekOnEvent (music segment time) may not match the
+        // source position the clock reads. So unfreeze = resume only.
+        SongAction(kActionResume);
         *(volatile uint8_t*)(prov + 0xDA) = 0;
         Log(">>> UNFREEZE (back to t=%.3f)", g_freezeT);
         g_freezeT = -1;
