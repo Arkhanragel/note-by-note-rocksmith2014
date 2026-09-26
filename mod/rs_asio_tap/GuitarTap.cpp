@@ -59,4 +59,23 @@ void Write(const void* owner, const void* asioBuffer, ASIOSampleType asioType, u
     InterlockedExchange64(&h.writePos, pos + numFrames);  // full memory barrier + atomic 64-bit store
 }
 
+static DWORD WINAPI ModLoaderThread(LPVOID param) {
+    wchar_t path[MAX_PATH];
+    GetModuleFileNameW((HMODULE)param, path, MAX_PATH);
+    std::wstring p(path);
+    p = p.substr(0, p.find_last_of(L"\\/") + 1) + L"NoteByNote.dll";
+    if (GetFileAttributesW(p.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        rslog::info_ts() << "GuitarTap: NoteByNote.dll not found, mod not loaded" << std::endl;
+        return 0;
+    }
+    HMODULE mod = LoadLibraryW(p.c_str());
+    rslog::info_ts() << "GuitarTap: NoteByNote.dll " << (mod ? "loaded" : "FAILED to load") << std::endl;
+    return 0;
+}
+
+void StartModLoader(HMODULE rsAsioModule) {
+    HANDLE t = CreateThread(nullptr, 0, ModLoaderThread, rsAsioModule, 0, nullptr);
+    if (t) CloseHandle(t);
+}
+
 }  // namespace GuitarTap

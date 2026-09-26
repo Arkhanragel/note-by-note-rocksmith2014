@@ -51,7 +51,7 @@ static class Program
                 return 0;
 
             case "cat": // print a text file from the archive, e.g. a manifest .json with the song title
-                using (var psarc = PSARC.OpenFile(args[1]))
+                using (var psarc = OpenPsarc(args[1]))
                 {
                     var name = psarc.Manifest.First(n => n.Contains(args[2], StringComparison.OrdinalIgnoreCase));
                     using var s = psarc.GetEntryStream(name).GetAwaiter().GetResult();
@@ -63,15 +63,24 @@ static class Program
             case "scan":
                 Scan(args[1]);
                 return 0;
+
+            case "export": // export <psarc-or-folder> [more...] <outdir>
+                Export(args.Skip(1).Take(args.Length - 2).ToArray(), args[^1]);
+                return 0;
         }
         return 1;
     }
 
     // ---------------------------------------------------------------- PSARC access
 
+    // Opens a .psarc for reading while allowing others to read/write it too. The game keeps songs.psarc
+    // and etudes.psarc open while it runs, and PSARC.OpenFile would fail with a sharing violation.
+    static PSARC OpenPsarc(string path) =>
+        PSARC.Read(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete));
+
     static List<string> ListSngEntries(string psarcPath)
     {
-        using var psarc = PSARC.OpenFile(psarcPath);
+        using var psarc = OpenPsarc(psarcPath);
         // The manifest is the list of file names in the archive.
         return psarc.Manifest.Where(n => n.EndsWith(".sng", StringComparison.OrdinalIgnoreCase)).ToList();
     }
@@ -95,7 +104,7 @@ static class Program
 
     static Chart LoadChart(string psarcPath, string sngFilter)
     {
-        using var psarc = PSARC.OpenFile(psarcPath);
+        using var psarc = OpenPsarc(psarcPath);
         var sngName = psarc.Manifest.FirstOrDefault(n => n.EndsWith(".sng") && n.Contains(sngFilter, StringComparison.OrdinalIgnoreCase))
                       ?? throw new ArgumentException($"No .sng matching '{sngFilter}'. Use 'list' to see the names.");
         return BuildChart(psarcPath, sngName, ReadSng(psarc, sngName));
@@ -184,6 +193,92 @@ static class Program
         if (c.Targets.Count > 15) Console.WriteLine("  ...");
     }
 
+    // ---------------------------------------------------------------- Export for the mod
+    // Writes one small text chart per arrangement, which the C++ mod reads when a song starts:
+    //   <outdir>/<songkey lowercase>/<arrangement>.nbn     e.g. charts/notegel1/lead.nbn
+    // The folder name is the SongKey from the song's manifest, the same key the game uses in its
+    // audio events ("Play_NoteGel1"), so the mod can find the chart for the song being played.
+    // <arrangement> is the .sng suffix: lead, lead2, rhythm, bass, combo...
+    // Also writes <outdir>/index.txt (key | artist | title | arrangements) for humans.
+    //
+    // .nbn format (text, one target per line, times in seconds):
+    //   # comments
+    //   song <SongKey>
+    //   title <Artist - Title>
+    //   arrangement <name>
+    //   bass <0|1>
+    //   tuning <6 semitone offsets>
+    //   N <time> <midi> <string> <fret>        single note
+    //   C <time> <n> <midi1> <midi2> ...       chord (not used yet by the mod)
+    static void Export(string[] inputs, string outDir)
+    {
+        var files = inputs.SelectMany(i => Directory.Exists(i) ? Directory.GetFiles(i, "*.psarc") : new[] { i })
+                          .Where(f => !f.EndsWith("_m.psarc", StringComparison.OrdinalIgnoreCase)) // Mac versions
+                          .OrderBy(f => f).ToList();
+        var index = new List<string>();
+        int written = 0;
+        foreach (var file in files)
+        {
+            try
+            {
+                using var psarc = OpenPsarc(file);
+                foreach (var sngName in psarc.Manifest.Where(n => n.EndsWith(".sng") && !n.Contains("vocals")))
+                {
+                    string baseName = Path.GetFileNameWithoutExtension(sngName);  // e.g. notegel1_lead
+                    string? manifestName = psarc.Manifest.FirstOrDefault(n => n.EndsWith(baseName + ".json", StringComparison.OrdinalIgnoreCase));
+                    if (manifestName == null) continue;
+                    var attrs = ReadManifestAttributes(psarc, manifestName);
+                    if (attrs == null) continue;
+                    string songKey = attrs.Value.GetProperty("SongKey").GetString() ?? "";
+                    string artist = attrs.Value.TryGetProperty("ArtistName", out var a) ? a.GetString() ?? "" : "";
+                    string title = attrs.Value.TryGetProperty("SongName", out var t) ? t.GetString() ?? "" : "";
+                    string arr = baseName.Contains('_') ? baseName[(baseName.LastIndexOf('_') + 1)..].ToLowerInvariant() : "lead";
+
+                    var chart = BuildChart(file, sngName, ReadSng(psarc, sngName));
+                    var dir = Path.Combine(outDir, songKey.ToLowerInvariant());
+                    Directory.CreateDirectory(dir);
+                    using (var w = new StreamWriter(Path.Combine(dir, arr + ".nbn")))
+                    {
+                        w.WriteLine("# Note-by-Note chart v1, generated by ChartDump from your own game files. Do not distribute.");
+                        w.WriteLine($"song {songKey}");
+                        w.WriteLine($"title {artist} - {title}");
+                        w.WriteLine($"arrangement {arr}");
+                        w.WriteLine($"bass {(chart.IsBass ? 1 : 0)}");
+                        w.WriteLine($"tuning {string.Join(" ", chart.Tuning)}");
+                        var inv = System.Globalization.CultureInfo.InvariantCulture;
+                        foreach (var tg in chart.Targets)
+                        {
+                            if (tg.IsChord)
+                                w.WriteLine(string.Format(inv, "C {0:F3} {1} {2}", tg.Time, tg.Notes.Count, string.Join(" ", tg.Notes.Select(n => n.Midi))));
+                            else
+                                w.WriteLine(string.Format(inv, "N {0:F3} {1} {2} {3}", tg.Time, tg.Notes[0].Midi, tg.Notes[0].String, tg.Notes[0].Fret));
+                        }
+                    }
+                    index.Add($"{songKey} | {artist} | {title} | {arr} | single={chart.SingleNoteTargets} chords={chart.ChordTargets}");
+                    ++written;
+                }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"{Path.GetFileName(file)}: ERROR {e.GetType().Name}: {e.Message}");
+            }
+        }
+        File.WriteAllLines(Path.Combine(outDir, "index.txt"), index.OrderBy(l => l));
+        Console.WriteLine($"Exported {written} arrangements from {files.Count} files to {Path.GetFullPath(outDir)}");
+    }
+
+    // The manifest is JSON: { "Entries": { "<id>": { "Attributes": { "SongKey": ..., ... } } } }
+    static System.Text.Json.JsonElement? ReadManifestAttributes(PSARC psarc, string name)
+    {
+        using var s = psarc.GetEntryStream(name).GetAwaiter().GetResult();
+        s.Position = 0;
+        using var doc = JsonDocument.Parse(s);
+        foreach (var entry in doc.RootElement.GetProperty("Entries").EnumerateObject())
+            if (entry.Value.TryGetProperty("Attributes", out var attrs))
+                return attrs.Clone();
+        return null;
+    }
+
     // Summarizes every arrangement in every .psarc in a folder, so we can pick
     // chord-free songs for the first tests.
     static void Scan(string folder)
@@ -192,7 +287,7 @@ static class Program
         {
             try
             {
-                using var psarc = PSARC.OpenFile(file);
+                using var psarc = OpenPsarc(file);
                 foreach (var sngName in psarc.Manifest.Where(n => n.EndsWith(".sng")))
                 {
                     if (sngName.Contains("vocals", StringComparison.OrdinalIgnoreCase)) continue;

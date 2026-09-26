@@ -22,6 +22,14 @@ add_library(NoteByNoteProbe SHARED probe/probe.cpp)
 target_link_libraries(NoteByNoteProbe PRIVATE minhook imagehlp winmm)
 target_compile_definitions(NoteByNoteProbe PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 
+# THE MOD: NoteByNote.dll (loaded by our RS_ASIO build from the game folder).
+add_library(NoteByNote SHARED nbn/main.cpp nbn/game.cpp nbn/detector.cpp nbn/tap.cpp nbn/chart.cpp nbn/log.cpp)
+target_link_libraries(NoteByNote PRIVATE imagehlp winmm)
+target_compile_definitions(NoteByNote PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE _CRT_SECURE_NO_WARNINGS)
+
+# Detector test: C++ NoteTracker on a WAV, to compare with tools/detector/wait_sim.py analyze.
+add_executable(nbn_detector_test nbn/test_detector.cpp nbn/detector.cpp)
+
 # Dev injector: loads a DLL into the running game.
 add_executable(nbn_inject injector/inject.cpp)
 target_compile_definitions(nbn_inject PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)

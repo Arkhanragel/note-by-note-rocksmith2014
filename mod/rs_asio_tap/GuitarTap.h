@@ -12,4 +12,9 @@ namespace GuitarTap {
 void Write(const void* owner, const void* asioBuffer, ASIOSampleType asioType, unsigned asioSampleSize,
            unsigned numFrames, unsigned sampleRate);
 
+// Loads NoteByNote.dll (from the same folder as RS_ASIO.dll) on a new thread, if the file exists.
+// Loading another DLL inside DllMain isn't safe (the loader lock is held), so it's done on a thread,
+// which runs as soon as DllMain has returned.
+void StartModLoader(HMODULE rsAsioModule);
+
 }  // namespace GuitarTap
