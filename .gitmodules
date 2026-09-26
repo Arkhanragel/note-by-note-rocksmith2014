@@ -1,3 +1,6 @@
 [submodule "external/Rocksmith2014.NET"]
 	path = external/Rocksmith2014.NET
 	url = https://github.com/iminashi/Rocksmith2014.NET.git
+[submodule "external/minhook"]
+	path = external/minhook
+	url = https://github.com/TsudaKageyu/minhook.git
