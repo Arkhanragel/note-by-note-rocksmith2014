@@ -231,7 +231,27 @@ static void LogBytes(const char* name, uintptr_t a) {
     Log("bytes %-22s [-4..+16]: %s", name, hex);
 }
 
+// Diagnostic for test 2 (MH_ERROR_MEMORY_PROTECT). Hooking needs the code page to be writable for
+// a moment (VirtualProtect). RSMods' notes say the game is protected by VMProtect, which can intercept
+// ntdll!NtProtectVirtualMemory (the kernel call behind VirtualProtect) and refuse changes to the
+// game's code. Here we check: what kind of memory the target is, whether a plain VirtualProtect
+// fails and with which error, and whether ntdll's NtProtectVirtualMemory still starts with its normal
+// "mov eax, <syscall number>" (B8 xx xx xx xx) or was patched.
+static void DiagnoseProtect(uintptr_t a) {
+    MEMORY_BASIC_INFORMATION mbi{};
+    VirtualQuery((void*)a, &mbi, sizeof(mbi));
+    Log("diag: page 0x%08X region=0x%08X size=0x%X state=0x%X protect=0x%X type=0x%X (0x1000000=IMAGE 0x40000=MAPPED 0x20000=PRIVATE)",
+        (unsigned)a, (unsigned)(uintptr_t)mbi.BaseAddress, (unsigned)mbi.RegionSize, mbi.State, mbi.Protect, mbi.Type);
+    DWORD old = 0;
+    BOOL ok = VirtualProtect((void*)a, 16, PAGE_EXECUTE_READWRITE, &old);
+    DWORD err = ok ? 0 : GetLastError();
+    Log("diag: VirtualProtect(RWX) -> %s, error=%lu, old=0x%X", ok ? "OK" : "FAILED", err, old);
+    if (ok) VirtualProtect((void*)a, 16, old, &old);  // put it back
+    LogBytes("ntdll!NtProtectVirtualMemory", (uintptr_t)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtProtectVirtualMemory"));
+}
+
 static bool InstallHooks() {
+    DiagnoseProtect(g_base + addr::kSetRtpcChar);
     if (MH_Initialize() != MH_OK) { Log("MH_Initialize failed"); return false; }
     struct { uintptr_t rva; void* detour; void** orig; const char* name; } hooks[] = {
         {addr::kPostEventChar, (void*)&Hook_PostEventChar, (void**)&orig_PostEventChar, "PostEvent(char*)"},
@@ -283,6 +303,8 @@ using SetActorMixerEffect_t = AKRESULT(__cdecl*)(AkUniqueID node, AkUInt32 fxInd
 constexpr AkUniqueID kDefaultTimeStretch = 0xB3745FC2;  // Wwise ID of the "Default_Time_Stretch" effect ShareSet
 constexpr AkUInt32 kTimeStretchSlot = 2;
 
+static char g_lastSongKey[96] = "";  // last key seen while browsing songs (the pointer is empty in-game)
+
 static bool GetSongKey(char* key, size_t cap) {
     uintptr_t a;
     char name[128];
@@ -302,7 +324,8 @@ static void SetTimeStretchEffect(bool on) {
         if (!LooksLikeFunctionStart(g_base + f)) { LogBytes("Wwise query/effect", g_base + f); Log(">>> effect: function check failed"); return; }
     }
     char key[96];
-    if (!GetSongKey(key, sizeof(key))) { Log(">>> effect: song key not found (enter a song first)"); return; }
+    if (!GetSongKey(key, sizeof(key))) strcpy_s(key, g_lastSongKey);
+    if (!key[0]) { Log(">>> effect: no song key yet (select a song in the song list first)"); return; }
     std::string ev = std::string("Play_") + key;
 
     auto query = (QueryAudioObjectIDs_t)(g_base + addr::kQueryAudioObjectIDsChar);
@@ -343,6 +366,33 @@ static void LogStretch() {
     }
 }
 
+// ------------------------------------------------------------------------------------ pause / resume music
+// Test 3 showed that the song timer (and so the highway) follows the MUSIC, and that time-stretch
+// bottoms out around 25% speed, which is not a freeze. So: pause the music itself.
+// ExecuteActionOnEvent applies an action (Stop/Pause/Resume...) to everything that a previously
+// posted event started. "Play_<songkey>" is the event that started the song's music.
+namespace addr {
+constexpr uintptr_t kExecuteActionOnEventChar = 0x00AC49E0;
+}
+using ExecuteActionOnEventChar_t = AKRESULT(__cdecl*)(const char*, int /*AkActionOnEventType*/, AkGameObjectID,
+                                                       AkTimeMs, int /*curve*/, AkPlayingID);
+constexpr int kActionPause = 1, kActionResume = 2;
+
+static void PauseMusic(bool pause) {
+    uintptr_t f = g_base + addr::kExecuteActionOnEventChar;
+    if (!LooksLikeFunctionStart(f)) { LogBytes("ExecuteActionOnEvent", f); Log(">>> pause: function check failed"); return; }
+    char key[96];
+    if (!GetSongKey(key, sizeof(key))) strcpy_s(key, g_lastSongKey);
+    if (!key[0]) { Log(">>> pause: no song key yet (select a song in the song list first)"); return; }
+    std::string ev = std::string("Play_") + key;
+    float t = -1;
+    GetSongTime(&t);
+    auto exec = (ExecuteActionOnEventChar_t)f;
+    // AK_INVALID_GAME_OBJECT = act on this event on every game object; 0 ms transition = instant.
+    AKRESULT r = exec(ev.c_str(), pause ? kActionPause : kActionResume, AK_INVALID_GAME_OBJECT, 0, 4, 0);
+    Log(">>> %s %s -> result=%d (1=success)  song t=%.3f", pause ? "PAUSE" : "RESUME", ev.c_str(), r, t);
+}
+
 // ------------------------------------------------------------------------------------ main loop
 static bool GameFocused() {
     DWORD pid = 0;
@@ -378,15 +428,17 @@ static DWORD WINAPI MainThread(LPVOID) {
         Log("UNSUPPORTED exe version (expected 0x%08X). Probe disabled, nothing was changed.", addr::kExpectedChecksum);
         return 0;
     }
-    InstallHooks();
-    LogBytes("GetRTPCValue(char*)", g_base + addr::kGetRtpcChar);
+    // Hooks are NOT installed (test 2): VMProtect blocks VirtualProtect on the game's code (ACCESS_DENIED),
+    // and MinHook's attempt froze the game for ~4 s. Everything below only READS memory or CALLS Wwise
+    // functions, and neither needs code patching. InstallHooks() stays in the file for later.
+    g_setRtpcOk = LooksLikeFunctionStart(g_base + addr::kSetRtpcChar);
     g_getRtpcOk = LooksLikeFunctionStart(g_base + addr::kGetRtpcChar);
-    Log("Keys: F5 slower | F6 speed 100%% | F7 log Time_Stretch | F8 mark | F9 stretch effect ON | "
-        "F10 effect OFF | F11 unload probe | F12 disable hooks");
+    Log("Keys: F3 mark | F5 slower | F6 speed 100%% | F7 PAUSE music | F8 RESUME music | "
+        "F9 stretch effect ON/OFF | F12 unload probe");
 
     const float speeds[] = {100, 75, 50, 25, 10, 5, 1};
     int speedIdx = 0, mark = 0;
-    bool k5 = false, k6 = false, k7 = false, k8 = false, k9 = false, k10 = false, k11 = false, k12 = false;
+    bool k3 = false, k5 = false, k6 = false, k7 = false, k8 = false, k9 = false, k12 = false;
 
     char lastMenu[96] = "", lastKey[96] = "";
     float lastT = -1, rateT = -1;
@@ -407,6 +459,7 @@ static DWORD WINAPI MainThread(LPVOID) {
         if (GetSongKey(key, sizeof(key)) && strcmp(key, lastKey) != 0) {
             Log("SONG   key=%s", key);
             strcpy_s(lastKey, key);
+            strcpy_s(g_lastSongKey, key);
         }
 
         // Song timer: log once per second while it's running, with its effective speed
@@ -429,24 +482,20 @@ static DWORD WINAPI MainThread(LPVOID) {
         if (!GameFocused()) continue;
         if (Pressed(VK_F5, k5)) { if (speedIdx < 6) ++speedIdx; SetSpeed(speeds[speedIdx]); }
         if (Pressed(VK_F6, k6)) { speedIdx = 0; SetSpeed(100); }
-        if (Pressed(VK_F7, k7)) LogStretch();
-        if (Pressed(VK_F8, k8)) Log("==================== MARK %d (t=%.3f) ====================", ++mark, lastT);
-        if (Pressed(VK_F9, k9)) SetTimeStretchEffect(true);
-        if (Pressed(VK_F10, k10)) SetTimeStretchEffect(false);
-        if (Pressed(VK_F12, k12) && g_hooksOn) {
-            MH_DisableHook(MH_ALL_HOOKS);
-            g_hooksOn = false;
-            Log("Hooks disabled (F12).");
-        }
-        if (Pressed(VK_F11, k11)) break;
+        if (Pressed(VK_F3, k3)) Log("==================== MARK %d (t=%.3f) ====================", ++mark, lastT);
+        if (Pressed(VK_F7, k7)) PauseMusic(true);
+        if (Pressed(VK_F8, k8)) PauseMusic(false);
+        // (F10 is NOT used: it's the Windows menu-bar key, and it froze the game's rendering in test 2.)
+        if (Pressed(VK_F9, k9)) { static bool fxOn = false; fxOn = !fxOn; SetTimeStretchEffect(fxOn); }
+        if (Pressed(VK_F12, k12)) break;
     }
 
-    // F11: unload, so a rebuilt probe can be injected without restarting the game.
-    // Remove the hooks first, then wait a moment so no game thread is still inside a detour.
-    MH_DisableHook(MH_ALL_HOOKS);
-    MH_Uninitialize();
+    // F12: unload, so a rebuilt probe can be injected without restarting the game.
+    // (Unload moved from F11 to F12 to find out whether the white flash seen in tests 2-3 is the
+    // game's own reaction to the F11 key.)
+    MH_Uninitialize();  // harmless if hooks were never installed
     Sleep(300);
-    Log("Probe unloaded (F11).");
+    Log("Probe unloaded (F12).");
     { std::lock_guard<std::mutex> lock(g_logMutex); fclose(g_log); g_log = nullptr; }
     FreeLibraryAndExitThread(g_self, 0);
 }
