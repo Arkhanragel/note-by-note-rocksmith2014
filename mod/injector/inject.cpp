@@ -45,6 +45,18 @@ int wmain(int argc, wchar_t** argv) {
         return 1;
     }
 
+    // Inject a uniquely named COPY from a "run" subfolder. Windows locks a loaded DLL, so this lets
+    // us rebuild while the game is running, unload the old probe (F11) and inject the new one.
+    // The probe writes its log next to itself, so it's always run\NoteByNoteProbe.log.
+    {
+        std::wstring src(path);
+        std::wstring dir = src.substr(0, src.find_last_of(L"\\/") + 1) + L"run\\";
+        CreateDirectoryW(dir.c_str(), nullptr);
+        std::wstring copy = dir + L"NoteByNoteProbe_" + std::to_wstring(GetTickCount()) + L".dll";
+        if (!CopyFileW(src.c_str(), copy.c_str(), FALSE)) { wprintf(L"Copy failed (%lu)\n", GetLastError()); return 1; }
+        wcscpy_s(path, copy.c_str());
+    }
+
     DWORD pid = FindProcess(L"Rocksmith2014.exe");
     if (!pid) {
         wprintf(L"Rocksmith2014.exe is not running. Start the game first.\n");
@@ -72,6 +84,6 @@ int wmain(int argc, wchar_t** argv) {
     CloseHandle(proc);
 
     if (!module) { wprintf(L"LoadLibrary failed inside the game.\n"); return 1; }
-    wprintf(L"OK: DLL loaded into the game. The log is next to the DLL (NoteByNoteProbe.log).\n");
+    wprintf(L"OK: DLL loaded into the game. Log: run\\NoteByNoteProbe.log (next to the injected copy).\n");
     return 0;
 }

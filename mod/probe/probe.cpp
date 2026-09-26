@@ -252,9 +252,71 @@ static bool InstallHooks() {
         Log("hook %-22s @ 0x%08X : %s", h.name, (unsigned)(g_base + h.rva), MH_StatusToString(s));
         ok &= (s == MH_OK);
     }
-    MH_EnableHook(MH_ALL_HOOKS);
-    g_hooksOn = ok;
-    return ok;
+    // Test 1 found that the hooks never fired, so now we log the result of enabling them and
+    // re-read the bytes. After a successful enable, each function must start with E9 (JMP to our detour).
+    MH_STATUS en = MH_EnableHook(MH_ALL_HOOKS);
+    Log("MH_EnableHook(all): %s", MH_StatusToString(en));
+    for (auto& h : hooks) LogBytes(h.name, g_base + h.rva);
+    g_hooksOn = ok && en == MH_OK;
+    return g_hooksOn;
+}
+
+// ------------------------------------------------------------------------------------ time-stretch effect
+// Test 1: setting Time_Stretch in normal Learn a Song did nothing. RSMods shows why: the time-stretch
+// *effect* must be attached to the song's Wwise "actor-mixer" (the audio node that holds the song's
+// music). Riff Repeater does that when you pick a speed under 100%. Outside RR we have to do it
+// ourselves:
+//   1. find the song key (e.g. "notegel1"): the game keeps the name of the preview audio event,
+//      "Play_<songkey>_Preview", at a known pointer
+//   2. ask Wwise which audio objects the "Play_<songkey>" event uses. The first one is the actor-mixer
+//   3. SetActorMixerEffect(actorMixer, slot 2, Default_Time_Stretch). Slot 2 is where RSMods puts it
+namespace addr {
+constexpr uintptr_t kPreviewName = 0x00F60514;             // -> "Play_<songkey>_Preview"
+constexpr uint32_t kPreviewChain[] = {0xBC, 0x0};
+constexpr uintptr_t kQueryAudioObjectIDsChar = 0x00AC06B0;
+constexpr uintptr_t kSetActorMixerEffect = 0x00AC1D40;
+}  // namespace addr
+
+struct AkObjectInfo { AkUniqueID objID; AkUniqueID parentID; int32_t depth; };
+using QueryAudioObjectIDs_t = AKRESULT(__cdecl*)(const char*, AkUInt32*, AkObjectInfo*);
+using SetActorMixerEffect_t = AKRESULT(__cdecl*)(AkUniqueID node, AkUInt32 fxIndex, AkUniqueID shareSet);
+constexpr AkUniqueID kDefaultTimeStretch = 0xB3745FC2;  // Wwise ID of the "Default_Time_Stretch" effect ShareSet
+constexpr AkUInt32 kTimeStretchSlot = 2;
+
+static bool GetSongKey(char* key, size_t cap) {
+    uintptr_t a;
+    char name[128];
+    if (!ReadChain(g_base + addr::kPreviewName, addr::kPreviewChain, 2, &a) || !ReadText(a, name, sizeof(name)))
+        return false;
+    std::string s(name);  // "Play_notegel1_Preview"
+    if (s.rfind("Play_", 0) != 0) return false;
+    size_t end = s.rfind("_Preview");
+    if (end == std::string::npos) end = s.rfind("_Invalid");  // song previews switched off in the options
+    if (end == std::string::npos || end <= 5) return false;
+    strcpy_s(key, cap, s.substr(5, end - 5).c_str());
+    return true;
+}
+
+static void SetTimeStretchEffect(bool on) {
+    for (uintptr_t f : {addr::kQueryAudioObjectIDsChar, addr::kSetActorMixerEffect}) {
+        if (!LooksLikeFunctionStart(g_base + f)) { LogBytes("Wwise query/effect", g_base + f); Log(">>> effect: function check failed"); return; }
+    }
+    char key[96];
+    if (!GetSongKey(key, sizeof(key))) { Log(">>> effect: song key not found (enter a song first)"); return; }
+    std::string ev = std::string("Play_") + key;
+
+    auto query = (QueryAudioObjectIDs_t)(g_base + addr::kQueryAudioObjectIDsChar);
+    AkUInt32 n = 0;
+    AKRESULT r1 = query(ev.c_str(), &n, nullptr);  // first call: only asks how many objects
+    if (n == 0 || n > 64) { Log(">>> effect: QueryAudioObjectIDs(%s) count -> result=%d n=%u", ev.c_str(), r1, n); return; }
+    AkObjectInfo objs[64];
+    AKRESULT r2 = query(ev.c_str(), &n, objs);
+    for (AkUInt32 i = 0; i < n && i < 4; ++i)
+        Log(">>> effect: object[%u] id=0x%08X parent=0x%08X depth=%d", i, objs[i].objID, objs[i].parentID, objs[i].depth);
+
+    auto setFx = (SetActorMixerEffect_t)(g_base + addr::kSetActorMixerEffect);
+    AKRESULT r3 = setFx(objs[0].objID, kTimeStretchSlot, on ? kDefaultTimeStretch : 0);
+    Log(">>> effect %s on %s (node 0x%08X): query=%d/%d setFx=%d", on ? "ON" : "OFF", ev.c_str(), objs[0].objID, r1, r2, r3);
 }
 
 // ------------------------------------------------------------------------------------ speed experiments
@@ -319,13 +381,14 @@ static DWORD WINAPI MainThread(LPVOID) {
     InstallHooks();
     LogBytes("GetRTPCValue(char*)", g_base + addr::kGetRtpcChar);
     g_getRtpcOk = LooksLikeFunctionStart(g_base + addr::kGetRtpcChar);
-    Log("Keys: F5 slower | F6 speed 100%% | F7 log Time_Stretch | F8 mark | F12 disable hooks");
+    Log("Keys: F5 slower | F6 speed 100%% | F7 log Time_Stretch | F8 mark | F9 stretch effect ON | "
+        "F10 effect OFF | F11 unload probe | F12 disable hooks");
 
     const float speeds[] = {100, 75, 50, 25, 10, 5, 1};
     int speedIdx = 0, mark = 0;
-    bool k5 = false, k6 = false, k7 = false, k8 = false, k12 = false;
+    bool k5 = false, k6 = false, k7 = false, k8 = false, k9 = false, k10 = false, k11 = false, k12 = false;
 
-    char lastMenu[96] = "";
+    char lastMenu[96] = "", lastKey[96] = "";
     float lastT = -1, rateT = -1;
     DWORD rateTick = GetTickCount();
     bool wasMoving = false;
@@ -338,6 +401,12 @@ static DWORD WINAPI MainThread(LPVOID) {
         if (GetMenu(menu, sizeof(menu)) && strcmp(menu, lastMenu) != 0) {
             Log("MENU   %s", menu);
             strcpy_s(lastMenu, menu);
+        }
+
+        char key[96];
+        if (GetSongKey(key, sizeof(key)) && strcmp(key, lastKey) != 0) {
+            Log("SONG   key=%s", key);
+            strcpy_s(lastKey, key);
         }
 
         // Song timer: log once per second while it's running, with its effective speed
@@ -362,12 +431,24 @@ static DWORD WINAPI MainThread(LPVOID) {
         if (Pressed(VK_F6, k6)) { speedIdx = 0; SetSpeed(100); }
         if (Pressed(VK_F7, k7)) LogStretch();
         if (Pressed(VK_F8, k8)) Log("==================== MARK %d (t=%.3f) ====================", ++mark, lastT);
+        if (Pressed(VK_F9, k9)) SetTimeStretchEffect(true);
+        if (Pressed(VK_F10, k10)) SetTimeStretchEffect(false);
         if (Pressed(VK_F12, k12) && g_hooksOn) {
             MH_DisableHook(MH_ALL_HOOKS);
             g_hooksOn = false;
             Log("Hooks disabled (F12).");
         }
+        if (Pressed(VK_F11, k11)) break;
     }
+
+    // F11: unload, so a rebuilt probe can be injected without restarting the game.
+    // Remove the hooks first, then wait a moment so no game thread is still inside a detour.
+    MH_DisableHook(MH_ALL_HOOKS);
+    MH_Uninitialize();
+    Sleep(300);
+    Log("Probe unloaded (F11).");
+    { std::lock_guard<std::mutex> lock(g_logMutex); fclose(g_log); g_log = nullptr; }
+    FreeLibraryAndExitThread(g_self, 0);
 }
 
 BOOL APIENTRY DllMain(HMODULE mod, DWORD reason, LPVOID) {

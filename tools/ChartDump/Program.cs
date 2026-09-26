@@ -50,6 +50,16 @@ static class Program
                 Console.WriteLine($"Written: {Path.GetFullPath(outPath)}");
                 return 0;
 
+            case "cat": // print a text file from the archive, e.g. a manifest .json with the song title
+                using (var psarc = PSARC.OpenFile(args[1]))
+                {
+                    var name = psarc.Manifest.First(n => n.Contains(args[2], StringComparison.OrdinalIgnoreCase));
+                    using var s = psarc.GetEntryStream(name).GetAwaiter().GetResult();
+                    s.Position = 0;
+                    Console.WriteLine(new StreamReader(s).ReadToEnd());
+                }
+                return 0;
+
             case "scan":
                 Scan(args[1]);
                 return 0;
