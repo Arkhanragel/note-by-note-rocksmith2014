@@ -28,6 +28,8 @@
 
 #include <windows.h>
 #include <imagehlp.h>
+#include <timeapi.h>
+#include <tlhelp32.h>
 #include <MinHook.h>
 
 #include <atomic>
@@ -395,6 +397,8 @@ using GetGameObjectFromPlayingID_t = AkGameObjectID(__cdecl*)(AkPlayingID);
 using GetPlayingIDsFromGameObject_t = AKRESULT(__cdecl*)(AkGameObjectID, AkUInt32*, AkPlayingID*);
 constexpr int kActionPause = 1, kActionResume = 2;
 
+static bool FnOk(uintptr_t rva, const char* name, bool verbose);  // defined below (safety check by name)
+
 static AkUniqueID WwiseHash(const std::string& name) {  // FNV-1, 32 bit, lowercase (Wwise's GetIDFromString)
     uint32_t h = 2166136261u;
     for (char c : name) { h *= 16777619u; h ^= (uint8_t)tolower((unsigned char)c); }
@@ -440,10 +444,7 @@ static bool FindSongPlayback(const std::string& ev, AkUniqueID evId) {
 }
 
 static void PauseMusic(bool pause) {
-    for (uintptr_t f : {addr::kExecuteActionOnEventChar, addr::kExecuteActionOnEventId, addr::kGetEventIDFromPlayingID,
-                        addr::kGetGameObjectFromPlayingID, addr::kGetPlayingIDsFromGameObject}) {
-        if (!LooksLikeFunctionStart(g_base + f)) { LogBytes("Wwise fn", g_base + f); Log(">>> pause: function check failed"); return; }
-    }
+    if (!FnOk(addr::kExecuteActionOnEventChar, "ExecuteActionOnEvent(char*)", false)) return;
     char key[96];
     if (!GetSongKey(key, sizeof(key))) strcpy_s(key, g_lastSongKey);
     if (!key[0]) { Log(">>> pause: no song key yet (select a song in the song list first)"); return; }
@@ -456,20 +457,572 @@ static void PauseMusic(bool pause) {
     Log(">>> %s %s (event id 0x%08X) at song t=%.3f", what, ev.c_str(), evId, t);
 
     auto execChar = (ExecuteActionOnEventChar_t)(g_base + addr::kExecuteActionOnEventChar);
-    auto execId = (ExecuteActionOnEventId_t)(g_base + addr::kExecuteActionOnEventId);
+
+    // Test 6: every call through this address returned AK_Fail (2), even with the right object and
+    // playing ID. Its first bytes (push ebp; mov ebp,esp; sub esp,38h; mov ecx,[ebp+8]; ...) match the
+    // BY-ID variant of SetRTPCValue (it builds a 0x38-byte queued message), and it doesn't call the
+    // name->ID hash first like the by-NAME wrappers do (e.g. SetRTPCValue(char*) at 0xAC2400).
+    // Hypothesis: RSMods' "char*" address is really ExecuteActionOnEvent(AkUniqueID). So pass the
+    // numeric event ID (the FNV hash) through the same pointer:
+    auto execIdHyp = (ExecuteActionOnEventId_t)(g_base + addr::kExecuteActionOnEventChar);
+    if (FnOk(addr::kGetPlayingIDsFromGameObject, "GetPlayingIDsFromGameObject", false) &&
+        FnOk(addr::kGetEventIDFromPlayingID, "GetEventIDFromPlayingID", false) &&
+        FnOk(addr::kGetGameObjectFromPlayingID, "GetGameObjectFromPlayingID", false) &&
+        FindSongPlayback(ev, evId)) {
+        AKRESULT d = execIdHyp(evId, action, g_songObj, 0, 4, g_songPid);
+        Log(">>>   D: id-hypothesis, obj 0x%X, pid %u -> %d", (unsigned)g_songObj, g_songPid, d);
+        if (d == 1) return;
+        d = execIdHyp(evId, action, g_songObj, 0, 4, 0);
+        Log(">>>   E: id-hypothesis, obj 0x%X, any pid -> %d", (unsigned)g_songObj, d);
+        if (d == 1) return;
+    }
+    AKRESULT e = execIdHyp(evId, action, AK_INVALID_GAME_OBJECT, 0, 4, 0);
+    Log(">>>   F: id-hypothesis, all objects        -> %d", e);
+    if (e == 1) return;
 
     // Strategy A: by name, on the song object 0x1234
     AKRESULT r = execChar(ev.c_str(), action, kSongGameObject, 0, 4, 0);
     Log(">>>   A: by name, obj 0x1234                -> %d", r);
     if (r == 1) return;
 
-    // Strategy B/C: find the exact playback, then act on it
+    // Strategy B/C: find the exact playback, then act on it. RSMods' address for the by-ID variant is
+    // wrong for our build (test 5: mid-function bytes), so B and C use the by-NAME variant, which
+    // takes the same game object and playing ID parameters.
+    if (!FnOk(addr::kGetEventIDFromPlayingID, "GetEventIDFromPlayingID", false) ||
+        !FnOk(addr::kGetGameObjectFromPlayingID, "GetGameObjectFromPlayingID", false) ||
+        !FnOk(addr::kGetPlayingIDsFromGameObject, "GetPlayingIDsFromGameObject", false)) {
+        Log(">>>   B/C skipped: a query function failed the safety check");
+        return;
+    }
     if (!FindSongPlayback(ev, evId)) return;
-    r = execId(evId, action, g_songObj, 0, 4, g_songPid);
-    Log(">>>   B: by id, obj 0x%X, pid %u        -> %d", (unsigned)g_songObj, g_songPid, r);
+    r = execChar(ev.c_str(), action, g_songObj, 0, 4, g_songPid);
+    Log(">>>   B: by name, obj 0x%X, pid %u        -> %d", (unsigned)g_songObj, g_songPid, r);
     if (r == 1) return;
-    r = execId(evId, action, g_songObj, 0, 4, 0);
-    Log(">>>   C: by id, obj 0x%X, any pid       -> %d", (unsigned)g_songObj, r);
+    r = execChar(ev.c_str(), action, g_songObj, 0, 4, 0);
+    Log(">>>   C: by name, obj 0x%X, any pid       -> %d", (unsigned)g_songObj, r);
+}
+
+// Checks every Wwise function we call, BY NAME. Test 5 showed that one address from RSMods is not a
+// function start in our build, but the old log didn't say which one.
+static bool FnOk(uintptr_t rva, const char* name, bool verbose) {
+    bool ok = LooksLikeFunctionStart(g_base + rva);
+    if (verbose || !ok) {
+        LogBytes(name, g_base + rva);
+        Log("check  %-28s rva=0x%06X : %s", name, (unsigned)rva, ok ? "OK" : "NOT A FUNCTION START");
+    }
+    return ok;
+}
+
+static void CheckWwiseFunctions() {
+    FnOk(addr::kSetRtpcChar, "SetRTPCValue(char*)", true);
+    FnOk(addr::kGetRtpcChar, "GetRTPCValue(char*)", true);
+    FnOk(addr::kQueryAudioObjectIDsChar, "QueryAudioObjectIDs(char*)", true);
+    FnOk(addr::kSetActorMixerEffect, "SetActorMixerEffect", true);
+    FnOk(addr::kExecuteActionOnEventChar, "ExecuteActionOnEvent(char*)", true);
+    FnOk(addr::kExecuteActionOnEventId, "ExecuteActionOnEvent(id)", true);
+    FnOk(addr::kGetEventIDFromPlayingID, "GetEventIDFromPlayingID", true);
+    FnOk(addr::kGetGameObjectFromPlayingID, "GetGameObjectFromPlayingID", true);
+    FnOk(addr::kGetPlayingIDsFromGameObject, "GetPlayingIDsFromGameObject", true);
+}
+
+static std::wstring g_cmdPathDir;  // the run\ folder (commands.txt, logs)
+
+// ------------------------------------------------------------------------------------ timer write tests
+// Test 7: pausing the song's Wwise event succeeded (AK_Success) but changed nothing you could see or hear,
+// and the timer kept running. New hypothesis: the song timer is the GAME's clock (it scales with
+// Time_Stretch because the game applies the speed to its own clock). If the highway is drawn from
+// this value, then writing it should move or freeze the highway:
+//   hold <sec>   keep rewriting the timer to its current value for <sec> seconds (every ~1 ms)
+//   jump <delta> add <delta> seconds to the timer once
+// The timer is a normal heap variable (data, not code), so writing it needs no VirtualProtect.
+static bool WriteFloat(uintptr_t a, float v) {
+    __try { *(volatile float*)a = v; return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+static bool TimerAddress(uintptr_t* a) { return ReadChain(g_base + addr::kRoot, addr::kTimerChain, 3, a); }
+
+static void HoldTimer(float seconds) {
+    uintptr_t a;
+    float t;
+    if (!TimerAddress(&a) || !ReadFloat(a, &t)) { Log(">>> hold: timer not readable"); return; }
+    Log(">>> hold: forcing timer to %.3f for %.1f s (address 0x%08X)", t, seconds, (unsigned)a);
+    timeBeginPeriod(1);  // 1 ms Sleep resolution
+    DWORD end = GetTickCount() + (DWORD)(seconds * 1000);
+    unsigned writes = 0, drift = 0;
+    while (GetTickCount() < end) {
+        float now;
+        if (ReadFloat(a, &now) && now != t) ++drift;  // the game moved it since our last write
+        WriteFloat(a, t);
+        ++writes;
+        Sleep(1);
+    }
+    timeEndPeriod(1);
+    float after = -1;
+    ReadFloat(a, &after);
+    Log(">>> hold: done. %u writes, the game changed the value %u times in between; timer now %.3f", writes, drift, after);
+}
+
+static void JumpTimer(float delta) {
+    uintptr_t a;
+    float t;
+    if (!TimerAddress(&a) || !ReadFloat(a, &t)) { Log(">>> jump: timer not readable"); return; }
+    WriteFloat(a, t + delta);
+    Sleep(200);
+    float after = -1;
+    ReadFloat(a, &after);
+    Log(">>> jump: %.3f -> %.3f (asked %+.1f s); 200 ms later the timer reads %.3f", t, t + delta, delta, after);
+}
+
+// ------------------------------------------------------------------------------------ "who writes this address?"
+// Test 8: the timer we read is a COPY. The game rewrites it every ~6 ms, and our writes were undone
+// within one tick. To find the real clock, we need the instruction that writes the copy. That's
+// Cheat Engine's "find out what writes to this address", done here with the CPU's debug registers:
+//   - DR0 = the address, DR7 = "break on WRITE of 4 bytes at DR0" (a hardware data breakpoint)
+//   - it must be set on every thread of the game (debug registers are per thread)
+//   - when a thread writes the address, the CPU raises EXCEPTION_SINGLE_STEP right AFTER the
+//     writing instruction. Our vectored exception handler records EIP (and the registers) and lets the
+//     game continue. Nothing in the game's code is modified.
+// After <sec> seconds the breakpoints are removed. The log lists each writer with its RVA; we then
+// disassemble around it in the memory dump.
+struct WriterHit { uintptr_t eip; LONG count; CONTEXT ctx; };
+static WriterHit g_hits[16];
+static volatile LONG g_hitCount = 0;
+static volatile LONG g_hitLock = 0;
+static uintptr_t g_watchAddr = 0;
+
+static LONG CALLBACK WatchHandler(EXCEPTION_POINTERS* ep) {
+    if (ep->ExceptionRecord->ExceptionCode != EXCEPTION_SINGLE_STEP || !(ep->ContextRecord->Dr6 & 0xF))
+        return EXCEPTION_CONTINUE_SEARCH;
+    uintptr_t eip = ep->ContextRecord->Eip;
+    while (InterlockedExchange(&g_hitLock, 1)) {}  // tiny spin lock (the handler runs on game threads)
+    int i = 0;
+    for (; i < g_hitCount; ++i) if (g_hits[i].eip == eip) break;
+    if (i == g_hitCount && i < 16) { g_hits[i].eip = eip; g_hits[i].count = 0; g_hits[i].ctx = *ep->ContextRecord; ++g_hitCount; }
+    if (i < 16) ++g_hits[i].count;
+    InterlockedExchange(&g_hitLock, 0);
+    ep->ContextRecord->Dr6 = 0;
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
+
+// Sets (on=true) or clears DR0/DR7 on all game threads except ours.
+static int SetWatchOnAllThreads(bool on, uintptr_t address, DWORD rwBits) {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    THREADENTRY32 te{ sizeof(te) };
+    int n = 0;
+    for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) {
+        if (te.th32OwnerProcessID != GetCurrentProcessId() || te.th32ThreadID == GetCurrentThreadId()) continue;
+        HANDLE th = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE, te.th32ThreadID);
+        if (!th) continue;
+        SuspendThread(th);
+        CONTEXT c{};
+        c.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+        if (GetThreadContext(th, &c)) {
+            if (on) {
+                c.Dr0 = address;
+                // DR7: bit0 = enable DR0 locally; bits16-17 = R/W (01 = write, 11 = read or write);
+                // bits18-19 = LEN (11 = 4 bytes)
+                c.Dr7 = (c.Dr7 & ~0xF0003u) | 1u | (rwBits << 16) | (3u << 18);
+            } else {
+                c.Dr0 = 0;
+                c.Dr7 &= ~0xF0003u;
+            }
+            if (SetThreadContext(th, &c)) ++n;
+        }
+        ResumeThread(th);
+        CloseHandle(th);
+    }
+    CloseHandle(snap);
+    return n;
+}
+
+static void WhoAccesses(float seconds, bool includeReads, uintptr_t a = 0) {
+    if (!a && !TimerAddress(&a)) { Log(">>> who: timer not readable"); return; }
+    g_watchAddr = a;
+    g_hitCount = 0;
+    PVOID veh = AddVectoredExceptionHandler(1, WatchHandler);
+    int n = SetWatchOnAllThreads(true, a, includeReads ? 3u : 1u);
+    Log(">>> who%s: watching 0x%08X on %d threads for %.1f s", includeReads ? "reads" : "writes", (unsigned)a, n, seconds);
+    Sleep((DWORD)(seconds * 1000));
+    SetWatchOnAllThreads(false, 0, 0);
+    Sleep(50);
+    RemoveVectoredExceptionHandler(veh);
+    for (int i = 0; i < g_hitCount; ++i) {
+        const WriterHit& h = g_hits[i];
+        Log(">>> who: hit after EIP=0x%08X (rva 0x%06X) x%ld  EAX=%08X EBX=%08X ECX=%08X EDX=%08X ESI=%08X EDI=%08X EBP=%08X ESP=%08X",
+            (unsigned)h.eip, (unsigned)(h.eip - g_base), h.count, h.ctx.Eax, h.ctx.Ebx, h.ctx.Ecx, h.ctx.Edx,
+            h.ctx.Esi, h.ctx.Edi, h.ctx.Ebp, h.ctx.Esp);
+        LogBytes("  code before EIP", h.eip - 16);
+    }
+    if (g_hitCount == 0) Log(">>> who: no hits (is a song playing?)");
+}
+
+// ------------------------------------------------------------------------------------ the song object
+// Test 9 (disassembly of rva 0x3DDA80, the function that writes our timer copy):
+//   EDI = song object = [[base+0xF6062C]+0xB0]   (the "0xB0" step of the timer chain)
+//   [EDI+0x3B4] = float -> copied into our timer        (candidate: the real song clock)
+//   [EDI+0x3B0] = float from a call on a global object  (candidate: the audio/music clock)
+//   [EDI+0x538] = pointer to the {flag, 0, time, remaining} record we were reading
+static uintptr_t SongObject() {
+    const uint32_t chain[] = {0xB0};
+    uintptr_t a;
+    if (!ReadChain(g_base + addr::kRoot, chain, 1, &a)) return 0;  // a = [root]+0xB0
+    uintptr_t obj;
+    __try { obj = *(uintptr_t*)a; } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+    return obj;
+}
+
+// "3b4" -> song object + 0x3B4. An argument starting with "0x" and 8+ hex digits is an absolute address.
+static uintptr_t SongObjAddr(const char* arg) {
+    uintptr_t v = (uintptr_t)strtoul(arg, nullptr, 16);
+    if (strlen(arg) >= 8) return v;
+    uintptr_t obj = SongObject();
+    return obj ? obj + v : 0;
+}
+
+static void LogSongObject() {
+    uintptr_t obj = SongObject();
+    if (!obj) { Log(">>> songobj: not found"); return; }
+    for (int i = 0; i < 5; ++i) {
+        float a = -1, b = -1, t = -1;
+        ReadFloat(obj + 0x3B0, &a);
+        ReadFloat(obj + 0x3B4, &b);
+        GetSongTime(&t);
+        Log(">>> songobj 0x%08X: [+3B0]=%10.4f  [+3B4]=%10.4f  timer=%10.4f", (unsigned)obj, a, b, t);
+        Sleep(200);
+    }
+}
+
+// ------------------------------------------------------------------------------------ the clock provider
+// Tests 10-11 (disassembly of rva 0x4BA80 / 0x4C550): the song clock [song+0x3B4] is copied from a
+// "clock provider" object, whose time in state 1 is
+//     GetSourcePlayPosition(playingID = [provider+0xCC], &ms, extrapolate=true) / 1000
+// So the clock IS the position of one Wwise playback, whose playing ID is at provider+0xCC.
+// Pausing THAT playback should freeze the clock and the highway.
+//   pause2 <provider hex>   pause the playback at [provider+0xCC]
+//   resume2 <provider hex>  resume it
+static void PauseProviderPlayback(const char* arg, bool pause) {
+    uintptr_t prov = (uintptr_t)strtoul(arg, nullptr, 16);
+    AkPlayingID pid = 0;
+    __try { pid = *(AkPlayingID*)(prov + 0xCC); } __except (EXCEPTION_EXECUTE_HANDLER) { Log(">>> pause2: provider unreadable"); return; }
+    auto evOf = (GetEventIDFromPlayingID_t)(g_base + addr::kGetEventIDFromPlayingID);
+    auto objOf = (GetGameObjectFromPlayingID_t)(g_base + addr::kGetGameObjectFromPlayingID);
+    AkUniqueID ev = evOf(pid);
+    AkGameObjectID obj = objOf(pid);
+    float t = -1;
+    GetSongTime(&t);
+    Log(">>> %s2: provider 0x%08X playingID=%u event=0x%08X obj=0x%X  song t=%.3f",
+        pause ? "pause" : "resume", (unsigned)prov, pid, ev, (unsigned)obj, t);
+    if (!ev) { Log(">>>   that playing ID is not active"); return; }
+    auto exec = (ExecuteActionOnEventId_t)(g_base + addr::kExecuteActionOnEventChar);  // really the by-ID variant (test 6)
+    AKRESULT r = exec(ev, pause ? kActionPause : kActionResume, obj, 0, 4, pid);
+    Log(">>>   ExecuteActionOnEvent(0x%08X, %s, obj 0x%X, pid %u) -> %d", ev, pause ? "Pause" : "Resume", (unsigned)obj, pid, r);
+}
+
+// ------------------------------------------------------------------------------------ the game's own music pause
+// Test 12: pausing the clock's playback with "ExecuteActionOnEvent" (whatever rva 0xAC49E0 really is)
+// returned success but paused nothing. So we looked for what the GAME does. The memory dump contains
+// the event names "Pause_TMusic" / "Resume_TMusic", and the code that uses them (rva 0x3CF400, 0x4BF40)
+// does this:
+//     mgr = AudioManagerGetter()                 // rva 0x35F10, a service lookup with no arguments
+//     PostEvent("Pause_TMusic", *(mgr + 0x38), 0, 0, 0, 0, 0, 0)   // rva 0xAC4870 = real PostEvent(char*)
+// We do exactly the same. (The game's full pause also sets UI/"paused" flags; we only want the music.)
+namespace addr {
+constexpr uintptr_t kAudioManagerGetter = 0x035F10;
+}
+using AudioManagerGetter_t = void*(__cdecl*)();
+
+static void TMusic(bool pause) {
+    if (!FnOk(addr::kAudioManagerGetter, "AudioManagerGetter", false) || !FnOk(addr::kPostEventChar, "PostEvent(char*)", false)) return;
+    void* mgr = ((AudioManagerGetter_t)(g_base + addr::kAudioManagerGetter))();
+    if (!mgr) { Log(">>> tmusic: audio manager not found"); return; }
+    AkGameObjectID obj = *(AkGameObjectID*)((uintptr_t)mgr + 0x38);
+    const char* ev = pause ? "Pause_TMusic" : "Resume_TMusic";
+    float t = -1;
+    GetSongTime(&t);
+    auto post = (PostEventChar_t)(g_base + addr::kPostEventChar);
+    AkPlayingID r = post(ev, obj, 0, nullptr, nullptr, 0, nullptr, 0);
+    Log(">>> tmusic: PostEvent(\"%s\", obj 0x%X) -> playingID %u (0 = failed)  mgr=0x%08X  song t=%.3f",
+        ev, (unsigned)obj, r, (unsigned)(uintptr_t)mgr, t);
+}
+
+// pokeb <hexaddr> <value>: write one byte (data only; used for provider flags such as +0xDA).
+// Test 14: the game's pause posts "Stop_TMusic" and sets provider+0xDA = 1. The provider's time
+// function (rva 0x4C550) returns early when +0xDA != 0, so the song clock stops advancing.
+static void PokeByte(const char* args) {
+    char* end;
+    uintptr_t a = (uintptr_t)strtoul(args, &end, 16);
+    int v = atoi(end);
+    uint8_t before = 0, after = 0;
+    bool ok;
+    __try { before = *(volatile uint8_t*)a; *(volatile uint8_t*)a = (uint8_t)v; after = *(volatile uint8_t*)a; ok = true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { ok = false; }
+    float t = -1;
+    GetSongTime(&t);
+    if (ok) Log(">>> pokeb 0x%08X: %u -> %u (reads %u)  song t=%.3f", (unsigned)a, before, v, after, t);
+    else Log(">>> pokeb 0x%08X: not writable", (unsigned)a);
+}
+
+// ------------------------------------------------------------------------------------ FREEZE = clock flag + mute + seek
+// Test 15: provider+0xDA = 1 freezes the song clock (highway, scoring...), but the music keeps
+// playing, and on release the clock jumps ahead to the music's position.
+// And RSMods lists rva 0xAC49E0 ALSO as SeekOnEvent(AkUniqueID, obj, AkTimeMs, bool). That's what it
+// really is (its "ExecuteActionOnEvent" labels for our build are wrong), which explains tests 6-12.
+// So the plan:
+//   freeze:   remember T = song time; mute the song's game object; set provider+0xDA = 1
+//   unfreeze: seek "Play_<key>" to T; unmute; set provider+0xDA = 0
+namespace addr {
+constexpr uintptr_t kSeekOnEventIdInt = 0x00AC49E0;               // SeekOnEvent(AkUniqueID, obj, AkTimeMs, bool)
+constexpr uintptr_t kSetGameObjectOutputBusVolume = 0x00AC0E10;  // (obj, AkReal32 volume 0..1)
+constexpr uintptr_t kProviderVtable = 0x00DA0E70;                // rva of the clock provider's vtable (0x01750E70 - base)
+}
+using SeekOnEventIdInt_t = AKRESULT(__cdecl*)(AkUniqueID, AkGameObjectID, AkTimeMs, bool);
+using SetGameObjectOutputBusVolume_t = AKRESULT(__cdecl*)(AkGameObjectID, float);
+
+// The provider is found through the song object: scan the song object's fields for a pointer to an
+// object whose vtable is the provider's vtable and whose +0x0C points back to the song object.
+static bool IsProvider(uintptr_t p, uintptr_t song) {
+    __try { return *(uintptr_t*)p == g_base + addr::kProviderVtable && *(uintptr_t*)(p + 0x0C) == song; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+// Fallback (test 16: the song object has no direct pointer to the provider): scan all committed,
+// writable, private memory for the provider's vtable pointer followed by the back-pointer at +0x0C.
+static uintptr_t ScanForProvider(uintptr_t song) {
+    const uintptr_t vt = g_base + addr::kProviderVtable;
+    MEMORY_BASIC_INFORMATION mbi{};
+    for (uintptr_t a = 0x10000; a < 0x7FFF0000 && VirtualQuery((void*)a, &mbi, sizeof(mbi)); a = (uintptr_t)mbi.BaseAddress + mbi.RegionSize) {
+        if (mbi.State != MEM_COMMIT || mbi.Type != MEM_PRIVATE || !(mbi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)) ||
+            (mbi.Protect & PAGE_GUARD))
+            continue;
+        const uintptr_t* p = (const uintptr_t*)mbi.BaseAddress;
+        size_t n = mbi.RegionSize / 4;
+        __try {
+            for (size_t i = 0; i + 3 < n; ++i)
+                if (p[i] == vt && p[i + 3] == song) return (uintptr_t)&p[i];
+        } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    }
+    return 0;
+}
+
+static uintptr_t g_provider = 0;
+
+static uintptr_t FindProvider() {
+    uintptr_t song = SongObject();
+    if (!song) return 0;
+    if (g_provider && IsProvider(g_provider, song)) return g_provider;  // cached and still valid
+    DWORD t0 = GetTickCount();
+    g_provider = ScanForProvider(song);
+    Log(">>> provider scan: 0x%08X (%lu ms)", (unsigned)g_provider, GetTickCount() - t0);
+    return g_provider;
+    for (uintptr_t off = 0; off < 0x1000; off += 4) {
+        uintptr_t p = 0, vt = 0, back = 0;
+        __try {
+            p = *(uintptr_t*)(song + off);
+            if (p < 0x10000) continue;
+            vt = *(uintptr_t*)p;
+            back = *(uintptr_t*)(p + 0x0C);
+        } __except (EXCEPTION_EXECUTE_HANDLER) { continue; }
+        if (vt == g_base + addr::kProviderVtable && back == song) return p;
+    }
+    return 0;
+}
+
+static bool SongEvent(std::string* ev, AkUniqueID* id) {
+    char key[96];
+    if (!GetSongKey(key, sizeof(key))) strcpy_s(key, g_lastSongKey);
+    if (!key[0]) { Log(">>> no song key yet (select a song in the song list first)"); return false; }
+    *ev = std::string("Play_") + key;
+    *id = WwiseHash(*ev);
+    return true;
+}
+
+static uintptr_t FindProvider();
+
+static AKRESULT SeekSong(AkTimeMs ms) {
+    std::string ev = "(from provider)"; AkUniqueID id = 0;
+    // Preferred: the event of the playback the clock follows (provider+0xCC = its playing ID). This
+    // doesn't need the song key, which a freshly injected probe doesn't know (test 17).
+    uintptr_t prov = FindProvider();
+    if (prov && FnOk(addr::kGetEventIDFromPlayingID, "GetEventIDFromPlayingID", false))
+        id = ((GetEventIDFromPlayingID_t)(g_base + addr::kGetEventIDFromPlayingID))(*(AkPlayingID*)(prov + 0xCC));
+    if (!id && !SongEvent(&ev, &id)) return -1;
+    if (!FnOk(addr::kSeekOnEventIdInt, "SeekOnEvent(id,int)", false)) return -1;
+    AKRESULT r = ((SeekOnEventIdInt_t)(g_base + addr::kSeekOnEventIdInt))(id, kSongGameObject, ms, false);
+    Log(">>> seek %s (0x%08X) on obj 0x1234 to %d ms -> %d", ev.c_str(), id, ms, r);
+    return r;
+}
+
+static AKRESULT SongVolume(float v) {
+    if (!FnOk(addr::kSetGameObjectOutputBusVolume, "SetGameObjectOutputBusVolume", false)) return -1;
+    AKRESULT r = ((SetGameObjectOutputBusVolume_t)(g_base + addr::kSetGameObjectOutputBusVolume))(kSongGameObject, v);
+    Log(">>> SetGameObjectOutputBusVolume(obj 0x1234, %.2f) -> %d", v, r);
+    return r;
+}
+
+static float g_freezeT = -1;
+
+static void Freeze(bool on) {
+    uintptr_t prov = FindProvider();
+    if (!prov) { Log(">>> freeze: provider not found (is a song playing?)"); return; }
+    if (on) {
+        GetSongTime(&g_freezeT);
+        SongVolume(0.0f);
+        *(volatile uint8_t*)(prov + 0xDA) = 1;
+        Log(">>> FREEZE at t=%.3f (provider 0x%08X)", g_freezeT, (unsigned)prov);
+    } else {
+        if (g_freezeT >= 0) SeekSong((AkTimeMs)(g_freezeT * 1000.0f));
+        SongVolume(1.0f);
+        *(volatile uint8_t*)(prov + 0xDA) = 0;
+        Log(">>> UNFREEZE (back to t=%.3f)", g_freezeT);
+        g_freezeT = -1;
+    }
+}
+
+// peek <hexaddr> <count>: log <count> dwords starting at an absolute address, as hex, int and float.
+static void Peek(const char* args) {
+    char* end;
+    uintptr_t a = (uintptr_t)strtoul(args, &end, 16);
+    int n = atoi(end);
+    if (n <= 0 || n > 256) n = 16;
+    for (int i = 0; i < n; ++i) {
+        uint32_t v = 0;
+        bool ok;
+        __try { v = *(uint32_t*)(a + 4 * i); ok = true; } __except (EXCEPTION_EXECUTE_HANDLER) { ok = false; }
+        if (!ok) { Log(">>> peek 0x%08X: unreadable", (unsigned)(a + 4 * i)); break; }
+        float f;
+        memcpy(&f, &v, 4);
+        Log(">>> peek 0x%08X (+0x%03X): %08X  int=%-11d float=%g", (unsigned)(a + 4 * i), 4 * i, v, (int)v, f);
+    }
+}
+
+// ------------------------------------------------------------------------------------ call tracing with hardware breakpoints
+// Test 13: posting "Pause_TMusic" like the game's provider does changed nothing. We need to SEE what
+// the game calls when the player presses Esc. Code hooks are blocked (VMProtect), but the CPU's debug
+// registers can also trigger on EXECUTION of an address (DR7 R/W bits = 00). The CPU raises
+// EXCEPTION_SINGLE_STEP BEFORE the instruction runs. Our handler copies the arguments from the
+// stack ([esp] = return address, [esp+4] = 1st arg...), sets the Resume Flag (EFLAGS.RF) so the same
+// breakpoint doesn't fire again immediately, and lets the game continue. Up to 4 addresses.
+struct TraceEntry { DWORD tick; int fn; uintptr_t ret; uint32_t arg[6]; char name[48]; };
+static TraceEntry g_trace[32768];
+static volatile LONG g_traceN = 0;
+static uintptr_t g_traceAddr[4];
+static const char* kTraceNames[4] = {"PostEvent(char*)", "PostEvent(id)", "ExecActionOnEvent(id)", "SetRTPCValue(char*)"};
+
+static void CopyName(char* dst, size_t cap, const char* src) {
+    __try {
+        size_t i = 0;
+        for (; i < cap - 1 && src[i] >= 32 && src[i] < 127; ++i) dst[i] = src[i];
+        dst[i] = 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { dst[0] = 0; }
+}
+
+static LONG CALLBACK TraceHandler(EXCEPTION_POINTERS* ep) {
+    if (ep->ExceptionRecord->ExceptionCode != EXCEPTION_SINGLE_STEP) return EXCEPTION_CONTINUE_SEARCH;
+    CONTEXT* c = ep->ContextRecord;
+    int fn = -1;
+    for (int i = 0; i < 4; ++i) if (g_traceAddr[i] && c->Eip == g_traceAddr[i]) fn = i;
+    if (fn < 0) return EXCEPTION_CONTINUE_SEARCH;
+    LONG n = InterlockedIncrement(&g_traceN) - 1;
+    if (n < 32768) {
+        TraceEntry& e = g_trace[n];
+        e.tick = GetTickCount();
+        e.fn = fn;
+        __try {
+            const uint32_t* sp = (const uint32_t*)c->Esp;
+            e.ret = sp[0];
+            for (int i = 0; i < 6; ++i) e.arg[i] = sp[1 + i];
+        } __except (EXCEPTION_EXECUTE_HANDLER) {}
+        e.name[0] = 0;
+        if (fn == 0 || fn == 3) CopyName(e.name, sizeof(e.name), (const char*)e.arg[0]);
+    }
+    c->Dr6 = 0;
+    c->EFlags |= 0x10000;  // RF: don't re-trigger on this instruction when we continue
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
+
+static int SetExecBreakpoints(bool on) {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    THREADENTRY32 te{ sizeof(te) };
+    int n = 0;
+    for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) {
+        if (te.th32OwnerProcessID != GetCurrentProcessId() || te.th32ThreadID == GetCurrentThreadId()) continue;
+        HANDLE th = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE, te.th32ThreadID);
+        if (!th) continue;
+        SuspendThread(th);
+        CONTEXT c{};
+        c.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+        if (GetThreadContext(th, &c)) {
+            if (on) {
+                c.Dr0 = g_traceAddr[0]; c.Dr1 = g_traceAddr[1]; c.Dr2 = g_traceAddr[2]; c.Dr3 = g_traceAddr[3];
+                c.Dr7 = 0x55;  // L0..L3 enabled; R/W=00 (execute) and LEN=00 for all four (bits 16-31 = 0)
+            } else {
+                c.Dr0 = c.Dr1 = c.Dr2 = c.Dr3 = 0;
+                c.Dr7 = 0;
+            }
+            if (SetThreadContext(th, &c)) ++n;
+        }
+        ResumeThread(th);
+        CloseHandle(th);
+    }
+    CloseHandle(snap);
+    return n;
+}
+
+static void TraceAudioCalls(float seconds, bool withRtpc) {
+    g_traceAddr[0] = g_base + addr::kPostEventChar;
+    g_traceAddr[1] = g_base + addr::kPostEventId;
+    g_traceAddr[2] = g_base + addr::kExecuteActionOnEventChar;  // really the by-ID variant (test 6)
+    // SetRTPCValue filled the whole buffer in test 13 ("MusicRamping" every frame), so it's optional.
+    // Breakpoint 3 at address 0 never fires.
+    g_traceAddr[3] = withRtpc ? g_base + addr::kSetRtpcChar : 0;
+    g_traceN = 0;
+    PVOID veh = AddVectoredExceptionHandler(1, TraceHandler);
+    int n = SetExecBreakpoints(true);
+    Log(">>> trace: recording audio calls on %d threads for %.0f s. Pause and resume the game now.", n, seconds);
+    DWORD t0 = GetTickCount();
+    Sleep((DWORD)(seconds * 1000));
+    SetExecBreakpoints(false);
+    Sleep(50);
+    RemoveVectoredExceptionHandler(veh);
+    LONG total = g_traceN;
+    Log(">>> trace: %ld calls recorded", total);
+    // Print in time order. Repeats of the same RTPC name/value are collapsed to keep the log readable.
+    std::unordered_map<std::string, int> rtpcCount;
+    for (LONG i = 0; i < total && i < 32768; ++i) {
+        const TraceEntry& e = g_trace[i];
+        float f;
+        if (e.fn == 3) {
+            memcpy(&f, &e.arg[1], 4);
+            char key[80];
+            sprintf_s(key, "%s=%.2f", e.name, f);
+            if (rtpcCount[key]++ > 0) continue;
+            Log("TRACE %7.3fs %-22s \"%s\" value=%.3f obj=0x%X  (caller rva 0x%06X)", (e.tick - t0) / 1000.0,
+                kTraceNames[e.fn], e.name, f, e.arg[2], (unsigned)(e.ret - g_base));
+        } else if (e.fn == 0) {
+            Log("TRACE %7.3fs %-22s \"%s\" obj=0x%X flags=0x%X  (caller rva 0x%06X)", (e.tick - t0) / 1000.0,
+                kTraceNames[e.fn], e.name, e.arg[1], e.arg[2], (unsigned)(e.ret - g_base));
+        } else {
+            Log("TRACE %7.3fs %-22s id=0x%08X a2=%u a3=0x%X a4=%u a5=%u a6=%u  (caller rva 0x%06X)", (e.tick - t0) / 1000.0,
+                kTraceNames[e.fn], e.arg[0], e.arg[1], e.arg[2], e.arg[3], e.arg[4], e.arg[5], (unsigned)(e.ret - g_base));
+        }
+    }
+}
+
+// ------------------------------------------------------------------------------------ command file
+static std::wstring g_cmdPath;
+
+// Returns the command in commands.txt (first line, trimmed) and deletes the file, or "" if there's none.
+static std::string ReadCommand() {
+    FILE* f = _wfopen(g_cmdPath.c_str(), L"r");
+    if (!f) return "";
+    char line[256] = "";
+    fgets(line, sizeof(line), f);
+    fclose(f);
+    DeleteFileW(g_cmdPath.c_str());
+    std::string s(line);
+    while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ')) s.pop_back();
+    if (s.size() >= 3 && (uint8_t)s[0] == 0xEF) s = s.substr(3);  // strip a UTF-8 BOM (PowerShell adds one)
+    return s;
 }
 
 // ------------------------------------------------------------------------------------ main loop
@@ -493,7 +1046,9 @@ static DWORD WINAPI MainThread(LPVOID) {
     wchar_t path[MAX_PATH];
     GetModuleFileNameW(g_self, path, MAX_PATH);
     std::wstring logPath(path);
-    logPath = logPath.substr(0, logPath.find_last_of(L"\\/") + 1) + L"NoteByNoteProbe.log";
+    // One log per injected copy (NoteByNoteProbe_<tick>.log), so an older probe that is still loaded
+    // can't write into the same file.
+    logPath = logPath.substr(0, logPath.find_last_of(L'.')) + L".log";
     g_log = _wfopen(logPath.c_str(), L"w");
     g_t0 = GetTickCount();
 
@@ -514,11 +1069,14 @@ static DWORD WINAPI MainThread(LPVOID) {
     // functions, and neither needs code patching. InstallHooks() stays in the file for later.
     g_setRtpcOk = LooksLikeFunctionStart(g_base + addr::kSetRtpcChar);
     g_getRtpcOk = LooksLikeFunctionStart(g_base + addr::kGetRtpcChar);
-    Log("Keys (hold Ctrl): Ctrl+1 mark | Ctrl+2 slower | Ctrl+3 speed 100%% | Ctrl+4 PAUSE music | Ctrl+5 RESUME music | Ctrl+6 stretch effect ON/OFF | Ctrl+0 unload probe");
+    g_cmdPathDir = logPath.substr(0, logPath.find_last_of(L"\\/") + 1);
+    g_cmdPath = g_cmdPathDir + L"commands.txt";
+    DeleteFileW(g_cmdPath.c_str());  // ignore leftovers from an earlier run
+    Log("Commands: write one line to run\\commands.txt: mark [text] | speed <percent> | fx on | fx off | "
+        "pause | resume | check | unload");
+    CheckWwiseFunctions();
 
-    const float speeds[] = {100, 75, 50, 25, 10, 5, 1};
-    int speedIdx = 0, mark = 0;
-    bool k1 = false, k2 = false, k3 = false, k4 = false, k5 = false, k6 = false, k0 = false;
+    int mark = 0;
 
     char lastMenu[96] = "", lastKey[96] = "";
     float lastT = -1, rateT = -1;
@@ -559,23 +1117,47 @@ static DWORD WINAPI MainThread(LPVOID) {
             lastT = t;
         }
 
-        if (!GameFocused()) continue;
-        if (Pressed('2', k2)) { if (speedIdx < 6) ++speedIdx; SetSpeed(speeds[speedIdx]); }
-        if (Pressed('3', k3)) { speedIdx = 0; SetSpeed(100); }
-        if (Pressed('1', k1)) Log("==================== MARK %d (t=%.3f) ====================", ++mark, lastT);
-        if (Pressed('4', k4)) PauseMusic(true);
-        if (Pressed('5', k5)) PauseMusic(false);
-        // (F10 is NOT used: it's the Windows menu-bar key, and it froze the game's rendering in test 2.)
-        if (Pressed('6', k6)) { static bool fxOn = false; fxOn = !fxOn; SetTimeStretchEffect(fxOn); }
-        if (Pressed('0', k0)) break;
+        // Commands come from a text file instead of keys. Every key we tried clashed with something:
+        // F10 = Windows menu bar, F11 = white flash, F12 = Steam screenshot, Ctrl+number = the game's
+        // own shortcuts. With a file, Claude (or a script) sends commands while the player just plays.
+        std::string cmd = ReadCommand();
+        if (cmd.empty()) continue;
+        Log("CMD    %s", cmd.c_str());
+        if (cmd.rfind("mark", 0) == 0) Log("==================== MARK %d (t=%.3f) %s ====================", ++mark, lastT, cmd.c_str() + 4);
+        else if (cmd.rfind("speed ", 0) == 0) SetSpeed((float)atof(cmd.c_str() + 6));
+        else if (cmd == "fx on") SetTimeStretchEffect(true);
+        else if (cmd == "fx off") SetTimeStretchEffect(false);
+        else if (cmd == "pause") PauseMusic(true);
+        else if (cmd == "resume") PauseMusic(false);
+        else if (cmd == "check") CheckWwiseFunctions();
+        else if (cmd == "whowrites") WhoAccesses(2.0f, false);
+        else if (cmd == "whoreads") WhoAccesses(2.0f, true);
+        else if (cmd.rfind("whowrites ", 0) == 0) WhoAccesses(2.0f, false, SongObjAddr(cmd.c_str() + 10));
+        else if (cmd.rfind("whoreads ", 0) == 0) WhoAccesses(2.0f, true, SongObjAddr(cmd.c_str() + 9));
+        else if (cmd == "songobj") LogSongObject();
+        else if (cmd.rfind("peek ", 0) == 0) Peek(cmd.c_str() + 5);
+        else if (cmd.rfind("trace ", 0) == 0) TraceAudioCalls((float)atof(cmd.c_str() + 6), cmd.find("nortpc") == std::string::npos);
+        else if (cmd.rfind("pokeb ", 0) == 0) PokeByte(cmd.c_str() + 6);
+        else if (cmd == "findprov") Log(">>> provider = 0x%08X", (unsigned)FindProvider());
+        else if (cmd.rfind("seekrel ", 0) == 0) { float t = -1; GetSongTime(&t); SeekSong((AkTimeMs)((t + (float)atof(cmd.c_str() + 8)) * 1000)); }
+        else if (cmd.rfind("seek ", 0) == 0) SeekSong(atoi(cmd.c_str() + 5));
+        else if (cmd.rfind("objvol ", 0) == 0) SongVolume((float)atof(cmd.c_str() + 7));
+        else if (cmd == "freeze") Freeze(true);
+        else if (cmd == "unfreeze") Freeze(false);
+        else if (cmd == "tmusic pause") TMusic(true);
+        else if (cmd == "tmusic resume") TMusic(false);
+        else if (cmd.rfind("pause2 ", 0) == 0) PauseProviderPlayback(cmd.c_str() + 7, true);
+        else if (cmd.rfind("resume2 ", 0) == 0) PauseProviderPlayback(cmd.c_str() + 8, false);
+        else if (cmd.rfind("hold ", 0) == 0) HoldTimer((float)atof(cmd.c_str() + 5));
+        else if (cmd.rfind("jump ", 0) == 0) JumpTimer((float)atof(cmd.c_str() + 5));
+        else if (cmd == "unload") break;
+        else Log("       unknown command");
     }
 
-    // F12: unload, so a rebuilt probe can be injected without restarting the game.
-    // (Unload moved from F11 to F12 to find out whether the white flash seen in tests 2-3 is the
-    // game's own reaction to the F11 key.)
+    // "unload": so a rebuilt probe can be injected without restarting the game.
     MH_Uninitialize();  // harmless if hooks were never installed
     Sleep(300);
-    Log("Probe unloaded (Ctrl+0).");
+    Log("Probe unloaded.");
     { std::lock_guard<std::mutex> lock(g_logMutex); fclose(g_log); g_log = nullptr; }
     FreeLibraryAndExitThread(g_self, 0);
 }

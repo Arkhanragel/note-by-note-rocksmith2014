@@ -1,4 +1,4 @@
-# Note-by-Note mod: native (C++) part.
+﻿# Note-by-Note mod: native (C++) part.
 # Rocksmith2014.exe is a 32-bit program, so everything here MUST be built for Win32 (x86).
 # Build with: mod\build.ps1
 
@@ -19,7 +19,7 @@ add_subdirectory(../external/minhook minhook EXCLUDE_FROM_ALL)
 
 # The probe: a DLL loaded into the game that logs state and runs speed experiments.
 add_library(NoteByNoteProbe SHARED probe/probe.cpp)
-target_link_libraries(NoteByNoteProbe PRIVATE minhook imagehlp)
+target_link_libraries(NoteByNoteProbe PRIVATE minhook imagehlp winmm)
 target_compile_definitions(NoteByNoteProbe PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 
 # Dev injector: loads a DLL into the running game.

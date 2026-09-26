@@ -1,4 +1,4 @@
-// nbn_inject: a development tool that loads our DLL into the running Rocksmith2014.exe.
+﻿// nbn_inject: a development tool that loads our DLL into the running Rocksmith2014.exe.
 //
 // HOW DLL INJECTION WORKS (the classic LoadLibrary method):
 //   1. Find the game's process ID.
@@ -84,6 +84,6 @@ int wmain(int argc, wchar_t** argv) {
     CloseHandle(proc);
 
     if (!module) { wprintf(L"LoadLibrary failed inside the game.\n"); return 1; }
-    wprintf(L"OK: DLL loaded into the game. Log: run\\NoteByNoteProbe.log (next to the injected copy).\n");
+    wprintf(L"OK: DLL loaded into the game. Log: the .log file with the same name as the injected copy, in run\\.\n");
     return 0;
 }
