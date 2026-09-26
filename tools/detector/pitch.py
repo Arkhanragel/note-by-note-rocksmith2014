@@ -77,6 +77,19 @@ def yin(x: np.ndarray, sr: int, fmin: float = 60.0, fmax: float = 1400.0,
     while tau + 1 < tau_max and dn[tau + 1] < dn[tau]:
         tau += 1
 
+    # (4b) Octave-error guard (our addition, prompted by the first real guitar test).
+    # While a low note fades, its 2nd harmonic can dominate. Then there's a weak dip at
+    # period/2 that passes the threshold first, even though the true period (2*tau) has a
+    # much deeper dip. If the chosen dip is weak and the one at 2*tau is clearly better,
+    # take 2*tau. A clean note has dips at P, 2P, 3P... that are all similar and all tiny,
+    # so the "weak" test (> 0.05) keeps this from causing octave-DOWN errors.
+    t2 = 2 * tau
+    if dn[tau] > 0.05 and t2 + 2 < tau_max:
+        lo, hi = int(t2 * 0.97), int(t2 * 1.03) + 1
+        t2 = lo + int(np.argmin(dn[lo:hi]))
+        if dn[t2] < 0.5 * dn[tau]:
+            tau = t2
+
     # (5) Fit a parabola through the 3 points around the minimum to get a fractional lag.
     if 1 <= tau < tau_max - 1:
         a, b, c = dn[tau - 1], dn[tau], dn[tau + 1]
@@ -94,23 +107,36 @@ class OnsetDetector:
 
     We need this for repeated notes. If the target is F2 and the previous note was also F2,
     the old note may still be ringing and would match right away. So for a repeated pitch
-    we require a fresh attack. A pick attack makes the short-term energy jump well above
-    the recent average, and that jump is what we look for.
+    we require a fresh attack.
+
+    Lesson from the first real test: energy must be measured over a span longer than the
+    lowest note's period (low E = 12 ms, low bass E = 24 ms). A 5 ms block measures part of
+    a cycle, so its energy wobbles and fires false onsets. So we measure over ~21 ms, compare
+    with the QUIETEST level of the last ~60 ms (a pick jumps above it, a decay never does),
+    and then ignore further onsets for a short "refractory" time.
     """
 
-    def __init__(self, ratio: float = 2.0, gate_db: float = -50.0, history: int = 6):
-        self.ratio = ratio                  # energy must be this many times the recent average (2.0 = +3 dB)
-        self.gate = 10 ** (gate_db / 10)    # ignore anything quieter than this (energy units)
-        self.hist: list[float] = []
-        self.history = history
+    def __init__(self, sr: int, ratio: float = 2.0, gate_db: float = -45.0,
+                 span_ms: float = 21.0, lookback_ms: float = 60.0, refractory_ms: float = 80.0):
+        self.ratio = ratio                                 # energy must be ratio x the recent minimum (2.0 = +3 dB)
+        self.gate = 10 ** (gate_db / 10)
+        self.span = int(sr * span_ms / 1000)
+        self.lookback_ms = lookback_ms
+        self.refractory_ms = refractory_ms
+        self.hist: list[tuple[float, float]] = []          # (time_ms, energy)
+        self.last_onset_ms = -1e9
 
-    def process(self, block: np.ndarray) -> bool:
-        e = float(np.mean(block * block))
-        avg = (sum(self.hist) / len(self.hist)) if self.hist else e
-        self.hist.append(e)
-        if len(self.hist) > self.history:
-            self.hist.pop(0)
-        return e > self.gate and e > self.ratio * max(avg, 1e-12)
+    def process(self, window: np.ndarray, now_ms: float) -> bool:
+        tail = window[-self.span:]
+        e = float(np.mean(tail * tail))
+        self.hist = [(t, v) for t, v in self.hist if now_ms - t <= self.lookback_ms]
+        ref = min((v for _, v in self.hist), default=e)
+        self.hist.append((now_ms, e))
+        if (e > self.gate and e > self.ratio * max(ref, 1e-12)
+                and now_ms - self.last_onset_ms > self.refractory_ms):
+            self.last_onset_ms = now_ms
+            return True
+        return False
 
 
 def level_db(block: np.ndarray) -> float:
