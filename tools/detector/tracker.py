@@ -65,6 +65,8 @@ class NoteTracker:
         self.reported: int | None = None   # last emitted semitone
         self.onset_pending = False         # an attack happened since the last event
         self.peak_db = -120.0              # loudest level since the last attack
+        self.last_event_midi: int | None = None
+        self.last_event_time = -1.0
 
     @property
     def now(self) -> float:
@@ -96,9 +98,13 @@ class NoteTracker:
             return None
 
         needed = c.stable if self.onset_pending else c.stable_legato
-        if self.stable >= needed and (m != self.reported or self.onset_pending):
+        # Never report the same note twice within 120 ms (a single pick with a slow attack could
+        # otherwise produce two onsets, and wait mode would count the second as another hit).
+        too_soon = m == self.last_event_midi and self.now - self.last_event_time < 0.12
+        if self.stable >= needed and (m != self.reported or self.onset_pending) and not too_soon:
             ev = NoteEvent(self.now, m, p.freq, (p.midi - m) * 100, lvl, p.aperiodicity, self.onset_pending)
             self.reported = m
             self.onset_pending = False
+            self.last_event_midi, self.last_event_time = m, self.now
             return ev
         return None

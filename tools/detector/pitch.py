@@ -4,7 +4,7 @@ Monophonic pitch detection for guitar/bass: the YIN algorithm, plus a small onse
 WHY YIN?
 A guitar note isn't a pure sine. It has strong harmonics, and the 2nd harmonic is sometimes
 louder than the fundamental, so "take the biggest FFT peak" often gives the wrong octave.
-YIN (de Cheveigné & Kawahara, 2002) works in the time domain instead. It looks for the
+YIN (de CheveignÃ© & Kawahara, 2002) works in the time domain instead. It looks for the
 smallest lag tau at which the signal closely repeats itself. That lag is the period, and
 the frequency is sample_rate / tau. It's cheap, robust, and a standard choice for tuners.
 
@@ -114,10 +114,14 @@ class OnsetDetector:
     a cycle, so its energy wobbles and fires false onsets. So we measure over ~21 ms, compare
     with the QUIETEST level of the last ~60 ms (a pick jumps above it, a decay never does),
     and then ignore further onsets for a short "refractory" time.
+
+    Refractory raised from 80 to 150 ms after the in-game test: through RS_ASIO the attack rose
+    over 30-70 ms, and a second onset fired as soon as 80 ms had passed (7 duplicate events in 60 s).
+    150 ms still allows about 6-7 repeated picks per second.
     """
 
     def __init__(self, sr: int, ratio: float = 2.0, gate_db: float = -45.0,
-                 span_ms: float = 21.0, lookback_ms: float = 60.0, refractory_ms: float = 80.0):
+                 span_ms: float = 21.0, lookback_ms: float = 60.0, refractory_ms: float = 150.0):
         self.ratio = ratio                                 # energy must be ratio x the recent minimum (2.0 = +3 dB)
         self.gate = 10 ** (gate_db / 10)
         self.span = int(sr * span_ms / 1000)
