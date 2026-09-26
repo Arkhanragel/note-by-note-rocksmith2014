@@ -5,6 +5,7 @@
 // Nothing here modifies game CODE: we only read/write game DATA and call game functions.
 #pragma once
 #include <string>
+#include <vector>
 
 namespace nbn::game {
 
@@ -21,6 +22,14 @@ bool GetSongKey(std::string* key);
 
 // Current song position in seconds: the clock the highway, scoring, etc. all read.
 bool GetSongTime(double* t);
+
+// Dynamic Difficulty: the level each phrase iteration is CURRENTLY showing on the highway
+// (index = phrase iteration). Read fresh every time; the game changes it as the player improves.
+bool GetPhraseLevels(std::vector<int>* levels);
+
+// Number of notes in each difficulty level of the arrangement being played, as loaded by the game
+// (used to pick the chart that matches the arrangement on screen).
+bool GetLevelNoteCounts(std::vector<int>* counts);
 
 // Freezes / resumes the song: pauses the Wwise playback the clock follows AND sets the clock
 // provider's "stopped" flag, so music and highway stop together and resume in sync.

@@ -1,4 +1,4 @@
-﻿// NoteByNoteProbe.dll: Phase 3 probe. It runs INSIDE Rocksmith2014.exe (loaded by nbn_inject).
+// NoteByNoteProbe.dll: Phase 3 probe. It runs INSIDE Rocksmith2014.exe (loaded by nbn_inject).
 //
 // It doesn't change gameplay unless you press the test keys. What it does:
 //   * checks that the exe is the version our addresses are for (PE checksum)
@@ -900,6 +900,171 @@ static void Freeze(bool on) {
     }
 }
 
+// ------------------------------------------------------------------------------------ find note arrays (difficulty levels)
+// Test 21: the mod waited on a note that the highway wasn't showing, because Dynamic Difficulty shows
+// only the notes of the current level of each phrase, and our charts had the max level. Each SNG level
+// holds its own note array. For notegel1, level 18 starts 18.0, 19.0, 20.0; levels 1-6 start 18.0,
+// 19.0, 22.0; level 0 starts 18.0, 22.0, 26.0. Notes are fixed-size records with a float time, so
+// look for 3 floats t1, t2, t3 at a constant stride S (the record size) in the heap.
+//   findnotes <t1> <t2> <t3>
+static void FindNoteArrays(const char* args) {
+    float t1 = 0, t2 = 0, t3 = 0;
+    if (sscanf_s(args, "%f %f %f", &t1, &t2, &t3) != 3) { Log(">>> findnotes: need 3 times"); return; }
+    uint32_t v1, v2, v3;
+    memcpy(&v1, &t1, 4); memcpy(&v2, &t2, 4); memcpy(&v3, &t3, 4);
+    int found = 0;
+    DWORD t0 = GetTickCount();
+    MEMORY_BASIC_INFORMATION mbi{};
+    for (uintptr_t a = 0x10000; a < 0x7FFF0000 && VirtualQuery((void*)a, &mbi, sizeof(mbi)); a = (uintptr_t)mbi.BaseAddress + mbi.RegionSize) {
+        if (mbi.State != MEM_COMMIT || (mbi.Protect & PAGE_GUARD) || !(mbi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE | PAGE_READONLY)))
+            continue;
+        const uint8_t* base = (const uint8_t*)mbi.BaseAddress;
+        const size_t size = mbi.RegionSize;
+        // Byte-aligned search and any stride 1..512: in the SNG file layout a note record is 67 bytes
+        // (not a multiple of 4), so the times of an in-memory copy of the raw SNG are unaligned.
+        // (The first 4-byte-aligned version only found beat grids and a lookup table.)
+        __try {
+            for (size_t i = 0; i + 4 <= size; ++i) {
+                if (*(const uint32_t UNALIGNED*)(base + i) != v1) continue;
+                for (size_t s = 8; s <= 512; ++s) {
+                    if (i + 2 * s + 4 > size) break;
+                    if (*(const uint32_t UNALIGNED*)(base + i + s) == v2 && *(const uint32_t UNALIGNED*)(base + i + 2 * s) == v3) {
+                        if (found < 60)
+                            Log(">>> notes %.2f,%.2f,%.2f at 0x%08X stride %u (region 0x%08X type 0x%X)", t1, t2, t3,
+                                (unsigned)(uintptr_t)(base + i), (unsigned)s, (unsigned)(uintptr_t)base, mbi.Type);
+                        ++found;
+                    }
+                }
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    }
+    Log(">>> findnotes %.2f %.2f %.2f: %d matches (%lu ms)", t1, t2, t3, found, GetTickCount() - t0);
+}
+
+// findptr <lo> <hi>: every aligned dword in memory whose value is in [lo, hi] (pointers into an object).
+// Used to walk up from the note lists to the objects that own them (test 22).
+static void FindPointers(const char* args) {
+    char* end;
+    uintptr_t lo = (uintptr_t)strtoul(args, &end, 16), hi = (uintptr_t)strtoul(end, nullptr, 16);
+    int found = 0;
+    MEMORY_BASIC_INFORMATION mbi{};
+    for (uintptr_t a = 0x10000; a < 0x7FFF0000 && VirtualQuery((void*)a, &mbi, sizeof(mbi)); a = (uintptr_t)mbi.BaseAddress + mbi.RegionSize) {
+        if (mbi.State != MEM_COMMIT || (mbi.Protect & PAGE_GUARD) || !(mbi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)))
+            continue;
+        const uint32_t* p = (const uint32_t*)mbi.BaseAddress;
+        const size_t n = mbi.RegionSize / 4;
+        __try {
+            for (size_t i = 0; i < n; ++i)
+                if (p[i] >= lo && p[i] <= hi) {
+                    if (found < 80) Log(">>> ptr at 0x%08X -> 0x%08X (+0x%X)", (unsigned)(uintptr_t)&p[i], p[i], (unsigned)(p[i] - lo));
+                    ++found;
+                }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    }
+    Log(">>> findptr 0x%08X..0x%08X: %d pointers", (unsigned)lo, (unsigned)hi, found);
+}
+
+// ------------------------------------------------------------------------------------ which level is being read?
+// Test 23: the level table is an array of 100-byte Level objects (same layout as the SNG file):
+// Level L's notes vector {begin, end, cap} is at vec0 + L*0x64, and notes are 456-byte records with
+// the time at +0x0C. watchnotes <vec0> <t> <L1> <L2> <L3> <L4> puts one hardware breakpoint
+// (read/write) on the time of the first note at or after t in each of 4 levels, for 3 s. The level
+// being drawn on the highway should be the one that gets read.
+static uintptr_t g_multiAddr[4];
+static volatile LONG g_multiCount[4];
+static uintptr_t g_multiEip[4][4];
+
+static LONG CALLBACK MultiWatchHandler(EXCEPTION_POINTERS* ep) {
+    if (ep->ExceptionRecord->ExceptionCode != EXCEPTION_SINGLE_STEP) return EXCEPTION_CONTINUE_SEARCH;
+    const DWORD dr6 = (DWORD)ep->ContextRecord->Dr6;
+    if (!(dr6 & 0xF)) return EXCEPTION_CONTINUE_SEARCH;
+    for (int i = 0; i < 4; ++i)
+        if (dr6 & (1u << i)) {
+            LONG n = InterlockedIncrement(&g_multiCount[i]);
+            if (n <= 4) g_multiEip[i][n - 1] = ep->ContextRecord->Eip;
+        }
+    ep->ContextRecord->Dr6 = 0;
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
+
+static bool ReadDword(uintptr_t a, uint32_t* v) {
+    __try { *v = *(const uint32_t*)a; return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+static void WatchNotes(const char* args) {
+    unsigned vec0 = 0; float t = 0; int lv[4] = {-1, -1, -1, -1};
+    if (sscanf_s(args, "%x %f %d %d %d %d", &vec0, &t, &lv[0], &lv[1], &lv[2], &lv[3]) < 3) { Log(">>> watchnotes: bad args"); return; }
+    for (int k = 0; k < 4; ++k) {
+        g_multiAddr[k] = 0; g_multiCount[k] = 0;
+        if (lv[k] < 0) continue;
+        uint32_t begin = 0, end = 0;
+        if (!ReadDword(vec0 + lv[k] * 0x64, &begin) || !ReadDword(vec0 + lv[k] * 0x64 + 4, &end)) continue;
+        const unsigned count = (end - begin) / 456;
+        for (unsigned i = 0; i < count; ++i) {
+            float nt = -1;
+            ReadFloat(begin + i * 456 + 0xC, &nt);
+            if (nt >= t) { g_multiAddr[k] = begin + i * 456 + 0xC; Log(">>> level %d: %u notes, watching note #%u (t=%.3f) time at 0x%08X", lv[k], count, i, nt, (unsigned)g_multiAddr[k]); break; }
+        }
+    }
+    PVOID veh = AddVectoredExceptionHandler(1, MultiWatchHandler);
+    // Set DR0..DR3 (read/write, 4 bytes) on all threads
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    THREADENTRY32 te{ sizeof(te) };
+    std::vector<DWORD> tids;
+    for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te))
+        if (te.th32OwnerProcessID == GetCurrentProcessId() && te.th32ThreadID != GetCurrentThreadId()) tids.push_back(te.th32ThreadID);
+    CloseHandle(snap);
+    auto apply = [&](bool on) {
+        for (DWORD tid : tids) {
+            HANDLE th = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE, tid);
+            if (!th) continue;
+            SuspendThread(th);
+            CONTEXT c{}; c.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+            if (GetThreadContext(th, &c)) {
+                DWORD dr7 = 0;
+                DWORD* drs[4] = {&c.Dr0, &c.Dr1, &c.Dr2, &c.Dr3};
+                for (int k = 0; k < 4; ++k) {
+                    *drs[k] = on ? (DWORD)g_multiAddr[k] : 0;
+                    if (on && g_multiAddr[k]) dr7 |= (1u << (2 * k)) | (3u << (16 + 4 * k)) | (3u << (18 + 4 * k));  // enable, R/W, 4 bytes
+                }
+                c.Dr7 = dr7;
+                SetThreadContext(th, &c);
+            }
+            ResumeThread(th);
+            CloseHandle(th);
+        }
+    };
+    apply(true);
+    Sleep(3000);
+    apply(false);
+    Sleep(50);
+    RemoveVectoredExceptionHandler(veh);
+    for (int k = 0; k < 4; ++k)
+        if (g_multiAddr[k])
+            Log(">>> level %d: %ld accesses in 3 s; code (rva): %06X %06X %06X %06X", lv[k], g_multiCount[k],
+                g_multiEip[k][0] ? (unsigned)(g_multiEip[k][0] - g_base) : 0, g_multiEip[k][1] ? (unsigned)(g_multiEip[k][1] - g_base) : 0,
+                g_multiEip[k][2] ? (unsigned)(g_multiEip[k][2] - g_base) : 0, g_multiEip[k][3] ? (unsigned)(g_multiEip[k][3] - g_base) : 0);
+}
+
+// ddstate: current Dynamic Difficulty level of every phrase iteration (test 24, from the disassembly
+// of rva 0x3F20D0: song+0x78 = song data (levels vector +0x40, phrase iterations vector +0x64),
+// song+0x7C = DD state (vector +0x18 of 64-byte entries, level at +4)).
+static void DdState() {
+    uintptr_t song = SongObject();
+    uint32_t sng = 0, dd = 0, lvB = 0, lvE = 0, piB = 0, piE = 0, ddB = 0, ddE = 0;
+    if (!song || !ReadDword(song + 0x78, &sng) || !ReadDword(song + 0x7C, &dd) || !ReadDword(sng + 0x40, &lvB) ||
+        !ReadDword(sng + 0x44, &lvE) || !ReadDword(sng + 0x64, &piB) || !ReadDword(sng + 0x68, &piE) ||
+        !ReadDword(dd + 0x18, &ddB) || !ReadDword(dd + 0x1C, &ddE)) { Log(">>> ddstate: not readable"); return; }
+    const unsigned nLv = (lvE - lvB) / 0x64, nPi = (piE - piB) / 0x18, nDd = (ddE - ddB) / 64;
+    Log(">>> ddstate: song 0x%08X sng 0x%08X dd 0x%08X: %u levels, %u phrase iterations, %u DD entries", (unsigned)song, sng, dd, nLv, nPi, nDd);
+    for (unsigned i = 0; i < nPi && i < nDd; ++i) {
+        uint32_t phrase = 0, lvl = 0; float start = 0, end = 0;
+        ReadDword(piB + i * 0x18, &phrase); ReadFloat(piB + i * 0x18 + 4, &start); ReadFloat(piB + i * 0x18 + 8, &end);
+        ReadDword(ddB + i * 64 + 4, &lvl);
+        Log(">>>   PI %2u phrase %u %7.3f-%7.3f  current level %d", i, phrase, start, end, (int)lvl);
+    }
+}
+
 // peek <hexaddr> <count>: log <count> dwords starting at an absolute address, as hex, int and float.
 static void Peek(const char* args) {
     char* end;
@@ -1158,6 +1323,10 @@ static DWORD WINAPI MainThread(LPVOID) {
         else if (cmd.rfind("whoreads ", 0) == 0) WhoAccesses(2.0f, true, SongObjAddr(cmd.c_str() + 9));
         else if (cmd == "songobj") LogSongObject();
         else if (cmd.rfind("peek ", 0) == 0) Peek(cmd.c_str() + 5);
+        else if (cmd.rfind("findnotes ", 0) == 0) FindNoteArrays(cmd.c_str() + 10);
+        else if (cmd.rfind("findptr ", 0) == 0) FindPointers(cmd.c_str() + 8);
+        else if (cmd.rfind("watchnotes ", 0) == 0) WatchNotes(cmd.c_str() + 11);
+        else if (cmd == "ddstate") DdState();
         else if (cmd.rfind("trace ", 0) == 0) TraceAudioCalls((float)atof(cmd.c_str() + 6), cmd.find("nortpc") == std::string::npos);
         else if (cmd.rfind("pokeb ", 0) == 0) PokeByte(cmd.c_str() + 6);
         else if (cmd == "findprov") Log(">>> provider = 0x%08X", (unsigned)FindProvider());

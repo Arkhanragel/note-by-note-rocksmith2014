@@ -52,10 +52,18 @@ index 7dd82b3..8b20145 100644
      <ClCompile Include="RSAsioAudioEndpointVolume.cpp" />
      <ClCompile Include="RSAsioAudioRenderClient.cpp" />
 diff --git a/RS_ASIO/dllmain.cpp b/RS_ASIO/dllmain.cpp
-index 7cb694f..fef2892 100644
+index 7cb694f..2e9286d 100644
 --- a/RS_ASIO/dllmain.cpp
 +++ b/RS_ASIO/dllmain.cpp
-@@ -22,7 +22,7 @@ BOOL APIENTRY DllMain( HMODULE hModule,
+@@ -5,6 +5,7 @@
+ #include "RSAggregatorDeviceEnum.h"
+ #include "Configurator.h"
+ #include "MyUnknown.h"
++#include "GuitarTap.h" // Note-by-Note
+ 
+ #define USE_STRUCTURED_PA 1
+ 
+@@ -22,9 +23,10 @@ BOOL APIENTRY DllMain( HMODULE hModule,
  		DisableThreadLibraryCalls(hModule);
  
  		rslog::InitLog();
@@ -63,4 +71,7 @@ index 7cb694f..fef2892 100644
 +		rslog::info_ts() << " - Wrapper DLL loaded (v0.7.5 + Note-by-Note GuitarTap)" << std::endl;
  		InitPatcher();
  		PatchOriginalCode();
++		GuitarTap::StartModLoader(hModule); // Note-by-Note: loads NoteByNote.dll if present
  		break;
+ 	case DLL_PROCESS_DETACH:
+ 		DeinitPatcher();

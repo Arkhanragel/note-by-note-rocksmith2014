@@ -22,6 +22,17 @@ constexpr uint32_t kPreviewChain[] = {0xBC, 0x0};
 constexpr uint32_t kSongObjChain[] = {0xB0};          // [root]+0xB0 -> song object
 constexpr uintptr_t kSongClockOffset = 0x3B4;         // float in the song object: THE song clock
 
+// Song data and Dynamic Difficulty (from the disassembly of rva 0x3F1B40 / 0x3F20D0, test 24):
+constexpr uintptr_t kSongData = 0x78;         // song object -> loaded arrangement (same layout as the SNG file)
+constexpr uintptr_t kSongDataLevels = 0x40;   //   vector<Level> begin/end, Level = 0x64 bytes
+constexpr uintptr_t kLevelSize = 0x64;
+constexpr uintptr_t kLevelNotes = 0x30;       //   Level: vector<Note> begin/end, Note = 0x1C8 bytes
+constexpr uintptr_t kNoteSize = 0x1C8;
+constexpr uintptr_t kSongDd = 0x7C;           // song object -> Dynamic Difficulty state
+constexpr uintptr_t kDdEntries = 0x18;        //   vector of 64-byte entries, one per phrase iteration
+constexpr uintptr_t kDdEntrySize = 64;
+constexpr uintptr_t kDdLevel = 4;             //   entry+4: current level (int, negative = none)
+
 constexpr uintptr_t kProviderVtable = 0x00DA0E70;  // clock provider: vtable, +0x0C = song object
 constexpr uintptr_t kProviderPlayingId = 0xCC;     // Wwise playing ID the clock follows
 constexpr uintptr_t kProviderStopped = 0xDA;       // byte: !=0 -> clock does not advance
@@ -182,6 +193,37 @@ bool GetSongTime(double* t) {
     float f;
     if (!g_ready || !song || !ReadFloat(song + kSongClockOffset, &f)) return false;
     *t = f;
+    return true;
+}
+
+bool GetPhraseLevels(std::vector<int>* levels) {
+    const uintptr_t song = SongObject();
+    uint32_t dd, b, e;
+    if (!g_ready || !song || !ReadU32(song + kSongDd, &dd) || !ReadU32(dd + kDdEntries, &b) || !ReadU32(dd + kDdEntries + 4, &e))
+        return false;
+    if (e < b || (e - b) % kDdEntrySize || (e - b) / kDdEntrySize > 10000) return false;
+    levels->clear();
+    for (uint32_t p = b; p < e; p += kDdEntrySize) {
+        uint32_t lv;
+        if (!ReadU32(p + kDdLevel, &lv)) return false;
+        levels->push_back((int)lv);
+    }
+    return true;
+}
+
+bool GetLevelNoteCounts(std::vector<int>* counts) {
+    const uintptr_t song = SongObject();
+    uint32_t data, b, e;
+    if (!g_ready || !song || !ReadU32(song + kSongData, &data) || !ReadU32(data + kSongDataLevels, &b) ||
+        !ReadU32(data + kSongDataLevels + 4, &e))
+        return false;
+    if (e < b || (e - b) % kLevelSize || (e - b) / kLevelSize > 100) return false;
+    counts->clear();
+    for (uint32_t lv = b; lv < e; lv += kLevelSize) {
+        uint32_t nb, ne;
+        if (!ReadU32(lv + kLevelNotes, &nb) || !ReadU32(lv + kLevelNotes + 4, &ne) || ne < nb) return false;
+        counts->push_back((int)((ne - nb) / kNoteSize));
+    }
     return true;
 }
 

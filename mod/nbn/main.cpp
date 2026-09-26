@@ -1,12 +1,15 @@
-// main.cpp: Note-by-Note for Rocksmith 2014, the mod's entry point and "wait mode" logic.
+﻿// main.cpp: Note-by-Note for Rocksmith 2014, the mod's entry point and "wait mode" logic.
 //
 // Loaded by our RS_ASIO build (it loads NoteByNote.dll from the game folder at startup), or during
 // development by nbn_inject.exe. Everything runs on one background thread:
 //
 //   every ~1 ms:  read new guitar samples from the GuitarTap -> NoteTracker -> note events
-//                 read the game state (menu, song key, song clock)
-//                 WAIT MODE: if the clock reaches the next note and it hasn't been played -> freeze
-//                            the song; when the player plays it -> unfreeze and move on
+//                 read the game state (screen, song key, song clock, Dynamic Difficulty levels)
+//                 WAIT MODE: when the clock reaches the next note ON THE HIGHWAY and it hasn't been
+//                            played -> freeze the song; when the player plays it -> unfreeze
+//
+// "The next note on the highway" = the next note of the chart, where each phrase iteration uses its
+// CURRENT Dynamic Difficulty level, read from game memory (see game.h / chart.h).
 //
 // Configuration: NoteByNote.ini next to the DLL (created with defaults on first run).
 // Log: NoteByNote.log next to the DLL.
@@ -14,6 +17,7 @@
 #include <timeapi.h>
 
 #include <cmath>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -32,7 +36,7 @@ HMODULE g_self = nullptr;
 struct Config {
     bool enabledAtStart = true;
     int toggleKey = VK_F8;
-    std::wstring arrangement = L"auto";  // auto | lead | rhythm | bass | lead2 | ...
+    std::wstring arrangement = L"auto";  // auto = the chart matching what the game loaded
     std::wstring chartsDir;              // absolute
     double leadS = 0.0;                  // freeze this long BEFORE the note time
     double earlyS = 0.30;                // a correct note up to this early counts without freezing
@@ -72,7 +76,7 @@ Config LoadConfig() {
                 "; Key that switches the mode on/off during a song (F1..F12). Avoid F10 (Windows menu key)\n"
                 "; and F12 (Steam screenshot).\n"
                 "ToggleKey=F8\n"
-                "; Which part you play: auto (lead, then rhythm, then bass), lead, rhythm, bass, lead2, ...\n"
+                "; Which chart to use: auto (the one matching the part the game loaded), or lead, rhythm, bass...\n"
                 "Arrangement=auto\n"
                 "; Folder with the charts made by the chart exporter (relative to this file)\n"
                 "ChartsDir=NoteByNote_charts\n"
@@ -111,32 +115,43 @@ std::wstring Lower(std::string s) {
     return std::wstring(s.begin(), s.end());
 }
 
-// Finds and loads the chart for a song key: <charts>/<songkey>/<arrangement>.nbn
-bool LoadChartFor(const Config& cfg, const std::string& songKey, Chart* chart) {
+std::string Join(const std::vector<int>& v) {
+    std::string s;
+    for (size_t i = 0; i < v.size(); ++i) s += (i ? "," : "") + std::to_string(v[i]);
+    return s;
+}
+
+// Picks the chart for the song being played: among charts/<songkey>/*.nbn, the one whose note count
+// per difficulty level equals what the game loaded, so it's exactly the arrangement on screen.
+// (A forced Arrangement= in the ini wins if it matches too.)
+bool LoadChartFor(const Config& cfg, const std::string& songKey, const std::vector<int>& gameCounts, Chart* chart) {
     const std::wstring dir = cfg.chartsDir + Lower(songKey) + L"\\";
-    std::vector<std::wstring> tries;
-    if (cfg.arrangement != L"auto") tries.push_back(cfg.arrangement);
-    for (const wchar_t* a : {L"lead", L"rhythm", L"bass", L"combo", L"lead2", L"rhythm2", L"bass2"}) tries.push_back(a);
-    for (const auto& a : tries) {
-        if (chart->Load(dir + a + L".nbn")) {
-            Log("chart: %s / %s  \"%s\"  (%zu targets)", songKey.c_str(), Narrow(a).c_str(), chart->title.c_str(),
-                chart->targets.size());
-            return true;
-        }
-    }
-    // Lessons have their own suffix (e.g. "lsn50"): take any chart in the folder.
+    std::vector<std::wstring> files;
     WIN32_FIND_DATAW fd;
     HANDLE h = FindFirstFileW((dir + L"*.nbn").c_str(), &fd);
-    if (h != INVALID_HANDLE_VALUE) {
-        const std::wstring file = dir + fd.cFileName;
-        FindClose(h);
-        if (chart->Load(file)) {
-            Log("chart: %s / %s (only chart available)", songKey.c_str(), Narrow(fd.cFileName).c_str());
+    if (h == INVALID_HANDLE_VALUE) {
+        Log("chart: no charts for song key \"%s\" in %s. Run the chart exporter for your songs.", songKey.c_str(),
+            Narrow(cfg.chartsDir).c_str());
+        return false;
+    }
+    do files.push_back(fd.cFileName); while (FindNextFileW(h, &fd));
+    FindClose(h);
+    if (cfg.arrangement != L"auto")  // try the configured one first
+        for (size_t i = 0; i < files.size(); ++i)
+            if (_wcsicmp(files[i].c_str(), (cfg.arrangement + L".nbn").c_str()) == 0) std::swap(files[0], files[i]);
+
+    for (const auto& f : files) {
+        Chart c;
+        if (!c.Load(dir + f)) continue;
+        if (c.levelCounts == gameCounts) {
+            *chart = std::move(c);
+            Log("chart: %s / %s \"%s\" (%d levels, %zu phrase iterations) matches the game", songKey.c_str(),
+                Narrow(f).c_str(), chart->title.c_str(), chart->Levels(), chart->pis.size());
             return true;
         }
     }
-    Log("chart: none for song key \"%s\" in %s. Run the chart exporter for your songs.", songKey.c_str(),
-        Narrow(cfg.chartsDir).c_str());
+    Log("chart: none of the %zu charts for \"%s\" matches the arrangement in the game (game levels: %s). "
+        "Re-run the chart exporter (the song may have been updated).", files.size(), songKey.c_str(), Join(gameCounts).c_str());
     return false;
 }
 
@@ -157,6 +172,48 @@ bool Matches(const Config& cfg, const Target& t, int midi) {
     const int d = midi - t.midi[0];
     return d == 0 || (cfg.acceptOctaves && d % 12 == 0);
 }
+
+bool Waitable(const Target& t) { return !t.chord && !t.ignore; }  // chords aren't supported yet
+
+// ------------------------------------------------------------------ debug recordings of each wait
+// Keeps the last 20 s of guitar audio. When a wait ends (hit, pause menu, mode off), the audio from
+// 2 s before the freeze until now is saved as NoteByNote_debug\wait_<song time>.wav, so a
+// "it didn't accept my note" situation can be replayed and analyzed offline.
+class DebugAudio {
+public:
+    void Push(const std::vector<float>& s) {
+        for (float v : s) { ring_[pos_ % kSize] = v; ++pos_; }
+    }
+    long long Pos() const { return pos_; }
+    void Save(const std::wstring& dir, double songTime, long long fromPos, unsigned sr) {
+        if (pos_ - fromPos > kSize) fromPos = pos_ - kSize;
+        if (fromPos < 0) fromPos = 0;
+        CreateDirectoryW(dir.c_str(), nullptr);
+        wchar_t name[64];
+        swprintf_s(name, L"wait_%07.3f.wav", songTime);
+        FILE* f = _wfopen((dir + name).c_str(), L"wb");
+        if (!f) return;
+        const uint32_t n = (uint32_t)(pos_ - fromPos), bytes = n * 2;
+        auto u32 = [&](uint32_t v) { std::fwrite(&v, 4, 1, f); };
+        auto u16 = [&](uint16_t v) { std::fwrite(&v, 2, 1, f); };
+        std::fwrite("RIFF", 1, 4, f); u32(36 + bytes); std::fwrite("WAVEfmt ", 1, 8, f);
+        u32(16); u16(1); u16(1); u32(sr); u32(sr * 2); u16(2); u16(16);
+        std::fwrite("data", 1, 4, f); u32(bytes);
+        for (long long i = fromPos; i < pos_; ++i) {
+            float v = ring_[i % kSize];
+            v = v > 1 ? 1 : (v < -1 ? -1 : v);
+            const int16_t s = (int16_t)(v * 32767);
+            std::fwrite(&s, 2, 1, f);
+        }
+        std::fclose(f);
+        Log("  (saved the audio of this wait: %s)", Narrow(dir + name).c_str());
+    }
+
+private:
+    static constexpr long long kSize = 48000 * 20;
+    std::vector<float> ring_ = std::vector<float>(kSize, 0.0f);
+    long long pos_ = 0;
+};
 
 bool GameFocused() {
     DWORD pid = 0;
@@ -183,13 +240,19 @@ DWORD WINAPI MainThread(LPVOID) {
     std::vector<float> samples, pending;
     std::vector<NoteEvent> events;
 
-    std::string menu, lastMenu, lastKey, chartKey;
+    std::string menu, lastMenu, lastKey;
     Chart chart;
+    std::string chartFor;             // song key the current chart was matched for ("" = none yet)
     bool chartOk = false, frozen = false;
-    size_t idx = 0;
-    double lastT = -1, frozenAt = 0;
-    DWORD frozenTick = 0, lastTapTry = 0, nextFreezeTry = 0, lastHeartbeat = 0, lastUnloadCheck = 0;
+    std::vector<int> levels, gameCounts;
+    double cursor = 0;                // song time of the last note that was hit/passed
+    double lastT = -1;
+    Target waitFor;                   // the note we're frozen on
+    DWORD frozenTick = 0, lastTapTry = 0, nextFreezeTry = 0, lastHeartbeat = 0, lastUnloadCheck = 0, nextChartTry = 0;
     long long totalSamples = 0;
+    DebugAudio debugAudio;
+    long long waitAudioStart = 0;
+    const std::wstring debugDir = DllDir() + L"NoteByNote_debug\\";
 
     timeBeginPeriod(1);
     for (;;) {
@@ -205,6 +268,7 @@ DWORD WINAPI MainThread(LPVOID) {
         samples.clear();
         tap.ReadNew(samples);
         totalSamples += (long long)samples.size();
+        debugAudio.Push(samples);
         pending.insert(pending.end(), samples.begin(), samples.end());
         size_t used = 0;
         for (; used + NoteTracker::kBlock <= pending.size(); used += NoteTracker::kBlock) {
@@ -219,7 +283,7 @@ DWORD WINAPI MainThread(LPVOID) {
             enabled = !enabled;
             Log("Note-by-Note %s", enabled ? "ON" : "OFF");
             game::PostUiEvent(cfg.toggleSound.c_str());
-            if (!enabled && frozen) { game::Unfreeze(); frozen = false; }
+            if (!enabled && frozen) { game::Unfreeze(); frozen = false; debugAudio.Save(debugDir, waitFor.time, waitAudioStart, 48000); }
             if (enabled) lastT = -1;  // re-sync to the current position
         }
         keyDown = down;
@@ -236,9 +300,10 @@ DWORD WINAPI MainThread(LPVOID) {
             lastHeartbeat = now;
             double ht = -1;
             const bool tOk = game::GetSongTime(&ht);
-            Log("status: menuOk=%d menu=%s key=%s chartOk=%d enabled=%d t=%s%.3f idx=%zu frozen=%d tapOpen=%d samples=%lld",
-                menuOk, menu.c_str(), lastKey.c_str(), chartOk, enabled, tOk ? "" : "(n/a)", ht, idx, frozen,
-                tap.IsOpen(), totalSamples);
+            game::GetPhraseLevels(&levels);
+            Log("status: menu=%s key=%s chart=%s enabled=%d t=%s%.3f cursor=%.3f frozen=%d tap=%d samples=%lld levels=[%s]",
+                menuOk ? menu.c_str() : "?", lastKey.c_str(), chartOk ? chart.arrangement.c_str() : "-", enabled,
+                tOk ? "" : "(n/a)", ht, cursor, frozen, tap.IsOpen(), totalSamples, Join(levels).c_str());
         }
         if (!menuOk) continue;
         if (menu != lastMenu) { Log("screen: %s", menu.c_str()); lastMenu = menu; }
@@ -250,68 +315,91 @@ DWORD WINAPI MainThread(LPVOID) {
         if (!inSong) {
             // Pause menu, song end, other screens: the game is in charge. If we were holding the song,
             // just forget it (the game's own pause stops/restarts the music and resets its clock flag).
-            if (frozen) { Log("left the song screen while waiting; releasing"); frozen = false; }
+            if (frozen) {
+                Log("left the song screen while waiting; releasing");
+                debugAudio.Save(debugDir, waitFor.time, waitAudioStart, 48000);
+                frozen = false;
+            }
             game::ResetSongCache();
             lastT = -1;
+            if (lastKey != chartFor) chartOk = false;  // a different song was selected
             continue;
         }
 
-        // ---- 4. chart for this song
-        if (lastKey != chartKey) {
-            chartKey = lastKey;
-            chartOk = !chartKey.empty() && LoadChartFor(cfg, chartKey, &chart);
-            if (chartOk && chart.bass != trackerIsBass) {
-                trackerIsBass = chart.bass;
-                tracker = NoteTracker(trackerIsBass ? bassCfg : guitarCfg);
+        // ---- 4. chart for the arrangement the game loaded (retry until the song data is readable)
+        if ((!chartOk || chartFor != lastKey) && !lastKey.empty() && now >= nextChartTry) {
+            nextChartTry = now + 2000;
+            if (game::GetLevelNoteCounts(&gameCounts) && !gameCounts.empty()) {
+                chartFor = lastKey;
+                chartOk = LoadChartFor(cfg, lastKey, gameCounts, &chart);
+                if (!chartOk) nextChartTry = now + 30000;  // don't spam the log
+                if (chartOk && chart.bass != trackerIsBass) {
+                    trackerIsBass = chart.bass;
+                    tracker = NoteTracker(trackerIsBass ? bassCfg : guitarCfg);
+                }
+                lastT = -1;
             }
-            lastT = -1;
         }
         double t;
         if (!chartOk || !enabled || !game::GetSongTime(&t)) continue;
-        const auto& targets = chart.targets;
+        if (!game::GetPhraseLevels(&levels)) levels.clear();
 
-        // ---- 5. keep the note pointer in sync with the song position
-        // (start of the song, Riff Repeater loops, rewinds after the game's pause, the mode switched on...)
+        // ---- 5. keep the cursor in sync with the song position
+        // (song start, Riff Repeater loops, the rewind after the game's pause, the mode switched on...)
         if (!frozen && (lastT < 0 || t < lastT - 0.25 || t > lastT + 1.0)) {
-            idx = chart.FirstAtOrAfter(t - 0.05);
-            if (lastT >= 0) Log("song position jumped %.2f -> %.2f s; next note #%zu", lastT, t, idx);
+            if (lastT >= 0) Log("song position jumped %.2f -> %.2f s", lastT, t);
+            cursor = t - 0.05;
         }
         lastT = t;
-        // chords aren't supported yet: skip them (never wait on them)
-        while (idx < targets.size() && targets[idx].chord && targets[idx].time <= t + cfg.earlyS) ++idx;
-        if (idx >= targets.size()) continue;  // end of the chart
-        const Target& next = targets[idx];
 
         // ---- 6. the player's notes
+        if (frozen) {
+            for (const auto& ev : events) {
+                if (Matches(cfg, waitFor, ev.midi)) {
+                    game::Unfreeze();
+                    frozen = false;
+                    cursor = waitFor.time;
+                    Log("HIT  %.3f %s after waiting %.2f s", waitFor.time, Describe(chart, waitFor).c_str(), (now - frozenTick) / 1000.0);
+                    if (now - frozenTick > 3000) debugAudio.Save(debugDir, waitFor.time, waitAudioStart, 48000);  // long waits only
+                    break;
+                }
+                Log("  heard %s (%+.0f cents, %.1f dB, aper %.2f%s), waiting for %s", MidiName(ev.midi).c_str(), ev.cents, ev.levelDb,
+                    ev.aperiodicity, ev.attack ? ", attack" : "", Describe(chart, waitFor).c_str());
+            }
+            continue;
+        }
+
+        // Next note on the highway (using the current level of each phrase), skipping chords/ignored
+        // notes, which we don't wait on (yet).
+        const Target* next = chart.NextTarget(cursor, levels);
+        while (next && !Waitable(*next) && next->time <= t + cfg.earlyS) {
+            cursor = next->time;
+            next = chart.NextTarget(cursor, levels);
+        }
+        if (!next) continue;  // end of the chart
+
         for (const auto& ev : events) {
-            if (!Matches(cfg, next, ev.midi)) {
-                if (frozen) Log("  heard %s, waiting for %s", MidiName(ev.midi).c_str(), Describe(chart, next).c_str());
-                continue;
-            }
-            if (frozen) {
-                game::Unfreeze();
-                frozen = false;
-                Log("HIT  #%zu %s after waiting %.2f s", idx, Describe(chart, next).c_str(), (now - frozenTick) / 1000.0);
-                ++idx;
-                break;
-            }
-            if (t >= next.time - cfg.earlyS) {  // on time (or a little early): no need to stop
-                Log("hit  #%zu %s on time (%+.0f ms)", idx, Describe(chart, next).c_str(), (t - next.time) * 1000.0);
-                ++idx;
+            if (Waitable(*next) && Matches(cfg, *next, ev.midi) && t >= next->time - cfg.earlyS) {
+                // played on time (or a little early): no need to stop
+                Log("hit  %.3f %s on time (%+.0f ms, level %d)", next->time, Describe(chart, *next).c_str(),
+                    (t - next->time) * 1000.0, next->level);
+                cursor = next->time;
+                next = chart.NextTarget(cursor, levels);
                 break;
             }
         }
-        if (idx >= targets.size() || frozen) continue;
+        if (!next || !Waitable(*next)) continue;
 
         // ---- 7. reached the next note without it being played -> wait for it
-        const Target& due = targets[idx];
-        if (!due.chord && t >= due.time - cfg.leadS && now >= nextFreezeTry) {
+        if (t >= next->time - cfg.leadS && now >= nextFreezeTry) {
             nextFreezeTry = now + 500;  // if freezing fails (e.g. the song is still loading), retry in 0.5 s
             if (game::Freeze()) {
                 frozen = true;
-                frozenAt = t;
+                waitFor = *next;
                 frozenTick = now;
-                Log("WAIT #%zu at %.3f s: play %s", idx, frozenAt, Describe(chart, due).c_str());
+                waitAudioStart = debugAudio.Pos() - 2 * 48000;
+                Log("WAIT %.3f (phrase iteration %d, level %d): play %s", next->time, next->pi, next->level,
+                    Describe(chart, *next).c_str());
             }
         }
     }
