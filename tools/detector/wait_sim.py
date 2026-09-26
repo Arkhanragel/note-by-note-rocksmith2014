@@ -131,6 +131,48 @@ def cmd_analyze(args):
     print(f"{count} events")
 
 
+# Friendly names for the play screen. SNG string 0 is the thickest string.
+FRIENDLY_GTR = ["6th string (thickest, low E)", "5th string (A)", "4th string (D)",
+                "3rd string (G)", "2nd string (B)", "1st string (thinnest, high e)"]
+FRIENDLY_BASS = ["4th string (thickest, E)", "3rd string (A)", "2nd string (D)", "1st string (thinnest, G)"]
+TAB_LABELS_GTR = ["E", "A", "D", "G", "B", "e"]
+TAB_LABELS_BASS = ["E", "A", "D", "G"]
+
+
+def open_string_midi(chart) -> list[int]:
+    """Pitch (MIDI) of each open string for this chart: standard tuning + the song's tuning offsets.
+    (Frets in the chart are absolute neck positions, so the capo isn't added. See the ChartDump TODO.)"""
+    base = [28, 33, 38, 43] if chart["IsBass"] else [40, 45, 50, 55, 59, 64]
+    return [b + chart["Tuning"][s] for s, b in enumerate(base)]
+
+
+def where_played(midi: int, target_string: int, opens: list[int]) -> tuple[int, int] | None:
+    """
+    A pitch can be played in several places on the neck. Guess where the player actually
+    played it: prefer the string they were asked to play, otherwise the closest string
+    where it fits between fret 0 and 24.
+    """
+    options = [(s, midi - o) for s, o in enumerate(opens) if 0 <= midi - o <= 24]
+    if not options:
+        return None
+    return min(options, key=lambda sf: (abs(sf[0] - target_string), sf[1]))
+
+
+def mini_tab(targets, i: int, labels: list[str], count: int = 6) -> str:
+    """
+    Draw the current note and the next few as guitar tablature. Each line is a string
+    (thinnest on top, as in standard tab), and the number is the fret to press.
+    The current note is marked with [ ].
+    """
+    rows = {s: labels[s] + "|-" for s in range(len(labels))}
+    for k, t in enumerate(targets[i:i + count]):
+        n = t["Notes"][0]
+        for s in rows:
+            cell = (f"[{n['Fret']}]" if k == 0 else f" {n['Fret']} ") if s == n["String"] else "---"
+            rows[s] += cell.ljust(4, "-") + "-"
+    return "\n".join("      " + rows[s] for s in reversed(range(len(labels))))
+
+
 def cmd_play(args):
     """
     The wait-mode loop: the current target is hit when the tracker reports an event with
@@ -139,18 +181,40 @@ def cmd_play(args):
     """
     chart = json.load(open(args.target, encoding="utf-8"))
     targets = [t for t in chart["Targets"] if not t["IsChord"]]  # chords are not supported yet
-    names = STRING_NAMES_BASS if chart["IsBass"] else STRING_NAMES_GTR
-    tracker = NoteTracker(make_config(args, chart["IsBass"]))
+    bass = chart["IsBass"]
+    names = FRIENDLY_BASS if bass else FRIENDLY_GTR
+    labels = TAB_LABELS_BASS if bass else TAB_LABELS_GTR
+    opens = open_string_midi(chart)
+    tracker = NoteTracker(make_config(args, bass))
     idx = args.start
 
     def show(i):
         n = targets[i]["Notes"][0]
-        upcoming = ", ".join(x["Notes"][0]["Name"] for x in targets[i + 1:i + 5])
-        techs = f"  [{', '.join(n['Techniques'])}]" if n["Techniques"] else ""
-        print(f"\n[{i + 1}/{len(targets)}]  PLAY  string {names[n['String']]}  fret {n['Fret']}"
-              f"  ->  {n['Name']}{techs}      then: {upcoming}", flush=True)
+        fret = "open string (don't press any fret)" if n["Fret"] == 0 else f"fret {n['Fret']}"
+        print(f"\n----- Note {i + 1} of {len(targets)} " + "-" * 40)
+        print(f"  PLAY:  {names[n['String']]}, {fret}")
+        if n["Techniques"]:
+            print(f"  Technique: {', '.join(n['Techniques'])}")
+        print(mini_tab(targets, i, labels))
+        print("  (waiting for you...)", flush=True)
 
-    print(f"Chart: {chart['SngName']}  ({len(targets)} single notes). Ctrl+C to stop.")
+    def explain_miss(ev, n):
+        pos = where_played(ev.midi, n["String"], opens)
+        diff = ev.midi - n["Midi"]
+        if pos is None:
+            return "  X  Not that one: that sound is outside the neck range. Try again."
+        s, f = pos
+        what = f"{names[s]}, " + ("open" if f == 0 else f"fret {f}")
+        if abs(diff) % 12 == 0:
+            hint = "right note but in a different octave (same name, higher or lower)"
+        elif s == n["String"]:
+            hint = f"{abs(diff)} fret{'s' if abs(diff) > 1 else ''} too {'high' if diff > 0 else 'low'}"
+        else:
+            hint = "wrong string or fret"
+        return f"  X  Not that one: sounded like {what} ({hint}). Try again."
+
+    print(f"Song: {chart['SngName']}  ({len(targets)} single notes). Press Ctrl+C to stop.")
+    print("How to read the tab: each line is a string (thinnest on top), the number is the fret.")
     show(idx)
     armed_at = 0.0
     waits: list[float] = []
@@ -158,18 +222,19 @@ def cmd_play(args):
         ev = tracker.process(block)
         if not ev:
             continue
-        want = targets[idx]["Notes"][0]["Midi"]
-        if ev.midi != want:
-            print(f"   ...heard {midi_name(ev.midi)}", flush=True)
+        n = targets[idx]["Notes"][0]
+        if ev.midi != n["Midi"]:
+            print(explain_miss(ev, n), flush=True)
             continue
         waits.append(ev.time - armed_at)
-        print(f"   HIT {midi_name(ev.midi)} ({ev.cents:+.0f} cents)", flush=True)
+        tuning = "" if abs(ev.cents) < 25 else ("  (a bit sharp: check tuning)" if ev.cents > 0 else "  (a bit flat: check tuning)")
+        print(f"  OK  Correct!{tuning}", flush=True)
         idx += 1
         if idx >= len(targets):
             break
         armed_at = ev.time
         show(idx)
-    print(f"\nDone. Median time between notes: {np.median(waits) * 1000:.0f} ms")
+    print(f"\nFinished! You played {len(waits)} notes. Typical time per note: {np.median(waits):.1f} s")
 
 
 def main():
