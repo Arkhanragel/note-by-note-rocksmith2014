@@ -7,3 +7,6 @@
 [submodule "external/rs_asio"]
 	path = external/rs_asio
 	url = https://github.com/mdias/rs_asio.git
+[submodule "external/imgui"]
+	path = external/imgui
+	url = https://github.com/ocornut/imgui.git

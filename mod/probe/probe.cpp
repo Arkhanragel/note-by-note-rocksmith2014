@@ -1065,6 +1065,21 @@ static void DdState() {
     }
 }
 
+// vptest <module>: can we make that module's code writable with a plain VirtualProtect? (test 25)
+// VMProtect refused it for the game exe (error 5). For the overlay we need to patch d3d9.dll's
+// EndScene; if VMProtect only guards its own image, a normal VirtualProtect works there.
+static void VpTest(const char* moduleName) {
+    HMODULE m = GetModuleHandleA(moduleName);
+    if (!m) { Log(">>> vptest: %s not loaded", moduleName); return; }
+    auto proc = (uintptr_t)GetProcAddress(m, "Direct3DCreate9");
+    uintptr_t a = proc ? proc : (uintptr_t)m + 0x1000;
+    DWORD old = 0;
+    BOOL ok = VirtualProtect((void*)a, 16, PAGE_EXECUTE_READWRITE, &old);
+    DWORD err = ok ? 0 : GetLastError();
+    if (ok) VirtualProtect((void*)a, 16, old, &old);
+    Log(">>> vptest %s @0x%08X: VirtualProtect(RWX) -> %s (error %lu, old protect 0x%X)", moduleName, (unsigned)a, ok ? "OK" : "FAILED", err, old);
+}
+
 // peek <hexaddr> <count>: log <count> dwords starting at an absolute address, as hex, int and float.
 static void Peek(const char* args) {
     char* end;
@@ -1327,6 +1342,7 @@ static DWORD WINAPI MainThread(LPVOID) {
         else if (cmd.rfind("findptr ", 0) == 0) FindPointers(cmd.c_str() + 8);
         else if (cmd.rfind("watchnotes ", 0) == 0) WatchNotes(cmd.c_str() + 11);
         else if (cmd == "ddstate") DdState();
+        else if (cmd.rfind("vptest ", 0) == 0) VpTest(cmd.c_str() + 7);
         else if (cmd.rfind("trace ", 0) == 0) TraceAudioCalls((float)atof(cmd.c_str() + 6), cmd.find("nortpc") == std::string::npos);
         else if (cmd.rfind("pokeb ", 0) == 0) PokeByte(cmd.c_str() + 6);
         else if (cmd == "findprov") Log(">>> provider = 0x%08X", (unsigned)FindProvider());
