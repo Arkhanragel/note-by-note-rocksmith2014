@@ -629,6 +629,7 @@ void DrawMenu(const View& v, const Settings& st, float s, ImVec2 ds) {
         ImGui::Checkbox("Close the Ubisoft login / server popups", &e.skipPopups);
         bool fast = e.fastIntro > 1;
         if (ImGui::Checkbox("Play the start-up logos 4x faster", &fast)) e.fastIntro = fast ? 4 : 1;
+        ImGui::Checkbox("Avoid the game's own random crash / freeze", &e.fixCrash);
 
         ImGui::Separator();
         ImGui::TextDisabled("Changes are saved automatically. The song is held while this menu is open.");

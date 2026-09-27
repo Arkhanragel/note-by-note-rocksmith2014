@@ -31,6 +31,7 @@
 
 #include "chart.h"
 #include "detector.h"
+#include "crashfix.h"
 #include "fastintro.h"
 #include "game.h"
 #include "log.h"
@@ -112,6 +113,9 @@ Config LoadConfig() {
                 "SkipUbisoftPopups=1\n"
                 "; Play the start-up logos this many times faster (1 = normal speed, up to 8)\n"
                 "FastIntro=4\n"
+                "; 1 = work around the game's own random crash / freeze (mostly at start-up): puts back\n"
+                ";     a Windows function the game's copy protection redirects (in memory only)\n"
+                "FixGameCrash=1\n"
                 "; Layout. Easier: open the menu and drag the parts with the mouse (corner = resize).\n"
                 "; Positions and widths in 1080p pixels (scaled with the screen height), sizes in percent.\n"
                 "; Banner: X of its centre from the screen centre, Y from the top\n"
@@ -152,6 +156,7 @@ Config LoadConfig() {
     c.initial.tabSeconds = std::max(2, std::min(8, (int)GetPrivateProfileIntW(L"NoteByNote", L"TabSeconds", 4, ini.c_str())));
     c.initial.skipPopups = GetPrivateProfileIntW(L"NoteByNote", L"SkipUbisoftPopups", 1, ini.c_str()) != 0;
     c.initial.fastIntro = std::max(1, std::min(8, (int)GetPrivateProfileIntW(L"NoteByNote", L"FastIntro", 4, ini.c_str())));
+    c.initial.fixCrash = GetPrivateProfileIntW(L"NoteByNote", L"FixGameCrash", 1, ini.c_str()) != 0;
     // Layout (defaults from overlay::Settings; sizes kept in the range the mouse allows).
     const overlay::Settings d;
     auto num = [&](const wchar_t* key, int def) { return (int)GetPrivateProfileIntW(L"NoteByNote", key, def, ini.c_str()); };
@@ -187,6 +192,7 @@ void SaveSettings(const overlay::Settings& st) {
     put(L"TabSeconds", st.tabSeconds);
     put(L"SkipUbisoftPopups", st.skipPopups);
     put(L"FastIntro", st.fastIntro);
+    put(L"FixGameCrash", st.fixCrash);
     put(L"BannerX", st.bannerX);
     put(L"BannerY", st.bannerY);
     put(L"BannerSize", st.bannerSize);
@@ -304,7 +310,8 @@ DWORD WINAPI MainThread(LPVOID) {
     overlay::Settings st = cfg.initial;  // the live settings (the menu can change them)
     Log("config: enabled=%d menuKey=0x%X skipKey=0x%X lead=%dms early=%dms octaves=%d banner=%d chords=%d", st.enabled,
         cfg.menuKey, cfg.skipKey, st.leadMs, st.earlyMs, st.acceptOctaves, st.showBanner, st.waitChords);
-    fastintro::Start(st.fastIntro);  // first: the logos are already playing
+    crashfix::Start(st.fixCrash);    // first of all: the game can crash any moment until then
+    fastintro::Start(st.fastIntro);  // then: the logos are already playing
     if (!game::Init()) { fastintro::Tick(true); return 0; }
     overlay::Start(st);
 
@@ -491,6 +498,7 @@ DWORD WINAPI MainThread(LPVOID) {
         fastintro::Tick(menuOk || lastPreMenu == "TitleScreen");
         if (now - lastHeartbeat > 5000) {  // what the mod sees, every 5 s (diagnostics)
             lastHeartbeat = now;
+            crashfix::Tick();
             double ht = -1;
             const bool tOk = game::GetSongTime(&ht);
             game::GetPhraseLevels(&levels);

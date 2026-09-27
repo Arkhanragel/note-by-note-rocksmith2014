@@ -44,6 +44,7 @@ struct Settings {
     int tabSeconds = 4;          // seconds of music ahead of the "now" line
     bool skipPopups = true;      // at game start, answer the Ubisoft login/server dialogs (startup.h)
     int fastIntro = 4;           // start-up logos this many times faster, 1 = normal (fastintro.h)
+    bool fixCrash = true;        // remove the protector's NtProtectVirtualMemory redirect (crashfix.h)
 
     // Layout: where each part is and how big (the player drags them while the menu is open). All
     // positions and widths are in 1080p pixels, scaled with the screen height like the game's own
