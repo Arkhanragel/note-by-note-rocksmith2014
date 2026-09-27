@@ -46,6 +46,11 @@ bool Chart::Load(const std::wstring& path) {
         }
     }
     if (levelCounts.empty() || pis.empty()) return false;  // not a v2 chart (re-run the exporter)
+    Index(all);
+    return true;
+}
+
+void Chart::Index(const std::vector<Target>& all) {
     byLevelPi.assign(levelCounts.size(), std::vector<std::vector<Target>>(pis.size()));
     for (const auto& t : all)
         if (t.level >= 0 && t.level < (int)levelCounts.size() && t.pi >= 0 && t.pi < (int)pis.size())
@@ -53,7 +58,6 @@ bool Chart::Load(const std::wstring& path) {
     for (auto& lv : byLevelPi)
         for (auto& v : lv)
             std::stable_sort(v.begin(), v.end(), [](const Target& a, const Target& b) { return a.time < b.time; });
-    return true;
 }
 
 const Target* Chart::NextTarget(double after, const std::vector<int>& levels) const {

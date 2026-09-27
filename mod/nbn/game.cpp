@@ -4,8 +4,12 @@
 #include <windows.h>
 #include <imagehlp.h>
 
+#include <algorithm>
 #include <cstdint>
+#include <cstring>
+#include <set>
 
+#include "chart.h"
 #include "log.h"
 
 namespace nbn::game {
@@ -28,6 +32,19 @@ constexpr uintptr_t kSongDataLevels = 0x40;   //   vector<Level> begin/end, Leve
 constexpr uintptr_t kLevelSize = 0x64;
 constexpr uintptr_t kLevelNotes = 0x30;       //   Level: vector<Note> begin/end, Note = 0x1C8 bytes
 constexpr uintptr_t kNoteSize = 0x1C8;
+
+// More of the song data, verified 2026-09-27 by rebuilding a whole chart from memory and comparing
+// it with the one exported from the song file (tools/memchart.py: identical, 2054 lines):
+constexpr uintptr_t kSongDataPis = 0x64;      //   vector<PhraseIteration>, 0x18 bytes: phraseId, start, end
+constexpr uintptr_t kPiSize = 0x18;
+constexpr uintptr_t kSongDataChords = 0x94;   //   vector<Chord>, 0x48 bytes (the SNG chord template):
+constexpr uintptr_t kChordSize = 0x48;        //     +0x4 frets[6] (int8, -1 = not played), +0x10 MIDI notes[6] (int32)
+constexpr uintptr_t kSongDataTuning = 0x110;  //   vector<int16>: semitones per string vs E standard
+constexpr uintptr_t kSongDataCapo = 0x11C;    //   int8, -1 = no capo
+// Note (0x1C8 bytes, same field order as the SNG note). Levels are stored in difficulty order.
+constexpr uintptr_t kNoteMask = 0x0, kNoteTime = 0xC, kNoteString = 0x10, kNoteFret = 0x11, kNoteChordId = 0x14,
+                    kNotePi = 0x20;
+constexpr uint32_t kMaskChord = 0x2, kMaskIgnore = 0x40000;
 constexpr uintptr_t kSongDd = 0x7C;           // song object -> Dynamic Difficulty state
 constexpr uintptr_t kDdEntries = 0x18;        //   vector of 64-byte entries, one per phrase iteration
 constexpr uintptr_t kDdEntrySize = 64;
@@ -79,6 +96,29 @@ bool ReadFloat(uintptr_t a, float* v) {
 
 bool WriteByte(uintptr_t a, uint8_t v) {
     __try { *(volatile uint8_t*)a = v; return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+bool ReadBytes(uintptr_t a, void* dst, size_t n) {
+    __try { std::memcpy(dst, (const void*)a, n); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+// Reads a std::vector (begin, end pointers) of fixed-size elements into a byte buffer.
+// maxCount is a sanity limit against garbage while the game is loading.
+bool ReadVector(uintptr_t vecAddr, size_t elemSize, size_t maxCount, std::vector<uint8_t>* out, uint32_t* begin = nullptr) {
+    uint32_t b, e;
+    if (!ReadU32(vecAddr, &b) || !ReadU32(vecAddr + 4, &e) || e < b || (e - b) % elemSize || (e - b) / elemSize > maxCount)
+        return false;
+    if (begin) *begin = b;
+    out->resize(e - b);
+    return e == b || ReadBytes(b, out->data(), e - b);
+}
+
+// A field of type T at byte offset off of a buffer read with ReadVector.
+template <typename T>
+T At(const std::vector<uint8_t>& v, size_t off) {
+    T x;
+    std::memcpy(&x, v.data() + off, sizeof(T));
+    return x;
 }
 
 bool ReadText(uintptr_t a, std::string* s) {
@@ -224,6 +264,82 @@ bool GetLevelNoteCounts(std::vector<int>* counts) {
         if (!ReadU32(lv + kLevelNotes, &nb) || !ReadU32(lv + kLevelNotes + 4, &ne) || ne < nb) return false;
         counts->push_back((int)((ne - nb) / kNoteSize));
     }
+    return true;
+}
+
+uintptr_t SongDataAddress() {
+    const uintptr_t song = SongObject();
+    uint32_t data;
+    return (g_ready && song && ReadU32(song + kSongData, &data)) ? data : 0;
+}
+
+bool ReadSongChart(Chart* chart) {
+    static const int kGuitarOpen[6] = {40, 45, 50, 55, 59, 64};  // E2 A2 D3 G3 B3 E4 (MIDI)
+    const uintptr_t data = SongDataAddress();
+    if (!data) return false;
+    std::vector<uint8_t> tuningRaw, chords, levels, pis, notes;
+    uint32_t levelsBegin = 0;
+    int8_t capoRaw;
+    if (!ReadVector(data + kSongDataTuning, 2, 8, &tuningRaw) || !ReadBytes(data + kSongDataCapo, &capoRaw, 1) ||
+        !ReadVector(data + kSongDataChords, kChordSize, 10000, &chords) ||
+        !ReadVector(data + kSongDataLevels, kLevelSize, 100, &levels, &levelsBegin) ||
+        !ReadVector(data + kSongDataPis, kPiSize, 10000, &pis))
+        return false;
+    if (levels.empty() || pis.empty()) return false;  // still loading
+    int tuning[6] = {0, 0, 0, 0, 0, 0};
+    for (size_t i = 0; i < tuningRaw.size() / 2 && i < 6; ++i) tuning[i] = At<int16_t>(tuningRaw, i * 2);
+    const int capo = capoRaw > 0 ? capoRaw : 0;
+    // With a capo, an open string sounds at the capo fret (same rule as Rocksmith2014.NET's toMidiNote).
+    auto fretOf = [&](int fret) { return (fret == 0 && capo > 0) ? capo : fret; };
+
+    Chart c;
+    // Guitar or bass: the chord templates store MIDI notes, computed with -12 for bass.
+    std::set<int> offsets;
+    for (size_t i = 0; i < chords.size(); i += kChordSize)
+        for (int s = 0; s < 6; ++s) {
+            const int8_t fret = At<int8_t>(chords, i + 4 + s);
+            if (fret >= 0) offsets.insert(At<int32_t>(chords, i + 0x10 + s * 4) - (kGuitarOpen[s] + tuning[s] + fretOf(fret)));
+        }
+    c.bass = offsets.size() == 1 && *offsets.begin() == -12;
+
+    for (size_t i = 0; i < pis.size(); i += kPiSize)
+        c.pis.push_back({At<int32_t>(pis, i), At<float>(pis, i + 4), At<float>(pis, i + 8)});
+
+    std::vector<Target> all;
+    int maxString = 0;
+    for (size_t lv = 0; lv * kLevelSize < levels.size(); ++lv) {
+        if (!ReadVector(levelsBegin + lv * kLevelSize + kLevelNotes, kNoteSize, 100000, &notes)) return false;
+        c.levelCounts.push_back((int)(notes.size() / kNoteSize));
+        for (size_t n = 0; n < notes.size(); n += kNoteSize) {
+            Target t;
+            const uint32_t mask = At<uint32_t>(notes, n + kNoteMask);
+            const int chordId = At<int32_t>(notes, n + kNoteChordId);
+            t.time = At<float>(notes, n + kNoteTime);
+            t.level = (int)lv;
+            t.pi = At<int32_t>(notes, n + kNotePi);
+            t.ignore = (mask & kMaskIgnore) != 0;
+            if (chordId >= 0 && (mask & kMaskChord) && (size_t)chordId * kChordSize < chords.size()) {
+                t.chord = true;
+                for (int s = 0; s < 6; ++s)
+                    if (At<int8_t>(chords, chordId * kChordSize + 4 + s) >= 0)
+                        t.midi.push_back(At<int32_t>(chords, chordId * kChordSize + 0x10 + s * 4));
+            } else {
+                t.string = At<int8_t>(notes, n + kNoteString);
+                t.fret = At<int8_t>(notes, n + kNoteFret);
+                if (t.string < 0 || t.string > 5) continue;
+                maxString = std::max(maxString, t.string);
+                t.midi.push_back(kGuitarOpen[t.string] + tuning[t.string] + fretOf(t.fret) - (c.bass ? 12 : 0));
+            }
+            all.push_back(std::move(t));
+        }
+    }
+    c.bassUnsure = offsets.empty() && maxString <= 3;
+    c.arrangement = c.bass ? "bass" : (c.bassUnsure ? "guitar or bass" : "guitar");
+    c.Index(all);
+    *chart = std::move(c);
+    Log("chart from memory: %s, tuning %d %d %d %d %d %d, capo %d, %zu chord shapes, %d levels, %zu phrase iterations, %zu notes",
+        chart->arrangement.c_str(), tuning[0], tuning[1], tuning[2], tuning[3], tuning[4], tuning[5], capo,
+        chords.size() / kChordSize, chart->Levels(), chart->pis.size(), all.size());
     return true;
 }
 

@@ -4,8 +4,13 @@
 // (the exe is encrypted on disk and protected by VMProtect). See BITACORA.md, "the freeze mechanism".
 // Nothing here modifies game CODE: we only read/write game DATA and call game functions.
 #pragma once
+#include <cstdint>
 #include <string>
 #include <vector>
+
+namespace nbn {
+struct Chart;
+}
 
 namespace nbn::game {
 
@@ -30,6 +35,14 @@ bool GetPhraseLevels(std::vector<int>* levels);
 // Number of notes in each difficulty level of the arrangement being played, as loaded by the game
 // (used to pick the chart that matches the arrangement on screen).
 bool GetLevelNoteCounts(std::vector<int>* counts);
+
+// Address of the loaded arrangement (changes when another song/arrangement is loaded), 0 if none.
+uintptr_t SongDataAddress();
+
+// Builds the chart of the arrangement being played straight from game memory: every difficulty
+// level, phrase iterations, chords, tuning and capo. No exported chart files are needed, so it
+// works for any song or CDLC. False while the song is still loading.
+bool ReadSongChart(Chart* chart);
 
 // Freezes / resumes the song: pauses the Wwise playback the clock follows AND sets the clock
 // provider's "stopped" flag, so music and highway stop together and resume in sync.

@@ -1,5 +1,7 @@
-// chart.h: loads the .nbn charts written by `ChartDump export` (format v2: all difficulty levels;
-// documented in tools/ChartDump/Program.cs, WriteChartV2).
+// chart.h: the notes of the arrangement being played, with all difficulty levels. The mod builds it
+// straight from game memory (game::ReadSongChart); Load() reads the same thing from the .nbn text
+// files written by `ChartDump export` (format v2, documented in tools/ChartDump/Program.cs), kept
+// for tests and tools.
 //
 // With Dynamic Difficulty, the highway shows for each phrase iteration (PI) the notes of that
 // phrase's CURRENT level, which the mod reads from game memory. So the "next note" depends on the
@@ -27,11 +29,14 @@ struct PhraseIteration {
 struct Chart {
     std::string songKey, title, arrangement;
     bool bass = false;
+    bool bassUnsure = false;  // no chord says guitar or bass, and only 4 strings are used: accept both
     std::vector<PhraseIteration> pis;
     std::vector<int> levelCounts;                      // notes per level (to identify the arrangement)
     std::vector<std::vector<std::vector<Target>>> byLevelPi;  // [level][pi] -> notes sorted by time
 
     bool Load(const std::wstring& path);
+    // Fills byLevelPi from a flat list of notes (levelCounts and pis must be set first).
+    void Index(const std::vector<Target>& all);
     int Levels() const { return (int)levelCounts.size(); }
 
     // First target with time > after, using levels[pi] as the current level of each PI (a level

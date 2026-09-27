@@ -13,7 +13,8 @@
 // settings; the song is held while it is open), F9 = skip the note the song is waiting for.
 //
 // "The next note on the highway" = the next note of the chart, where each phrase iteration uses its
-// CURRENT Dynamic Difficulty level, read from game memory (see game.h / chart.h).
+// CURRENT Dynamic Difficulty level. Both the chart (all levels) and the current levels are read from
+// game memory (see game.h / chart.h), so any song or CDLC works without preparing anything.
 //
 // Configuration: NoteByNote.ini next to the DLL (created with defaults on first run).
 // Log: NoteByNote.log next to the DLL.
@@ -43,8 +44,6 @@ struct Config {
     overlay::Settings initial;           // Enabled, LeadMs, EarlyMs, AcceptOctaves, ShowBanner
     int menuKey = VK_F8;
     int skipKey = VK_F9;
-    std::wstring arrangement = L"auto";  // auto = the chart matching what the game loaded
-    std::wstring chartsDir;              // absolute
     std::string menuSuffix = "_Game";    // the mode only acts on screens whose name ends like this
     std::string menuSound = "Nav_InGame_Options";
 };
@@ -77,21 +76,22 @@ Config LoadConfig() {
                 "; Note-by-Note for Rocksmith 2014 - settings\n"
                 "; The song waits at each single note until you play it.\n"
                 "[NoteByNote]\n"
-                "; 1 = the mode starts switched on, 0 = off (switch it with the toggle key while playing)\n"
+                "; Most of these can be changed in the game: press the menu key (F8) during a song.\n"
+                "; 1 = the mode is switched on, 0 = off (the menu changes and saves this)\n"
                 "Enabled=1\n"
-                "; Key that switches the mode on/off during a song (F1..F12). Avoid F10 (Windows menu key)\n"
-                "; and F12 (Steam screenshot).\n"
-                "ToggleKey=F8\n"
-                "; Which chart to use: auto (the one matching the part the game loaded), or lead, rhythm, bass...\n"
-                "Arrangement=auto\n"
-                "; Folder with the charts made by the chart exporter (relative to this file)\n"
-                "ChartsDir=NoteByNote_charts\n"
+                "; Key that opens the Note-by-Note menu (F1..F12). Avoid F10 (Windows menu key), F11 and\n"
+                "; F12 (Steam screenshot).\n"
+                "MenuKey=F8\n"
+                "; Key that skips the note the song is waiting for\n"
+                "SkipKey=F9\n"
                 "; Stop this many milliseconds BEFORE the note reaches the line (0 = exactly on it)\n"
                 "LeadMs=0\n"
                 "; A correct note played up to this many milliseconds early counts without stopping\n"
                 "EarlyMs=300\n"
                 "; 1 = the same note one octave higher/lower also counts\n"
-                "AcceptOctaves=0\n",
+                "AcceptOctaves=0\n"
+                "; 1 = show what to play (string, colour, fret) while the song waits\n"
+                "ShowBanner=1\n",
                 f);
             std::fclose(f);
         }
@@ -106,10 +106,6 @@ Config LoadConfig() {
     // MenuKey; older ini files called it ToggleKey (it used to switch the mode directly).
     c.menuKey = ParseKey(str(L"MenuKey", str(L"ToggleKey", L"F8").c_str()), VK_F8);
     c.skipKey = ParseKey(str(L"SkipKey", L"F9"), VK_F9);
-    c.arrangement = str(L"Arrangement", L"auto");
-    std::wstring dir = str(L"ChartsDir", L"NoteByNote_charts");
-    c.chartsDir = (dir.size() > 1 && dir[1] == L':') ? dir : DllDir() + dir;
-    if (!c.chartsDir.empty() && c.chartsDir.back() != L'\\') c.chartsDir += L'\\';
     c.initial.leadMs = GetPrivateProfileIntW(L"NoteByNote", L"LeadMs", 0, ini.c_str());
     c.initial.earlyMs = GetPrivateProfileIntW(L"NoteByNote", L"EarlyMs", 300, ini.c_str());
     c.initial.acceptOctaves = GetPrivateProfileIntW(L"NoteByNote", L"AcceptOctaves", 0, ini.c_str()) != 0;
@@ -137,49 +133,10 @@ bool SameSettings(const overlay::Settings& a, const overlay::Settings& b) {
 
 std::string Narrow(const std::wstring& w) { return std::string(w.begin(), w.end()); }  // ASCII paths/names only
 
-std::wstring Lower(std::string s) {
-    for (auto& ch : s) ch = (char)tolower((unsigned char)ch);
-    return std::wstring(s.begin(), s.end());
-}
-
 std::string Join(const std::vector<int>& v) {
     std::string s;
     for (size_t i = 0; i < v.size(); ++i) s += (i ? "," : "") + std::to_string(v[i]);
     return s;
-}
-
-// Picks the chart for the song being played: among charts/<songkey>/*.nbn, the one whose note count
-// per difficulty level equals what the game loaded, so it's exactly the arrangement on screen.
-// (A forced Arrangement= in the ini wins if it matches too.)
-bool LoadChartFor(const Config& cfg, const std::string& songKey, const std::vector<int>& gameCounts, Chart* chart) {
-    const std::wstring dir = cfg.chartsDir + Lower(songKey) + L"\\";
-    std::vector<std::wstring> files;
-    WIN32_FIND_DATAW fd;
-    HANDLE h = FindFirstFileW((dir + L"*.nbn").c_str(), &fd);
-    if (h == INVALID_HANDLE_VALUE) {
-        Log("chart: no charts for song key \"%s\" in %s. Run the chart exporter for your songs.", songKey.c_str(),
-            Narrow(cfg.chartsDir).c_str());
-        return false;
-    }
-    do files.push_back(fd.cFileName); while (FindNextFileW(h, &fd));
-    FindClose(h);
-    if (cfg.arrangement != L"auto")  // try the configured one first
-        for (size_t i = 0; i < files.size(); ++i)
-            if (_wcsicmp(files[i].c_str(), (cfg.arrangement + L".nbn").c_str()) == 0) std::swap(files[0], files[i]);
-
-    for (const auto& f : files) {
-        Chart c;
-        if (!c.Load(dir + f)) continue;
-        if (c.levelCounts == gameCounts) {
-            *chart = std::move(c);
-            Log("chart: %s / %s \"%s\" (%d levels, %zu phrase iterations) matches the game", songKey.c_str(),
-                Narrow(f).c_str(), chart->title.c_str(), chart->Levels(), chart->pis.size());
-            return true;
-        }
-    }
-    Log("chart: none of the %zu charts for \"%s\" matches the arrangement in the game (game levels: %s). "
-        "Re-run the chart exporter (the song may have been updated).", files.size(), songKey.c_str(), Join(gameCounts).c_str());
-    return false;
 }
 
 // Friendly note description for the log (the overlay shows the same thing with string colours).
@@ -194,10 +151,11 @@ std::string Describe(const Chart& chart, const Target& t) {
     return buf;
 }
 
-bool Matches(const overlay::Settings& st, const Target& t, int midi) {
+bool Matches(const overlay::Settings& st, const Chart& chart, const Target& t, int midi) {
     if (t.chord || t.midi.empty()) return false;
     const int d = midi - t.midi[0];
-    return d == 0 || (st.acceptOctaves && d % 12 == 0);
+    // bassUnsure: the chart could be a bass line, which sounds one octave lower than guitar notation.
+    return d == 0 || (st.acceptOctaves && d % 12 == 0) || (chart.bassUnsure && d == -12);
 }
 
 bool Waitable(const Target& t) { return !t.chord && !t.ignore; }  // chords aren't supported yet
@@ -265,9 +223,8 @@ DWORD WINAPI MainThread(LPVOID) {
     Log("Note-by-Note starting");
     const Config cfg = LoadConfig();
     overlay::Settings st = cfg.initial;  // the live settings (the menu can change them)
-    Log("config: enabled=%d menuKey=0x%X skipKey=0x%X arrangement=%s charts=%s lead=%dms early=%dms octaves=%d banner=%d",
-        st.enabled, cfg.menuKey, cfg.skipKey, Narrow(cfg.arrangement).c_str(), Narrow(cfg.chartsDir).c_str(), st.leadMs,
-        st.earlyMs, st.acceptOctaves, st.showBanner);
+    Log("config: enabled=%d menuKey=0x%X skipKey=0x%X lead=%dms early=%dms octaves=%d banner=%d", st.enabled, cfg.menuKey,
+        cfg.skipKey, st.leadMs, st.earlyMs, st.acceptOctaves, st.showBanner);
     if (!game::Init()) return 0;
     overlay::Start(st);
 
@@ -283,16 +240,17 @@ DWORD WINAPI MainThread(LPVOID) {
 
     std::string menu, lastMenu, lastKey;
     Chart chart;
-    std::string chartFor;             // song key the current chart was matched for ("" = none yet)
-    bool chartOk = false;
+    uintptr_t chartData = 0;          // address of the song data the chart was read from
+    bool chartOk = false;             // chart matches the song being played
     bool frozen = false;              // the song is held, waiting for waitFor
     bool menuHold = false;            // the song is held because OUR menu is open
     bool inSong = false, announced = false;
-    std::vector<int> levels, gameCounts;
+    std::vector<int> levels;
     double cursor = 0;                // song time of the last note that was hit/passed
     double lastT = -1;
     Target waitFor;                   // the note we're frozen on
-    DWORD frozenTick = 0, lastTapTry = 0, nextFreezeTry = 0, lastHeartbeat = 0, lastUnloadCheck = 0, nextChartTry = 0;
+    DWORD frozenTick = 0, lastTapTry = 0, nextFreezeTry = 0, lastHeartbeat = 0, lastUnloadCheck = 0, nextChartTry = 0,
+          songScreenTick = 0;
     long long totalSamples = 0;
     DebugAudio debugAudio;
     long long waitAudioStart = 0;
@@ -320,8 +278,8 @@ DWORD WINAPI MainThread(LPVOID) {
             v.string = waitFor.string;
             v.fret = waitFor.fret;
             v.chartOk = chartOk;
-            if (chartOk) v.chartInfo = "Chart: " + chart.arrangement + " - matches the song on screen";
-            else if (!chartFor.empty()) v.chartInfo = "No chart for this song: it plays normally (run the chart exporter)";
+            if (chartOk) v.chartInfo = "Song notes read from the game (" + chart.arrangement + ", " + std::to_string(chart.Levels()) + " levels)";
+            else if (inSong) v.chartInfo = "Couldn't read this song's notes yet: it plays normally";
             else v.chartInfo = "Start a song to use Note-by-Note";
             overlay::SetView(v);
         }
@@ -405,28 +363,36 @@ DWORD WINAPI MainThread(LPVOID) {
             game::ResetSongCache();
             lastT = -1;
             announced = false;
-            if (lastKey != chartFor) chartOk = false;  // a different song was selected
+            songScreenTick = 0;
             continue;
         }
+        if (!songScreenTick) songScreenTick = now;
 
-        // ---- 4. chart for the arrangement the game loaded (retry until the song data is readable)
-        if ((!chartOk || chartFor != lastKey) && !lastKey.empty() && now >= nextChartTry) {
-            nextChartTry = now + 2000;
-            if (game::GetLevelNoteCounts(&gameCounts) && !gameCounts.empty()) {
-                chartFor = lastKey;
-                chartOk = LoadChartFor(cfg, lastKey, gameCounts, &chart);
-                if (!chartOk) nextChartTry = now + 30000;  // don't spam the log
-                if (chartOk && chart.bass != trackerIsBass) {
-                    trackerIsBass = chart.bass;
+        // ---- 4. the chart of the arrangement being played, read from game memory (again whenever the
+        //         game loads another song/arrangement; retried while the song is still loading)
+        const uintptr_t data = game::SongDataAddress();
+        if (data != chartData) chartOk = false;
+        if (!chartOk && data && now >= nextChartTry) {
+            nextChartTry = now + 500;
+            if (game::ReadSongChart(&chart)) {
+                chartOk = true;
+                chartData = data;
+                lastT = -1;
+                const bool bassTracker = chart.bass || chart.bassUnsure;  // bass needs a longer window
+                if (bassTracker != trackerIsBass) {
+                    trackerIsBass = bassTracker;
                     tracker = NoteTracker(trackerIsBass ? bassCfg : guitarCfg);
                 }
-                lastT = -1;
             }
         }
-        if (!announced && chartFor == lastKey && !chartFor.empty()) {  // once per song: say what's going on
+        if (!announced && (chartOk || now - songScreenTick > 10000)) {  // once per song: say what's going on
             announced = true;
-            if (!chartOk) overlay::Toast("Note-by-Note: no chart for this song, it plays normally", 4000);
-            else if (st.enabled) overlay::Toast("Note-by-Note ON  -  F8 menu", 3500);
+            if (!chartOk) {
+                Log("chart: couldn't read the song's notes from memory");
+                overlay::Toast("Note-by-Note: couldn't read this song's notes, it plays normally", 4000);
+            } else if (st.enabled) {
+                overlay::Toast("Note-by-Note ON  -  F8 menu", 3500);
+            }
         }
 
         // ---- 5. our menu holds the song while it is open (so settings can be changed calmly)
@@ -463,7 +429,7 @@ DWORD WINAPI MainThread(LPVOID) {
                 continue;
             }
             for (const auto& ev : events) {
-                if (Matches(st, waitFor, ev.midi)) {
+                if (Matches(st, chart, waitFor, ev.midi)) {
                     Log("HIT  %.3f %s after waiting %.2f s", waitFor.time, Describe(chart, waitFor).c_str(), (now - frozenTick) / 1000.0);
                     if (now - frozenTick > 3000) debugAudio.Save(debugDir, waitFor.time, waitAudioStart, 48000);  // long waits only
                     cursor = waitFor.time;
@@ -487,7 +453,7 @@ DWORD WINAPI MainThread(LPVOID) {
         if (!next) continue;  // end of the chart
 
         for (const auto& ev : events) {
-            if (Waitable(*next) && Matches(st, *next, ev.midi) && t >= next->time - earlyS) {
+            if (Waitable(*next) && Matches(st, chart, *next, ev.midi) && t >= next->time - earlyS) {
                 // played on time (or a little early): no need to stop
                 Log("hit  %.3f %s on time (%+.0f ms, level %d)", next->time, Describe(chart, *next).c_str(),
                     (t - next->time) * 1000.0, next->level);
