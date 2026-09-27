@@ -10,7 +10,8 @@
 //   - short messages ("toasts"): "Note-by-Note ON", "Skipped", "No chart for this song"...
 //   - the song clock ("1:23 / 4:28") in the top-left corner while a song plays
 //   - the scrolling tab: the next few seconds of the song as guitar tab, moving right to left in
-//     step with the highway (left of the highway, below the lyrics; can be moved from the menu)
+//     step with the highway (left of the highway, below the lyrics; can be moved from the menu),
+//     with bar lines + bar numbers, faint beat lines and tails on held notes, to read the rhythm
 //   - the MENU (toggle key, F8 by default): mode on/off, skip note, timing settings
 //
 // Threads: the mod's main loop (main.cpp) and the game's render thread both use this module. They
@@ -37,6 +38,7 @@ struct Settings {
     bool waitChords = true;      // also wait at chords (off = chords pass, only single notes wait)
     bool showClock = true;       // show the song time while playing
     bool showTab = true;         // show the scrolling tab while playing
+    bool tabBeats = true;        // bar lines (with bar numbers) and beat lines in the tab
     int tabSeconds = 4;          // seconds of music ahead of the "now" line
     int tabX = -810, tabY = 385; // tab's top-left corner: x from the screen centre, y from the top
                                  // (in 1080p pixels, scaled with the screen height like the game)
@@ -49,6 +51,14 @@ struct TabNote {
     bool ignore = false;         // not scored by the game: drawn faded
     int frets[6] = {-1, -1, -1, -1, -1, -1};  // per string (0 = thickest): -1 = not played
     std::string name;            // chord name ("A5"), empty for single notes / double stops
+    double sustain = 0;          // seconds held: drawn as a tail after the fret number
+};
+
+// One beat line of the scrolling tab.
+struct TabBeat {
+    double time = 0;             // song time (s)
+    int measure = 0;             // bar number (shown at bar lines)
+    bool downbeat = false;       // first beat of a bar: a strong bar line
 };
 
 // What the main loop wants on screen. Sent every loop iteration with SetView().
@@ -68,6 +78,7 @@ struct View {
     double songTime = -1;        // seconds; < 0 = unknown (no clock shown)
     double songLength = 0;       // seconds; 0 = unknown
     std::vector<TabNote> tab;    // notes on the highway around songTime (empty = no tab)
+    std::vector<TabBeat> tabBeats;  // the beat grid over the same time span (empty = no lines)
     hint::Line hint;             // while waiting: how to fix the last wrong note/chord (empty = none)
 };
 

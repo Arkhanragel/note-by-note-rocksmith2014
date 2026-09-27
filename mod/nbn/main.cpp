@@ -101,6 +101,8 @@ Config LoadConfig() {
                 "ShowClock=1\n"
                 "; 1 = show the notes coming up as a scrolling tab (left of the highway, below the lyrics)\n"
                 "ShowTab=1\n"
+                "; 1 = bar lines (with bar numbers) and beat lines in the tab, to read the rhythm\n"
+                "TabBeats=1\n"
                 "; Seconds of music the tab shows ahead (2..8)\n"
                 "TabSeconds=4\n"
                 "; Tab position (the menu has sliders): X from the screen centre, Y from the top, in\n"
@@ -128,6 +130,7 @@ Config LoadConfig() {
     c.initial.waitChords = GetPrivateProfileIntW(L"NoteByNote", L"WaitChords", 1, ini.c_str()) != 0;
     c.initial.showClock = GetPrivateProfileIntW(L"NoteByNote", L"ShowClock", 1, ini.c_str()) != 0;
     c.initial.showTab = GetPrivateProfileIntW(L"NoteByNote", L"ShowTab", 1, ini.c_str()) != 0;
+    c.initial.tabBeats = GetPrivateProfileIntW(L"NoteByNote", L"TabBeats", 1, ini.c_str()) != 0;
     c.initial.tabSeconds = std::max(2, std::min(8, (int)GetPrivateProfileIntW(L"NoteByNote", L"TabSeconds", 4, ini.c_str())));
     c.initial.tabX = (int)GetPrivateProfileIntW(L"NoteByNote", L"TabX", -810, ini.c_str());
     c.initial.tabY = (int)GetPrivateProfileIntW(L"NoteByNote", L"TabY", 385, ini.c_str());
@@ -148,6 +151,7 @@ void SaveSettings(const overlay::Settings& st) {
     put(L"WaitChords", st.waitChords);
     put(L"ShowClock", st.showClock);
     put(L"ShowTab", st.showTab);
+    put(L"TabBeats", st.tabBeats);
     put(L"TabSeconds", st.tabSeconds);
     put(L"TabX", st.tabX);
     put(L"TabY", st.tabY);
@@ -157,7 +161,7 @@ bool SameSettings(const overlay::Settings& a, const overlay::Settings& b) {
     return a.enabled == b.enabled && a.leadMs == b.leadMs && a.earlyMs == b.earlyMs &&
            a.acceptOctaves == b.acceptOctaves && a.showBanner == b.showBanner && a.waitChords == b.waitChords &&
            a.showClock == b.showClock && a.showTab == b.showTab && a.tabSeconds == b.tabSeconds && a.tabX == b.tabX &&
-           a.tabY == b.tabY;
+           a.tabY == b.tabY && a.tabBeats == b.tabBeats;
 }
 
 std::string Narrow(const std::wstring& w) { return std::string(w.begin(), w.end()); }  // ASCII paths/names only
@@ -282,6 +286,8 @@ DWORD WINAPI MainThread(LPVOID) {
     std::vector<int> upcomingChord;   // the next chord on the highway (checked after each attack)
     std::vector<overlay::TabNote> tabNotes;  // the scrolling tab's notes (refreshed every 50 ms)
     std::vector<const Target*> tabTargets;
+    std::vector<overlay::TabBeat> tabBeats;  // and its bar/beat lines
+    std::vector<Beat> tabBeatsRaw;
     std::vector<int> tabLevels;
     DWORD nextTabRefresh = 0;
 
@@ -341,6 +347,10 @@ DWORD WINAPI MainThread(LPVOID) {
                     nextTabRefresh = now + 50;
                     if (!game::GetPhraseLevels(&tabLevels)) tabLevels.clear();
                     chart.TargetsBetween(v.songTime - 1.0, v.songTime + st.tabSeconds + 1.0, tabLevels, &tabTargets);
+                    chart.BeatsBetween(v.songTime - 1.0, v.songTime + st.tabSeconds + 1.0, &tabBeatsRaw);
+                    tabBeats.clear();
+                    if (st.tabBeats)
+                        for (const Beat& b : tabBeatsRaw) tabBeats.push_back({b.time, b.measure, b.downbeat});
                     tabNotes.clear();
                     for (const Target* t : tabTargets) {
                         overlay::TabNote tn;
@@ -350,12 +360,15 @@ DWORD WINAPI MainThread(LPVOID) {
                         if (t->chord) std::copy(std::begin(t->frets), std::end(t->frets), tn.frets);
                         else if (t->string >= 0 && t->string < 6) tn.frets[t->string] = t->fret;
                         tn.name = t->chordName;
+                        tn.sustain = t->sustain;
                         tabNotes.push_back(tn);
                     }
                 }
                 v.tab = tabNotes;
+                v.tabBeats = tabBeats;
             } else {
                 tabNotes.clear();
+                tabBeats.clear();
                 nextTabRefresh = 0;
             }
             v.chartOk = chartOk;

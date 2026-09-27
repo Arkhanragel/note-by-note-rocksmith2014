@@ -25,6 +25,14 @@ struct Target {
     std::string chordName;
     int frets[6] = {-1, -1, -1, -1, -1, -1};
     int notes[6] = {-1, -1, -1, -1, -1, -1};  // MIDI note per string (chords; -1 = not played)
+    double sustain = 0;       // seconds the note is held (0 = short note); only from game memory
+};
+
+// One beat of the song's beat grid (the highway's bar lines). From game memory only.
+struct Beat {
+    double time = 0;          // song time (s)
+    int measure = 0;          // bar number (Rocksmith's own numbering)
+    bool downbeat = false;    // first beat of a bar
 };
 
 struct PhraseIteration {
@@ -39,6 +47,7 @@ struct Chart {
     int open[6] = {40, 45, 50, 55, 59, 64};  // MIDI of each open string (song tuning; bass: -12)
     int capo = 0;             // capo fret, 0 = none
     std::vector<PhraseIteration> pis;
+    std::vector<Beat> beats;                           // beat grid, in time order (empty = unknown)
     std::vector<int> levelCounts;                      // notes per level (to identify the arrangement)
     std::vector<std::vector<std::vector<Target>>> byLevelPi;  // [level][pi] -> notes sorted by time
 
@@ -54,6 +63,9 @@ struct Chart {
     // All targets with from <= time < to, in time order, with the same level rules (for the
     // scrolling tab: what the highway shows around the current time).
     void TargetsBetween(double from, double to, const std::vector<int>& levels, std::vector<const Target*>* out) const;
+
+    // All beats with from <= time < to, in time order (for the tab's bar and beat lines).
+    void BeatsBetween(double from, double to, std::vector<Beat>* out) const;
 };
 
 }  // namespace nbn

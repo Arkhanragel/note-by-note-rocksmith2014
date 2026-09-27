@@ -50,7 +50,7 @@ bool Same(const Settings& a, const Settings& b) {
     return a.enabled == b.enabled && a.leadMs == b.leadMs && a.earlyMs == b.earlyMs &&
            a.acceptOctaves == b.acceptOctaves && a.showBanner == b.showBanner && a.waitChords == b.waitChords &&
            a.showClock == b.showClock && a.showTab == b.showTab && a.tabSeconds == b.tabSeconds && a.tabX == b.tabX &&
-           a.tabY == b.tabY;
+           a.tabY == b.tabY && a.tabBeats == b.tabBeats;
 }
 
 // ------------------------------------------------------------------ render-thread state
@@ -304,11 +304,14 @@ void DrawClock(ImDrawList* dl, const View& v, float s) {
 
 // The scrolling tab: guitar tab of the next few seconds, thinnest string on top. Notes move right to
 // left at a constant speed (so the spacing shows the rhythm) and cross the "now" line when they
-// reach the highway's fretboard. The next note to play is highlighted; played ones fade out.
+// reach the highway's fretboard. The next note to play is highlighted; played ones fade out. Under
+// the notes, the song's beat grid: bar lines with bar numbers, faint beat lines, every other bar
+// shaded; held notes get a tail. With these, the gaps between notes can be read as rhythm.
 void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float s, ImVec2 ds) {
     const int n = v.bass ? 4 : 6;
     const ImU32 gold = IM_COL32(255, 206, 84, 255);
-    const float w = 640 * s, gap = 28 * s, top = 42 * s, bottom = 18 * s, labelW = 26 * s, pad = 12 * s;
+    // top: a lane for bar numbers (y0 + 5), then one for chord names (y0 + 20), then the strings.
+    const float w = 640 * s, gap = 28 * s, top = 54 * s, bottom = 18 * s, labelW = 26 * s, pad = 12 * s;
     const float h = top + gap * (n - 1) + bottom;
     // Position from the settings, kept on screen.
     const float x0 = std::floor(std::max(0.0f, std::min(ds.x - w, ds.x * 0.5f + st.tabX * s)));
@@ -329,18 +332,47 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float s, ImVec2 
         dl->AddText(g_fontUi, tiny, ImVec2(x0 + pad, y - ns.y * 0.5f), c, kStringName[str]);
         dl->AddLine(ImVec2(lineL, y), ImVec2(lineR, y), c, 1.5f * s);
     }
+
+    const double now = v.songTime;
+    auto timeX = [&](double t) { return nowX + (float)((t - now) * pxPerS); };
+    const float staffTop = rowY(n - 1) - 8 * s, staffBottom = rowY(0) + 8 * s;
+    dl->PushClipRect(ImVec2(lineL - 4 * s, y0), ImVec2(lineR + 4 * s, y0 + h), true);
+
+    // Rhythm grid, under everything else (like the bar lines of printed tab): every other bar gets a
+    // faint shade so bars read at a glance, each bar starts with a clear line and its number, and the
+    // other beats get a thin faint line. Notes between two beat lines are "in between" the beats.
+    for (size_t i = 0; i < v.tabBeats.size(); ++i) {
+        const TabBeat& b = v.tabBeats[i];
+        if (!b.downbeat || (b.measure & 1) == 0) continue;
+        double end = b.time + 3600;  // until the next bar line (or off the right edge)
+        for (size_t j = i + 1; j < v.tabBeats.size(); ++j)
+            if (v.tabBeats[j].downbeat) { end = v.tabBeats[j].time; break; }
+        const float xa = std::max(lineL, timeX(b.time)), xb = std::min(lineR, timeX(end));
+        if (xb > xa) dl->AddRectFilled(ImVec2(xa, staffTop), ImVec2(xb, staffBottom), IM_COL32(255, 255, 255, 14));
+    }
+    for (const TabBeat& b : v.tabBeats) {
+        const float x = timeX(b.time);
+        if (x < lineL - 4 * s || x > lineR + 4 * s) continue;
+        if (b.downbeat) {
+            dl->AddLine(ImVec2(x, staffTop), ImVec2(x, staffBottom), IM_COL32(255, 255, 255, 150), 2 * s);
+            const std::string num = std::to_string(b.measure);
+            dl->AddText(g_fontUi, 15 * s, ImVec2(x + 3 * s, y0 + 5 * s), IM_COL32(200, 200, 210, 170), num.c_str());
+        } else {
+            dl->AddLine(ImVec2(x, staffTop + 6 * s), ImVec2(x, staffBottom - 6 * s), IM_COL32(255, 255, 255, 45), 1 * s);
+        }
+    }
+
     // The "now" line: where the highway's notes reach the fretboard.
     dl->AddLine(ImVec2(nowX, y0 + top - 16 * s), ImVec2(nowX, rowY(0) + 12 * s), IM_COL32(255, 255, 255, 200), 2.5f * s);
 
-    dl->PushClipRect(ImVec2(lineL - 4 * s, y0), ImVec2(lineR + 4 * s, y0 + h), true);
-    const double now = v.songTime;
     bool nextFound = false;
     const float pulse = 0.6f + 0.4f * std::sin((float)ImGui::GetTime() * 5.0f);
     for (const auto& t : v.tab) {
-        const float x = nowX + (float)((t.time - now) * pxPerS);
-        if (x < lineL - 30 * s || x > lineR + 30 * s) continue;
-        // Played/passed notes fade out over half a second; ignored ones are always faint.
-        const float past = (float)std::max(0.0, now - t.time);
+        const float x = timeX(t.time), xEnd = timeX(t.time + t.sustain);
+        if (xEnd < lineL - 30 * s || x > lineR + 30 * s) continue;
+        // Played/passed notes fade out over half a second after they end (held notes stay while they
+        // ring); ignored ones are always faint.
+        const float past = (float)std::max(0.0, now - (t.time + t.sustain));
         float a = std::max(0.0f, 1.0f - past / 0.5f);
         if (t.ignore) a *= 0.4f;
         if (a <= 0) continue;
@@ -355,9 +387,15 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float s, ImVec2 
             dl->AddLine(ImVec2(x, rowY(hi)), ImVec2(x, rowY(lo)), IM_COL32(255, 206, 84, (int)(170 * a)), 2 * s);
         if (t.chord && !t.name.empty()) {
             const ImVec2 ts = g_fontBold->CalcTextSizeA(tiny, FLT_MAX, 0, t.name.c_str());
-            dl->AddText(g_fontBold, tiny, ImVec2(x - ts.x * 0.5f, y0 + 6 * s), (gold & 0x00FFFFFF) | ((ImU32)(255 * a) << 24),
+            dl->AddText(g_fontBold, tiny, ImVec2(x - ts.x * 0.5f, y0 + 20 * s), (gold & 0x00FFFFFF) | ((ImU32)(255 * a) << 24),
                         t.name.c_str());
         }
+        // Held notes: a tail in the string's colour until the note ends (like the highway's tails).
+        if (xEnd > x + 16 * s)
+            for (int str = 0; str < n; ++str)
+                if (t.frets[str] >= 0)
+                    dl->AddRectFilled(ImVec2(x, rowY(str) - 3 * s), ImVec2(xEnd, rowY(str) + 3 * s),
+                                      (kStringColor[str] & 0x00FFFFFF) | ((ImU32)(150 * a) << 24), 3 * s);
         for (int str = 0; str < n; ++str) {
             if (t.frets[str] < 0) continue;
             const std::string label = std::to_string(t.frets[str]);
@@ -422,6 +460,7 @@ void DrawMenu(const View& v, const Settings& st, float s, ImVec2 ds) {
         ImGui::Checkbox("Show the song time (top-left corner)", &e.showClock);
         ImGui::Checkbox("Show the notes coming up as a scrolling tab", &e.showTab);
         if (e.showTab) {
+            ImGui::Checkbox("Bar lines and beats in the tab (to read the rhythm)", &e.tabBeats);
             ImGui::SetNextItemWidth(-1);
             ImGui::SliderInt("##tabsec", &e.tabSeconds, 2, 8, "Tab shows %d seconds ahead");
             ImGui::SetNextItemWidth(-1);
@@ -596,7 +635,7 @@ void Frame(IDirect3DDevice9* dev) {
         else DrawBanner(dl, v, s, io.DisplaySize);
     }
     if (v.inSong && st.showClock && v.songTime >= 0) DrawClock(dl, v, s);
-    if (v.inSong && st.showTab && v.songTime >= 0 && !v.tab.empty()) DrawTab(dl, v, st, s, io.DisplaySize);
+    if (v.inSong && st.showTab && v.songTime >= 0 && (!v.tab.empty() || !v.tabBeats.empty())) DrawTab(dl, v, st, s, io.DisplaySize);
     DrawToast(dl, toast, toastStart, toastUntil, s, io.DisplaySize);
     if (menu) DrawMenu(v, st, s, io.DisplaySize);
     g_menuWasOpen = menu;

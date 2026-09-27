@@ -86,4 +86,10 @@ void Chart::TargetsBetween(double from, double to, const std::vector<int>& level
     }
 }
 
+void Chart::BeatsBetween(double from, double to, std::vector<Beat>* out) const {
+    out->clear();
+    auto it = std::lower_bound(beats.begin(), beats.end(), from, [](const Beat& b, double v) { return b.time < v; });
+    for (; it != beats.end() && it->time < to; ++it) out->push_back(*it);
+}
+
 }  // namespace nbn

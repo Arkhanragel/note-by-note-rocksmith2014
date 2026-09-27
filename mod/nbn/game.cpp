@@ -28,6 +28,9 @@ constexpr uintptr_t kSongClockOffset = 0x3B4;         // float in the song objec
 
 // Song data and Dynamic Difficulty (from the disassembly of rva 0x3F1B40 / 0x3F20D0, test 24):
 constexpr uintptr_t kSongData = 0x78;         // song object -> loaded arrangement (same layout as the SNG file)
+constexpr uintptr_t kSongDataBeats = 0x34;    //   vector<Beat>, 16 bytes (the SNG beat): +0 float time,
+constexpr uintptr_t kBeatSize = 0x10;         //     +4 int16 measure, +6 int16 beat in the measure,
+constexpr uint32_t kBeatFirstOfMeasure = 0x1; //     +8 int32 phrase iteration, +0xC int32 mask
 constexpr uintptr_t kSongDataLevels = 0x40;   //   vector<Level> begin/end, Level = 0x64 bytes
 constexpr uintptr_t kLevelSize = 0x64;
 constexpr uintptr_t kLevelNotes = 0x30;       //   Level: vector<Note> begin/end, Note = 0x1C8 bytes
@@ -49,6 +52,10 @@ constexpr uintptr_t kSongDataLength = 0x148;  //   float SongLength, seconds
 // Note (0x1C8 bytes, same field order as the SNG note). Levels are stored in difficulty order.
 constexpr uintptr_t kNoteMask = 0x0, kNoteTime = 0xC, kNoteString = 0x10, kNoteFret = 0x11, kNoteChordId = 0x14,
                     kNotePi = 0x20;
+// Sustain (float seconds, 0 = short note). In the file it follows vibrato (0x37, packed); in memory
+// it is at 0x3C (found 2026-09-27: Sanctuary lead, the note at 20.129 s holds 1.198 s, as in the
+// song file). Checked when read: a value that isn't a sane duration counts as 0.
+constexpr uintptr_t kNoteSustain = 0x3C;
 constexpr uint32_t kMaskChord = 0x2, kMaskIgnore = 0x40000;
 constexpr uintptr_t kSongDd = 0x7C;           // song object -> Dynamic Difficulty state
 constexpr uintptr_t kDdEntries = 0x18;        //   vector of 64-byte entries, one per phrase iteration
@@ -290,7 +297,7 @@ bool ReadSongChart(Chart* chart) {
     static const int kGuitarOpen[6] = {40, 45, 50, 55, 59, 64};  // E2 A2 D3 G3 B3 E4 (MIDI)
     const uintptr_t data = SongDataAddress();
     if (!data) return false;
-    std::vector<uint8_t> tuningRaw, chords, levels, pis, notes;
+    std::vector<uint8_t> tuningRaw, chords, levels, pis, notes, beats;
     uint32_t levelsBegin = 0;
     int8_t capoRaw;
     if (!ReadVector(data + kSongDataTuning, 2, 8, &tuningRaw) || !ReadBytes(data + kSongDataCapo, &capoRaw, 1) ||
@@ -320,6 +327,23 @@ bool ReadSongChart(Chart* chart) {
     for (size_t i = 0; i < pis.size(); i += kPiSize)
         c.pis.push_back({At<int32_t>(pis, i), At<float>(pis, i + 4), At<float>(pis, i + 8)});
 
+    // The beat grid (optional: without it the tab just has no bar lines). Kept only if the times
+    // go up, so garbage never draws lines.
+    if (ReadVector(data + kSongDataBeats, kBeatSize, 100000, &beats)) {
+        for (size_t i = 0; i < beats.size(); i += kBeatSize) {
+            Beat b;
+            b.time = At<float>(beats, i);
+            b.measure = At<int16_t>(beats, i + 4);
+            b.downbeat = (At<uint32_t>(beats, i + 0xC) & kBeatFirstOfMeasure) != 0;
+            if (!(b.time >= 0 && b.time < 3600) || (!c.beats.empty() && b.time < c.beats.back().time)) {
+                Log("beats: not a beat grid at #%zu (time %.3f), ignored", i / kBeatSize, b.time);
+                c.beats.clear();
+                break;
+            }
+            c.beats.push_back(b);
+        }
+    }
+
     std::vector<Target> all;
     int maxString = 0;
     for (size_t lv = 0; lv * kLevelSize < levels.size(); ++lv) {
@@ -333,6 +357,8 @@ bool ReadSongChart(Chart* chart) {
             t.level = (int)lv;
             t.pi = At<int32_t>(notes, n + kNotePi);
             t.ignore = (mask & kMaskIgnore) != 0;
+            const float sus = At<float>(notes, n + kNoteSustain);
+            t.sustain = (sus > 0 && sus < 60) ? sus : 0;
             if (chordId >= 0 && (mask & kMaskChord) && (size_t)chordId * kChordSize < chords.size()) {
                 t.chord = true;
                 const size_t ch = (size_t)chordId * kChordSize;
@@ -358,9 +384,18 @@ bool ReadSongChart(Chart* chart) {
     c.arrangement = c.bass ? "bass" : (c.bassUnsure ? "guitar or bass" : "guitar");
     c.Index(all);
     *chart = std::move(c);
+    size_t sustained = 0;
+    double maxSustain = 0;
+    for (const auto& t : all)
+        if (t.sustain > 0) { ++sustained; maxSustain = std::max(maxSustain, t.sustain); }
     Log("chart from memory: %s, tuning %d %d %d %d %d %d, capo %d, %zu chord shapes, %d levels, %zu phrase iterations, %zu notes",
         chart->arrangement.c_str(), tuning[0], tuning[1], tuning[2], tuning[3], tuning[4], tuning[5], capo,
         chords.size() / kChordSize, chart->Levels(), chart->pis.size(), all.size());
+    Log("  %zu beats (last bar %d), %zu notes held (longest %.2f s)", chart->beats.size(),
+        chart->beats.empty() ? 0 : chart->beats.back().measure, sustained, maxSustain);
+    for (size_t i = 0; i < chart->beats.size() && i < 6; ++i)
+        Log("  beat %zu: %.3f s, bar %d%s", i, chart->beats[i].time, chart->beats[i].measure,
+            chart->beats[i].downbeat ? ", first of the bar" : "");
     return true;
 }
 
