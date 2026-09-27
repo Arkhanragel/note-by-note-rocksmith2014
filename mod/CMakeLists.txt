@@ -22,9 +22,19 @@ add_library(NoteByNoteProbe SHARED probe/probe.cpp)
 target_link_libraries(NoteByNoteProbe PRIVATE minhook imagehlp winmm)
 target_compile_definitions(NoteByNoteProbe PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 
+# Dear ImGui (the in-game banner and menu), with its Direct3D 9 + Win32 backends.
+set(IMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../external/imgui)
+add_library(imgui STATIC
+  ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp ${IMGUI_DIR}/imgui_tables.cpp ${IMGUI_DIR}/imgui_widgets.cpp
+  ${IMGUI_DIR}/imgui_demo.cpp
+  ${IMGUI_DIR}/backends/imgui_impl_dx9.cpp ${IMGUI_DIR}/backends/imgui_impl_win32.cpp)
+target_include_directories(imgui PUBLIC ${IMGUI_DIR} ${IMGUI_DIR}/backends)
+# No demo window, no gamepad polling (the game owns the controllers).
+target_compile_definitions(imgui PUBLIC IMGUI_DISABLE_DEMO_WINDOWS IMGUI_IMPL_WIN32_DISABLE_GAMEPAD)
+
 # THE MOD: NoteByNote.dll (loaded by our RS_ASIO build from the game folder).
-add_library(NoteByNote SHARED nbn/main.cpp nbn/game.cpp nbn/detector.cpp nbn/tap.cpp nbn/chart.cpp nbn/log.cpp)
-target_link_libraries(NoteByNote PRIVATE imagehlp winmm)
+add_library(NoteByNote SHARED nbn/main.cpp nbn/game.cpp nbn/detector.cpp nbn/tap.cpp nbn/chart.cpp nbn/log.cpp nbn/overlay.cpp)
+target_link_libraries(NoteByNote PRIVATE imgui minhook imagehlp winmm)
 target_compile_definitions(NoteByNote PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE _CRT_SECURE_NO_WARNINGS)
 
 # Detector test: C++ NoteTracker on a WAV, to compare with tools/detector/wait_sim.py analyze.
