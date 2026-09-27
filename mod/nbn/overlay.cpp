@@ -49,7 +49,8 @@ std::atomic<bool> g_menuOpen{false};
 bool Same(const Settings& a, const Settings& b) {
     return a.enabled == b.enabled && a.leadMs == b.leadMs && a.earlyMs == b.earlyMs &&
            a.acceptOctaves == b.acceptOctaves && a.showBanner == b.showBanner && a.waitChords == b.waitChords &&
-           a.showClock == b.showClock;
+           a.showClock == b.showClock && a.showTab == b.showTab && a.tabSeconds == b.tabSeconds && a.tabX == b.tabX &&
+           a.tabY == b.tabY;
 }
 
 // ------------------------------------------------------------------ render-thread state
@@ -280,6 +281,79 @@ void DrawClock(ImDrawList* dl, const View& v, float s) {
     dl->AddText(g_fontBold, size, ImVec2(p0.x + padX, p0.y + padY), IM_COL32(235, 235, 240, 230), text.c_str());
 }
 
+// The scrolling tab: guitar tab of the next few seconds, thinnest string on top. Notes move right to
+// left at a constant speed (so the spacing shows the rhythm) and cross the "now" line when they
+// reach the highway's fretboard. The next note to play is highlighted; played ones fade out.
+void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float s, ImVec2 ds) {
+    const int n = v.bass ? 4 : 6;
+    const ImU32 gold = IM_COL32(255, 206, 84, 255);
+    const float w = 640 * s, gap = 28 * s, top = 42 * s, bottom = 18 * s, labelW = 26 * s, pad = 12 * s;
+    const float h = top + gap * (n - 1) + bottom;
+    // Position from the settings, kept on screen.
+    const float x0 = std::floor(std::max(0.0f, std::min(ds.x - w, ds.x * 0.5f + st.tabX * s)));
+    const float y0 = std::floor(std::max(0.0f, std::min(ds.y - h, st.tabY * s)));
+    dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x0 + w, y0 + h), IM_COL32(14, 14, 20, 175), 10 * s);
+
+    const float lineL = x0 + pad + labelW, lineR = x0 + w - pad;
+    const float nowX = lineL + (lineR - lineL) * 0.16f;  // a little of the past stays visible on the left
+    const double secs = std::max(1, st.tabSeconds);
+    const float pxPerS = (float)((lineR - nowX) / secs);
+    const float tiny = 19 * s, fs = 21 * s;
+    auto rowY = [&](int str) { return y0 + top + (n - 1 - str) * gap; };  // thinnest on top
+
+    for (int str = 0; str < n; ++str) {
+        const float y = rowY(str);
+        const ImU32 c = (kStringColor[str] & 0x00FFFFFF) | (150u << 24);
+        const ImVec2 ns = g_fontUi->CalcTextSizeA(tiny, FLT_MAX, 0, kStringName[str]);
+        dl->AddText(g_fontUi, tiny, ImVec2(x0 + pad, y - ns.y * 0.5f), c, kStringName[str]);
+        dl->AddLine(ImVec2(lineL, y), ImVec2(lineR, y), c, 1.5f * s);
+    }
+    // The "now" line: where the highway's notes reach the fretboard.
+    dl->AddLine(ImVec2(nowX, y0 + top - 16 * s), ImVec2(nowX, rowY(0) + 12 * s), IM_COL32(255, 255, 255, 200), 2.5f * s);
+
+    dl->PushClipRect(ImVec2(lineL - 4 * s, y0), ImVec2(lineR + 4 * s, y0 + h), true);
+    const double now = v.songTime;
+    bool nextFound = false;
+    const float pulse = 0.6f + 0.4f * std::sin((float)ImGui::GetTime() * 5.0f);
+    for (const auto& t : v.tab) {
+        const float x = nowX + (float)((t.time - now) * pxPerS);
+        if (x < lineL - 30 * s || x > lineR + 30 * s) continue;
+        // Played/passed notes fade out over half a second; ignored ones are always faint.
+        const float past = (float)std::max(0.0, now - t.time);
+        float a = std::max(0.0f, 1.0f - past / 0.5f);
+        if (t.ignore) a *= 0.4f;
+        if (a <= 0) continue;
+        const bool next = !nextFound && !t.ignore && t.time >= now - 0.02;
+        if (next) nextFound = true;
+
+        int lo = -1, hi = -1;  // lowest/highest string played (for the chord bracket)
+        for (int str = 0; str < n; ++str)
+            if (t.frets[str] >= 0) { if (lo < 0) lo = str; hi = str; }
+        if (lo < 0) continue;
+        if (t.chord && hi > lo)
+            dl->AddLine(ImVec2(x, rowY(hi)), ImVec2(x, rowY(lo)), IM_COL32(255, 206, 84, (int)(170 * a)), 2 * s);
+        if (t.chord && !t.name.empty()) {
+            const ImVec2 ts = g_fontBold->CalcTextSizeA(tiny, FLT_MAX, 0, t.name.c_str());
+            dl->AddText(g_fontBold, tiny, ImVec2(x - ts.x * 0.5f, y0 + 6 * s), (gold & 0x00FFFFFF) | ((ImU32)(255 * a) << 24),
+                        t.name.c_str());
+        }
+        for (int str = 0; str < n; ++str) {
+            if (t.frets[str] < 0) continue;
+            const std::string label = std::to_string(t.frets[str]);
+            const ImVec2 ls = g_fontBold->CalcTextSizeA(fs, FLT_MAX, 0, label.c_str());
+            const float y = rowY(str), bw = std::max(ls.x, ls.y * 0.8f) * 0.5f + 5 * s, bh = gap * 0.46f;
+            const ImU32 col = (kStringColor[str] & 0x00FFFFFF) | ((ImU32)(255 * a) << 24);
+            dl->AddRectFilled(ImVec2(x - bw, y - bh), ImVec2(x + bw, y + bh), IM_COL32(14, 14, 20, (int)(255 * a)), 5 * s);
+            if (next) dl->AddRect(ImVec2(x - bw - 2 * s, y - bh - 2 * s), ImVec2(x + bw + 2 * s, y + bh + 2 * s),
+                                  IM_COL32(255, 255, 255, (int)(255 * pulse)), 6 * s, 0, 2.5f * s);
+            else dl->AddRect(ImVec2(x - bw, y - bh), ImVec2(x + bw, y + bh), col, 5 * s, 0, 2 * s);
+            dl->AddText(g_fontBold, fs, ImVec2(x - ls.x * 0.5f, y - ls.y * 0.5f), IM_COL32(255, 255, 255, (int)(255 * a)),
+                        label.c_str());
+        }
+    }
+    dl->PopClipRect();
+}
+
 void DrawToast(ImDrawList* dl, const std::string& text, DWORD start, DWORD until, float s, ImVec2 ds) {
     const DWORD now = GetTickCount();
     if (text.empty() || now >= until) return;
@@ -325,6 +399,15 @@ void DrawMenu(const View& v, const Settings& st, float s, ImVec2 ds) {
         ImGui::Checkbox("Also accept the same note one octave higher or lower", &e.acceptOctaves);
         ImGui::Checkbox("Show what to play while the song waits", &e.showBanner);
         ImGui::Checkbox("Show the song time (top-left corner)", &e.showClock);
+        ImGui::Checkbox("Show the notes coming up as a scrolling tab", &e.showTab);
+        if (e.showTab) {
+            ImGui::SetNextItemWidth(-1);
+            ImGui::SliderInt("##tabsec", &e.tabSeconds, 2, 8, "Tab shows %d seconds ahead");
+            ImGui::SetNextItemWidth(-1);
+            ImGui::SliderInt("##tabx", &e.tabX, -1600, 1000, "Tab position: left / right (%d)");
+            ImGui::SetNextItemWidth(-1);
+            ImGui::SliderInt("##taby", &e.tabY, 0, 900, "Tab position: up / down (%d)");
+        }
 
         ImGui::Separator();
         ImGui::TextDisabled("Changes are saved automatically. The song is held while this menu is open.");
@@ -492,6 +575,7 @@ void Frame(IDirect3DDevice9* dev) {
         else DrawBanner(dl, v, s, io.DisplaySize);
     }
     if (v.inSong && st.showClock && v.songTime >= 0) DrawClock(dl, v, s);
+    if (v.inSong && st.showTab && v.songTime >= 0 && !v.tab.empty()) DrawTab(dl, v, st, s, io.DisplaySize);
     DrawToast(dl, toast, toastStart, toastUntil, s, io.DisplaySize);
     if (menu) DrawMenu(v, st, s, io.DisplaySize);
     g_menuWasOpen = menu;

@@ -44,7 +44,7 @@ HMODULE g_self = nullptr;
 // ------------------------------------------------------------------ configuration
 // Fixed settings (read once). The ones the player can change in the menu are overlay::Settings.
 struct Config {
-    overlay::Settings initial;           // Enabled, LeadMs, EarlyMs, AcceptOctaves, ShowBanner, WaitChords, ShowClock
+    overlay::Settings initial;           // Enabled, LeadMs, EarlyMs, AcceptOctaves, ShowBanner, WaitChords, ShowClock, Tab*
     int menuKey = VK_F8;
     int skipKey = VK_F9;
     std::string menuSuffix = "_Game";    // the mode only acts on screens whose name ends like this
@@ -98,7 +98,15 @@ Config LoadConfig() {
                 "; 1 = the song also waits at chords, 0 = chords pass (only single notes wait)\n"
                 "WaitChords=1\n"
                 "; 1 = show the song time (top-left corner) while playing\n"
-                "ShowClock=1\n",
+                "ShowClock=1\n"
+                "; 1 = show the notes coming up as a scrolling tab (left of the highway, below the lyrics)\n"
+                "ShowTab=1\n"
+                "; Seconds of music the tab shows ahead (2..8)\n"
+                "TabSeconds=4\n"
+                "; Tab position (the menu has sliders): X from the screen centre, Y from the top, in\n"
+                "; 1080p pixels (scaled with the screen height)\n"
+                "TabX=-810\n"
+                "TabY=385\n",
                 f);
             std::fclose(f);
         }
@@ -119,6 +127,10 @@ Config LoadConfig() {
     c.initial.showBanner = GetPrivateProfileIntW(L"NoteByNote", L"ShowBanner", 1, ini.c_str()) != 0;
     c.initial.waitChords = GetPrivateProfileIntW(L"NoteByNote", L"WaitChords", 1, ini.c_str()) != 0;
     c.initial.showClock = GetPrivateProfileIntW(L"NoteByNote", L"ShowClock", 1, ini.c_str()) != 0;
+    c.initial.showTab = GetPrivateProfileIntW(L"NoteByNote", L"ShowTab", 1, ini.c_str()) != 0;
+    c.initial.tabSeconds = std::max(2, std::min(8, (int)GetPrivateProfileIntW(L"NoteByNote", L"TabSeconds", 4, ini.c_str())));
+    c.initial.tabX = (int)GetPrivateProfileIntW(L"NoteByNote", L"TabX", -810, ini.c_str());
+    c.initial.tabY = (int)GetPrivateProfileIntW(L"NoteByNote", L"TabY", 385, ini.c_str());
     return c;
 }
 
@@ -135,12 +147,17 @@ void SaveSettings(const overlay::Settings& st) {
     put(L"ShowBanner", st.showBanner);
     put(L"WaitChords", st.waitChords);
     put(L"ShowClock", st.showClock);
+    put(L"ShowTab", st.showTab);
+    put(L"TabSeconds", st.tabSeconds);
+    put(L"TabX", st.tabX);
+    put(L"TabY", st.tabY);
 }
 
 bool SameSettings(const overlay::Settings& a, const overlay::Settings& b) {
     return a.enabled == b.enabled && a.leadMs == b.leadMs && a.earlyMs == b.earlyMs &&
            a.acceptOctaves == b.acceptOctaves && a.showBanner == b.showBanner && a.waitChords == b.waitChords &&
-           a.showClock == b.showClock;
+           a.showClock == b.showClock && a.showTab == b.showTab && a.tabSeconds == b.tabSeconds && a.tabX == b.tabX &&
+           a.tabY == b.tabY;
 }
 
 std::string Narrow(const std::wstring& w) { return std::string(w.begin(), w.end()); }  // ASCII paths/names only
@@ -263,6 +280,10 @@ DWORD WINAPI MainThread(LPVOID) {
     ChordDetector chordDet;
     std::vector<ChordResult> chordResults;
     std::vector<int> upcomingChord;   // the next chord on the highway (checked after each attack)
+    std::vector<overlay::TabNote> tabNotes;  // the scrolling tab's notes (refreshed every 50 ms)
+    std::vector<const Target*> tabTargets;
+    std::vector<int> tabLevels;
+    DWORD nextTabRefresh = 0;
 
     std::string menu, lastMenu, lastKey;
     Chart chart;
@@ -311,6 +332,30 @@ DWORD WINAPI MainThread(LPVOID) {
             // The clock works even with the mode off or without a chart (it's just the song time).
             if (!inSong || !game::GetSongTime(&v.songTime)) v.songTime = -1;
             if (inSong && !game::GetSongLength(&v.songLength)) v.songLength = 0;
+            // The scrolling tab: the notes the highway shows from 1 s ago to the end of the tab (+1 s
+            // margin, the list is only refreshed every 50 ms). Works with the mode off too.
+            if (inSong && chartOk && st.showTab && v.songTime >= 0) {
+                if (now >= nextTabRefresh) {
+                    nextTabRefresh = now + 50;
+                    if (!game::GetPhraseLevels(&tabLevels)) tabLevels.clear();
+                    chart.TargetsBetween(v.songTime - 1.0, v.songTime + st.tabSeconds + 1.0, tabLevels, &tabTargets);
+                    tabNotes.clear();
+                    for (const Target* t : tabTargets) {
+                        overlay::TabNote tn;
+                        tn.time = t->time;
+                        tn.chord = t->chord;
+                        tn.ignore = t->ignore;
+                        if (t->chord) std::copy(std::begin(t->frets), std::end(t->frets), tn.frets);
+                        else if (t->string >= 0 && t->string < 6) tn.frets[t->string] = t->fret;
+                        tn.name = t->chordName;
+                        tabNotes.push_back(tn);
+                    }
+                }
+                v.tab = tabNotes;
+            } else {
+                tabNotes.clear();
+                nextTabRefresh = 0;
+            }
             v.chartOk = chartOk;
             if (chartOk) v.chartInfo = "Song notes read from the game (" + chart.arrangement + ", " + std::to_string(chart.Levels()) + " levels)";
             else if (inSong) v.chartInfo = "Couldn't read this song's notes yet: it plays normally";

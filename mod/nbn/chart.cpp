@@ -73,4 +73,17 @@ const Target* Chart::NextTarget(double after, const std::vector<int>& levels) co
     return nullptr;
 }
 
+void Chart::TargetsBetween(double from, double to, const std::vector<int>& levels, std::vector<const Target*>* out) const {
+    out->clear();
+    if (byLevelPi.empty()) return;
+    for (size_t pi = 0; pi < pis.size(); ++pi) {  // phrase iterations: in time order
+        if (pis[pi].end <= from) continue;
+        if (pis[pi].start >= to) continue;
+        int lv = pi < levels.size() ? levels[pi] : 0;
+        lv = std::max(0, std::min(lv, (int)byLevelPi.size() - 1));
+        for (const auto& t : byLevelPi[lv][pi])
+            if (t.time >= from && t.time < to) out->push_back(&t);
+    }
+}
+
 }  // namespace nbn

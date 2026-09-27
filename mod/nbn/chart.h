@@ -48,6 +48,10 @@ struct Chart {
     // First target with time > after, using levels[pi] as the current level of each PI (a level
     // outside the chart's range falls back to the nearest valid one). Returns nullptr at the end.
     const Target* NextTarget(double after, const std::vector<int>& levels) const;
+
+    // All targets with from <= time < to, in time order, with the same level rules (for the
+    // scrolling tab: what the highway shows around the current time).
+    void TargetsBetween(double from, double to, const std::vector<int>& levels, std::vector<const Target*>* out) const;
 };
 
 }  // namespace nbn
