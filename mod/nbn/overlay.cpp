@@ -108,6 +108,16 @@ float SegsWidth(ImFont* f, float size, const std::vector<Seg>& segs) {
     return w;
 }
 
+// The "what went wrong" line (hint.h), in the banner's colours. A soft red "!" in front.
+std::vector<Seg> HintSegs(const hint::Line& line) {
+    std::vector<Seg> out;
+    if (line.empty()) return out;
+    out.push_back({"!  ", IM_COL32(255, 110, 90, 255)});
+    for (const auto& h : line)
+        out.push_back({h.text, h.color >= 0 && h.color < 6 ? kStringColor[h.color] : (h.color == hint::kGrey ? kGrey : kWhite)});
+    return out;
+}
+
 void DrawSegs(ImDrawList* dl, ImFont* f, float size, ImVec2 pos, const std::vector<Seg>& segs) {
     for (const auto& s : segs) {
         dl->AddText(f, size, pos, s.col, s.text.c_str());
@@ -135,9 +145,11 @@ void DrawBanner(ImDrawList* dl, const View& v, float s, ImVec2 ds) {
     std::vector<Seg> line2 = {{which, kWhite}};
     if (v.midi >= 0) line2.push_back({"   \xC2\xB7   note " + music::NoteName(v.midi), kGrey});
     const std::vector<Seg> line3 = {{v.fret == 0 ? "(no finger on the neck)   " : "", kGrey}, {"F9 = skip   F8 = menu", kGrey}};
+    const std::vector<Seg> lineH = HintSegs(v.hint);
 
-    const float textW = std::max({SegsWidth(g_fontBold, big, line1), SegsWidth(g_fontUi, mid, line2), SegsWidth(g_fontUi, tiny, line3)});
-    const float textH = big + 8 * s + mid + 10 * s + tiny;
+    const float textW = std::max({SegsWidth(g_fontBold, big, line1), SegsWidth(g_fontUi, mid, line2),
+                                  SegsWidth(g_fontUi, mid, lineH), SegsWidth(g_fontUi, tiny, line3)});
+    const float textH = big + 8 * s + mid + 10 * s + (lineH.empty() ? 0 : mid + 10 * s) + tiny;
 
     // Tab picture: thinnest string on top, like tab and sheet music.
     const float gap = 17 * s, tabW = 190 * s, labelW = 22 * s;
@@ -157,6 +169,10 @@ void DrawBanner(ImDrawList* dl, const View& v, float s, ImVec2 ds) {
     t.y += big + 8 * s;
     DrawSegs(dl, g_fontUi, mid, t, line2);
     t.y += mid + 10 * s;
+    if (!lineH.empty()) {
+        DrawSegs(dl, g_fontUi, mid, t, lineH);
+        t.y += mid + 10 * s;
+    }
     DrawSegs(dl, g_fontUi, tiny, t, line3);
 
     const float tx = p0.x + pad + textW + sep, ty = p0.y + (h - tabH) * 0.5f;
@@ -212,10 +228,11 @@ void DrawChordBanner(ImDrawList* dl, const View& v, float s, ImVec2 ds) {
         if (v.notes[i] >= 0) line2.push_back({" = " + music::NoteName(v.notes[i], flats), kGrey});
     }
     const std::vector<Seg> line3 = {{played < n ? "x = don't play that string   " : "", kGrey}, {"F9 = skip   F8 = menu", kGrey}};
+    const std::vector<Seg> lineH = HintSegs(v.hint);
 
-    const float textW = std::max({SegsWidth(g_fontBold, big, line1), SegsWidth(g_fontUi, mid, lineM),
-                                  SegsWidth(g_fontUi, mid, line2), SegsWidth(g_fontUi, tiny, line3)});
-    const float textH = big + 8 * s + (lineM.empty() ? 0 : mid + 8 * s) + mid + 10 * s + tiny;
+    const float textW = std::max({SegsWidth(g_fontBold, big, line1), SegsWidth(g_fontUi, mid, lineM), SegsWidth(g_fontUi, mid, line2),
+                                  SegsWidth(g_fontUi, mid, lineH), SegsWidth(g_fontUi, tiny, line3)});
+    const float textH = big + 8 * s + (lineM.empty() ? 0 : mid + 8 * s) + mid + 10 * s + (lineH.empty() ? 0 : mid + 10 * s) + tiny;
 
     // Tab picture, thinnest string on top; wider string spacing than the single-note tab so a
     // bubble fits on every string.
@@ -240,6 +257,10 @@ void DrawChordBanner(ImDrawList* dl, const View& v, float s, ImVec2 ds) {
     }
     DrawSegs(dl, g_fontUi, mid, t, line2);
     t.y += mid + 10 * s;
+    if (!lineH.empty()) {
+        DrawSegs(dl, g_fontUi, mid, t, lineH);
+        t.y += mid + 10 * s;
+    }
     DrawSegs(dl, g_fontUi, tiny, t, line3);
 
     const float tx = p0.x + pad + textW + sep, ty = p0.y + (h - tabH) * 0.5f;

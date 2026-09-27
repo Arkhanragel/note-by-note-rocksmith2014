@@ -5,7 +5,8 @@
 // code is protected by VMProtect. Right before each frame is shown we draw our own things on top:
 //
 //   - the "waiting" banner: which string (name + highway colour) and fret to play, with a tiny tab
-//     (for a chord: its name, every string's fret in colour, and the chord shape as a tab)
+//     (for a chord: its name, every string's fret in colour, and the chord shape as a tab); after a
+//     wrong note, a line saying how to fix it ("move UP 2 frets", "that's the ORANGE string")
 //   - short messages ("toasts"): "Note-by-Note ON", "Skipped", "No chart for this song"...
 //   - the song clock ("1:23 / 4:28") in the top-left corner while a song plays
 //   - the scrolling tab: the next few seconds of the song as guitar tab, moving right to left in
@@ -20,6 +21,8 @@
 
 #include <string>
 #include <vector>
+
+#include "hint.h"
 
 namespace nbn::overlay {
 
@@ -65,6 +68,7 @@ struct View {
     double songTime = -1;        // seconds; < 0 = unknown (no clock shown)
     double songLength = 0;       // seconds; 0 = unknown
     std::vector<TabNote> tab;    // notes on the highway around songTime (empty = no tab)
+    hint::Line hint;             // while waiting: how to fix the last wrong note/chord (empty = none)
 };
 
 // Starts a thread that waits for d3d9.dll and installs the hooks. Returns immediately.

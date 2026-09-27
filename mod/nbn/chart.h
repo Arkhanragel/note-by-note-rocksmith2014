@@ -36,6 +36,8 @@ struct Chart {
     std::string songKey, title, arrangement;
     bool bass = false;
     bool bassUnsure = false;  // no chord says guitar or bass, and only 4 strings are used: accept both
+    int open[6] = {40, 45, 50, 55, 59, 64};  // MIDI of each open string (song tuning; bass: -12)
+    int capo = 0;             // capo fret, 0 = none
     std::vector<PhraseIteration> pis;
     std::vector<int> levelCounts;                      // notes per level (to identify the arrangement)
     std::vector<std::vector<std::vector<Target>>> byLevelPi;  // [level][pi] -> notes sorted by time

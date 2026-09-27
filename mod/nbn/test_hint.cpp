@@ -1,0 +1,48 @@
+// nbn_hint_test: checks the "what went wrong" advice (hint.h). Prints each case; exit code 1 on failure.
+#include <cstdio>
+#include <string>
+#include <vector>
+
+#include "hint.h"
+
+using nbn::hint::Neck;
+
+int main() {
+    const Neck gtr;  // standard tuning, no capo
+    Neck capo2 = gtr;
+    capo2.capo = 2;
+    int fails = 0;
+    auto check = [&](const char* what, const nbn::hint::Line& l, const char* want) {
+        const std::string got = nbn::hint::Text(l);
+        const bool ok = got == want;
+        fails += !ok;
+        std::printf("%s  %-28s -> \"%s\"", ok ? "ok  " : "FAIL", what, got.c_str());
+        if (!ok) std::printf("\n      wanted \"%s\"", want);
+        std::printf("\n");
+    };
+
+    // Single notes (strings: 0 = low E ... 5 = high e; MIDI 40 45 50 55 59 64 open).
+    check("2 frets too high", nbn::hint::ForNote(gtr, 2, 5, 55, 57), "You played A  -  move DOWN 2 frets, to fret 5 on the BLUE string");
+    check("1 fret too low", nbn::hint::ForNote(gtr, 2, 5, 55, 54), "You played F#  -  move UP 1 fret, to fret 5 on the BLUE string");
+    check("same fret, string below", nbn::hint::ForNote(gtr, 2, 5, 55, 60), "You played C  -  that's the ORANGE string, use fret 5 on the BLUE string");
+    check("same fret, string above", nbn::hint::ForNote(gtr, 2, 5, 55, 50), "You played D  -  that's the YELLOW string, use fret 5 on the BLUE string");
+    check("octave", nbn::hint::ForNote(gtr, 2, 5, 55, 67), "You played G  -  right note, but an octave too high: play fret 5 on the BLUE string");
+    check("open string pressed", nbn::hint::ForNote(gtr, 0, 0, 40, 42), "You played F#  -  don't press any fret: play the RED string open");
+    check("far off", nbn::hint::ForNote(gtr, 0, 3, 43, 76), "You played E  -  too high: play fret 3 on the RED string");
+    check("capo, open wanted", nbn::hint::ForNote(capo2, 1, 0, 47, 48), "You played C  -  don't press any fret: play the YELLOW string open");
+    check("right note", nbn::hint::ForNote(gtr, 2, 5, 55, 55), "");
+
+    // Chords.
+    const int a5f[6] = {-1, 0, 2, -1, -1, -1}, a5n[6] = {-1, 45, 52, -1, -1, -1};
+    check("A5, finger 1 fret high", nbn::hint::ForChord(gtr, a5f, a5n, {45, 53}, {5}, 1, 2),
+          "Fix:  BLUE string is 1 fret too high: move DOWN to fret 2");
+    const int d5f[6] = {-1, -1, 0, 2, -1, -1}, d5n[6] = {-1, -1, 50, 57, -1, -1};
+    check("D5, low E strummed", nbn::hint::ForChord(gtr, d5f, d5n, {40, 50, 57}, {4}, 2, 2),
+          "Fix:  a note that isn't in the chord is ringing (E): don't strum the x strings");
+    const int emf[6] = {0, 2, 2, 0, 0, 0}, emn[6] = {40, 47, 52, 55, 59, 64};
+    check("Em, strings not sounding", nbn::hint::ForChord(gtr, emf, emn, {40, 52, 64}, {}, 1, 2),
+          "Fix:  not sounding: YELLOW string (fret 2), ORANGE string (open), GREEN string (open) - press firmly and strum every string");
+
+    std::printf("%s\n", fails ? "FAILED" : "all passed");
+    return fails ? 1 : 0;
+}

@@ -296,6 +296,7 @@ DWORD WINAPI MainThread(LPVOID) {
     double cursor = 0;                // song time of the last note that was hit/passed
     double lastT = -1;
     Target waitFor;                   // the note we're frozen on
+    hint::Line waitHint;              // how to fix the last wrong note played during this wait
     DWORD frozenTick = 0, lastTapTry = 0, nextFreezeTry = 0, lastHeartbeat = 0, lastUnloadCheck = 0, nextChartTry = 0,
           songScreenTick = 0;
     long long totalSamples = 0;
@@ -329,6 +330,7 @@ DWORD WINAPI MainThread(LPVOID) {
             std::copy(std::begin(waitFor.frets), std::end(waitFor.frets), v.frets);
             std::copy(std::begin(waitFor.notes), std::end(waitFor.notes), v.notes);
             v.midi = (!waitFor.chord && !waitFor.midi.empty()) ? waitFor.midi[0] : -1;
+            if (frozen) v.hint = waitHint;
             // The clock works even with the mode off or without a chart (it's just the song time).
             if (!inSong || !game::GetSongTime(&v.songTime)) v.songTime = -1;
             if (inSong && !game::GetSongLength(&v.songLength)) v.songLength = 0;
@@ -524,14 +526,35 @@ DWORD WINAPI MainThread(LPVOID) {
                 continue;
             }
             bool hit = false;
+            hint::Neck neck;  // for the "how to fix it" advice
+            neck.strings = chart.bass ? 4 : 6;
+            std::copy(std::begin(chart.open), std::end(chart.open), neck.open);
+            neck.capo = chart.capo;
+            neck.bassUnsure = chart.bassUnsure;
+            // A wrong note gets advice only when it was picked (an attack), and not in the first
+            // moment of the wait (that is still the previous note ringing).
+            const bool adviseNow = now - frozenTick > 150;
             for (const auto& ev : events) {
                 if (Matches(st, chart, waitFor, ev.midi)) { hit = true; break; }
                 Log("  heard %s (%+.0f cents, %.1f dB, aper %.2f%s), waiting for %s", MidiName(ev.midi).c_str(), ev.cents, ev.levelDb,
                     ev.aperiodicity, ev.attack ? ", attack" : "", Describe(chart, waitFor).c_str());
+                if (ev.attack && adviseNow && !waitFor.chord && !waitFor.midi.empty()) {
+                    waitHint = hint::ForNote(neck, waitFor.string, waitFor.fret, waitFor.midi[0], ev.midi);
+                    if (!waitHint.empty()) Log("  advice: %s", hint::Text(waitHint).c_str());
+                }
             }
             for (const auto& cr : chordResults) {  // only produced while waiting for a chord
                 Log("  %s", cr.Describe().c_str());
                 hit = hit || cr.match;
+                if (!cr.match && !cr.quiet && !cr.heard.empty() && adviseNow) {
+                    std::vector<int> heardMidi;
+                    for (const auto& h : cr.heard) heardMidi.push_back(h.first);
+                    hint::Line l = hint::ForChord(neck, waitFor.frets, waitFor.notes, heardMidi, cr.extra, cr.hits, cr.needed);
+                    if (!l.empty()) {
+                        waitHint = l;
+                        Log("  advice: %s", hint::Text(waitHint).c_str());
+                    }
+                }
             }
             if (hit) {
                 Log("HIT  %.3f %s after waiting %.2f s", waitFor.time, Describe(chart, waitFor).c_str(), (now - frozenTick) / 1000.0);
@@ -580,6 +603,7 @@ DWORD WINAPI MainThread(LPVOID) {
             if (game::Freeze()) {
                 frozen = true;
                 waitFor = *next;
+                waitHint.clear();
                 frozenTick = now;
                 waitAudioStart = debugAudio.Pos() - 2 * 48000;
                 Log("WAIT %.3f (phrase iteration %d, level %d): play %s", next->time, next->pi, next->level,

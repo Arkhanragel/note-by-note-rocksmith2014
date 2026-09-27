@@ -314,6 +314,8 @@ bool ReadSongChart(Chart* chart) {
             if (fret >= 0) offsets.insert(At<int32_t>(chords, i + kChordMidi + s * 4) - (kGuitarOpen[s] + tuning[s] + fretOf(fret)));
         }
     c.bass = offsets.size() == 1 && *offsets.begin() == -12;
+    for (int s = 0; s < 6; ++s) c.open[s] = kGuitarOpen[s] + tuning[s] - (c.bass ? 12 : 0);
+    c.capo = capo;
 
     for (size_t i = 0; i < pis.size(); i += kPiSize)
         c.pis.push_back({At<int32_t>(pis, i), At<float>(pis, i + 4), At<float>(pis, i + 8)});
