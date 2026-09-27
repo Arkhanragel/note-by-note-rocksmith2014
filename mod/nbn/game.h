@@ -27,6 +27,8 @@ bool GetSongKey(std::string* key);
 
 // Current song position in seconds: the clock the highway, scoring, etc. all read.
 bool GetSongTime(double* t);
+// Length of the loaded song in seconds (SongLength of the arrangement being played).
+bool GetSongLength(double* len);
 
 // Dynamic Difficulty: the level each phrase iteration is CURRENTLY showing on the highway
 // (index = phrase iteration). Read fresh every time; the game changes it as the player improves.

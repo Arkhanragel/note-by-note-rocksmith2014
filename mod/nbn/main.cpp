@@ -44,7 +44,7 @@ HMODULE g_self = nullptr;
 // ------------------------------------------------------------------ configuration
 // Fixed settings (read once). The ones the player can change in the menu are overlay::Settings.
 struct Config {
-    overlay::Settings initial;           // Enabled, LeadMs, EarlyMs, AcceptOctaves, ShowBanner, WaitChords
+    overlay::Settings initial;           // Enabled, LeadMs, EarlyMs, AcceptOctaves, ShowBanner, WaitChords, ShowClock
     int menuKey = VK_F8;
     int skipKey = VK_F9;
     std::string menuSuffix = "_Game";    // the mode only acts on screens whose name ends like this
@@ -96,7 +96,9 @@ Config LoadConfig() {
                 "; 1 = show what to play (string, colour, fret) while the song waits\n"
                 "ShowBanner=1\n"
                 "; 1 = the song also waits at chords, 0 = chords pass (only single notes wait)\n"
-                "WaitChords=1\n",
+                "WaitChords=1\n"
+                "; 1 = show the song time (top-left corner) while playing\n"
+                "ShowClock=1\n",
                 f);
             std::fclose(f);
         }
@@ -116,6 +118,7 @@ Config LoadConfig() {
     c.initial.acceptOctaves = GetPrivateProfileIntW(L"NoteByNote", L"AcceptOctaves", 0, ini.c_str()) != 0;
     c.initial.showBanner = GetPrivateProfileIntW(L"NoteByNote", L"ShowBanner", 1, ini.c_str()) != 0;
     c.initial.waitChords = GetPrivateProfileIntW(L"NoteByNote", L"WaitChords", 1, ini.c_str()) != 0;
+    c.initial.showClock = GetPrivateProfileIntW(L"NoteByNote", L"ShowClock", 1, ini.c_str()) != 0;
     return c;
 }
 
@@ -131,11 +134,13 @@ void SaveSettings(const overlay::Settings& st) {
     put(L"AcceptOctaves", st.acceptOctaves);
     put(L"ShowBanner", st.showBanner);
     put(L"WaitChords", st.waitChords);
+    put(L"ShowClock", st.showClock);
 }
 
 bool SameSettings(const overlay::Settings& a, const overlay::Settings& b) {
     return a.enabled == b.enabled && a.leadMs == b.leadMs && a.earlyMs == b.earlyMs &&
-           a.acceptOctaves == b.acceptOctaves && a.showBanner == b.showBanner && a.waitChords == b.waitChords;
+           a.acceptOctaves == b.acceptOctaves && a.showBanner == b.showBanner && a.waitChords == b.waitChords &&
+           a.showClock == b.showClock;
 }
 
 std::string Narrow(const std::wstring& w) { return std::string(w.begin(), w.end()); }  // ASCII paths/names only
@@ -301,6 +306,9 @@ DWORD WINAPI MainThread(LPVOID) {
             v.chord = waitFor.chord;
             v.chordName = waitFor.chordName;
             std::copy(std::begin(waitFor.frets), std::end(waitFor.frets), v.frets);
+            // The clock works even with the mode off or without a chart (it's just the song time).
+            if (!inSong || !game::GetSongTime(&v.songTime)) v.songTime = -1;
+            if (inSong && !game::GetSongLength(&v.songLength)) v.songLength = 0;
             v.chartOk = chartOk;
             if (chartOk) v.chartInfo = "Song notes read from the game (" + chart.arrangement + ", " + std::to_string(chart.Levels()) + " levels)";
             else if (inSong) v.chartInfo = "Couldn't read this song's notes yet: it plays normally";

@@ -7,6 +7,7 @@
 //   - the "waiting" banner: which string (name + highway colour) and fret to play, with a tiny tab
 //     (for a chord: its name, every string's fret in colour, and the chord shape as a tab)
 //   - short messages ("toasts"): "Note-by-Note ON", "Skipped", "No chart for this song"...
+//   - the song clock ("1:23 / 4:28") in the top-left corner while a song plays
 //   - the MENU (toggle key, F8 by default): mode on/off, skip note, timing settings
 //
 // Threads: the mod's main loop (main.cpp) and the game's render thread both use this module. They
@@ -28,6 +29,7 @@ struct Settings {
     bool acceptOctaves = false;  // the same note one octave higher/lower also counts
     bool showBanner = true;      // show "play this" while the song is waiting
     bool waitChords = true;      // also wait at chords (off = chords pass, only single notes wait)
+    bool showClock = true;       // show the song time while playing
 };
 
 // What the main loop wants on screen. Sent every loop iteration with SetView().
@@ -42,6 +44,8 @@ struct View {
     int frets[6] = {-1, -1, -1, -1, -1, -1};  // per string (0 = thickest): -1 = not played
     std::string chartInfo;       // one line for the menu, e.g. "Lead - matches the song"
     bool chartOk = false;
+    double songTime = -1;        // seconds; < 0 = unknown (no clock shown)
+    double songLength = 0;       // seconds; 0 = unknown
 };
 
 // Starts a thread that waits for d3d9.dll and installs the hooks. Returns immediately.

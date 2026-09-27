@@ -45,6 +45,7 @@ constexpr uintptr_t kChordName = 0x28;
 constexpr size_t kChordNameSize = 32;
 constexpr uintptr_t kSongDataTuning = 0x110;  //   vector<int16>: semitones per string vs E standard
 constexpr uintptr_t kSongDataCapo = 0x11C;    //   int8, -1 = no capo
+constexpr uintptr_t kSongDataLength = 0x148;  //   float SongLength, seconds
 // Note (0x1C8 bytes, same field order as the SNG note). Levels are stored in difficulty order.
 constexpr uintptr_t kNoteMask = 0x0, kNoteTime = 0xC, kNoteString = 0x10, kNoteFret = 0x11, kNoteChordId = 0x14,
                     kNotePi = 0x20;
@@ -268,6 +269,14 @@ bool GetLevelNoteCounts(std::vector<int>* counts) {
         if (!ReadU32(lv + kLevelNotes, &nb) || !ReadU32(lv + kLevelNotes + 4, &ne) || ne < nb) return false;
         counts->push_back((int)((ne - nb) / kNoteSize));
     }
+    return true;
+}
+
+bool GetSongLength(double* len) {
+    const uintptr_t data = SongDataAddress();
+    float f;
+    if (!data || !ReadFloat(data + kSongDataLength, &f) || !(f > 0 && f < 36000)) return false;
+    *len = f;
     return true;
 }
 

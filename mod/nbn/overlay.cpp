@@ -47,7 +47,8 @@ std::atomic<bool> g_menuOpen{false};
 
 bool Same(const Settings& a, const Settings& b) {
     return a.enabled == b.enabled && a.leadMs == b.leadMs && a.earlyMs == b.earlyMs &&
-           a.acceptOctaves == b.acceptOctaves && a.showBanner == b.showBanner && a.waitChords == b.waitChords;
+           a.acceptOctaves == b.acceptOctaves && a.showBanner == b.showBanner && a.waitChords == b.waitChords &&
+           a.showClock == b.showClock;
 }
 
 // ------------------------------------------------------------------ render-thread state
@@ -244,6 +245,23 @@ void DrawChordBanner(ImDrawList* dl, const View& v, float s, ImVec2 ds) {
     }
 }
 
+// The song clock, top-left: "1:23 / 4:28". Small and quiet, the game's HUD stays readable.
+void DrawClock(ImDrawList* dl, const View& v, float s) {
+    auto mmss = [](double t) {
+        const int x = (int)std::max(0.0, t);
+        char b[16];
+        std::snprintf(b, sizeof(b), "%d:%02d", x / 60, x % 60);
+        return std::string(b);
+    };
+    const std::string text = mmss(v.songTime) + (v.songLength > 0 ? "  /  " + mmss(v.songLength) : "");
+    const float size = 26 * s, padX = 14 * s, padY = 6 * s;
+    const ImVec2 ts = g_fontBold->CalcTextSizeA(size, FLT_MAX, 0, text.c_str());
+    const ImVec2 p0(std::floor(24 * s), std::floor(24 * s));
+    const ImVec2 p1(p0.x + ts.x + 2 * padX, p0.y + ts.y + 2 * padY);
+    dl->AddRectFilled(p0, p1, IM_COL32(14, 14, 20, 170), 8 * s);
+    dl->AddText(g_fontBold, size, ImVec2(p0.x + padX, p0.y + padY), IM_COL32(235, 235, 240, 230), text.c_str());
+}
+
 void DrawToast(ImDrawList* dl, const std::string& text, DWORD start, DWORD until, float s, ImVec2 ds) {
     const DWORD now = GetTickCount();
     if (text.empty() || now >= until) return;
@@ -288,6 +306,7 @@ void DrawMenu(const View& v, const Settings& st, float s, ImVec2 ds) {
         ImGui::SliderInt("##early", &e.earlyMs, 0, 1000, "%d ms");
         ImGui::Checkbox("Also accept the same note one octave higher or lower", &e.acceptOctaves);
         ImGui::Checkbox("Show what to play while the song waits", &e.showBanner);
+        ImGui::Checkbox("Show the song time (top-left corner)", &e.showClock);
 
         ImGui::Separator();
         ImGui::TextDisabled("Changes are saved automatically. The song is held while this menu is open.");
@@ -454,6 +473,7 @@ void Frame(IDirect3DDevice9* dev) {
         if (v.chord) DrawChordBanner(dl, v, s, io.DisplaySize);
         else DrawBanner(dl, v, s, io.DisplaySize);
     }
+    if (v.inSong && st.showClock && v.songTime >= 0) DrawClock(dl, v, s);
     DrawToast(dl, toast, toastStart, toastUntil, s, io.DisplaySize);
     if (menu) DrawMenu(v, st, s, io.DisplaySize);
     g_menuWasOpen = menu;
