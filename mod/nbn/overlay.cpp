@@ -46,11 +46,43 @@ struct Shared {
 } g;
 std::atomic<bool> g_menuOpen{false};
 
-bool Same(const Settings& a, const Settings& b) {
-    return a.enabled == b.enabled && a.leadMs == b.leadMs && a.earlyMs == b.earlyMs &&
-           a.acceptOctaves == b.acceptOctaves && a.showBanner == b.showBanner && a.waitChords == b.waitChords &&
-           a.showClock == b.showClock && a.showTab == b.showTab && a.tabSeconds == b.tabSeconds && a.tabX == b.tabX &&
-           a.tabY == b.tabY && a.tabBeats == b.tabBeats;
+// Copies the layout fields (positions and sizes) only, so a drag never undoes a menu change.
+void CopyLayout(const Settings& from, Settings* to) {
+    to->bannerX = from.bannerX;
+    to->bannerY = from.bannerY;
+    to->bannerSize = from.bannerSize;
+    to->clockX = from.clockX;
+    to->clockY = from.clockY;
+    to->clockSize = from.clockSize;
+    to->tabX = from.tabX;
+    to->tabY = from.tabY;
+    to->tabWidth = from.tabWidth;
+    to->tabSize = from.tabSize;
+}
+
+// ------------------------------------------------------------------ movable parts
+// The parts the player can drag while the menu is open. Each Draw* function records where it drew
+// its part (render thread only); the next frame's mouse handling hit-tests those boxes.
+enum Part { kBanner, kClock, kTab, kParts };
+const char* kPartName[kParts] = {"Banner", "Clock", "Tab"};
+struct Box {
+    ImVec2 p0, p1;
+    bool drawn = false;  // drawn this frame
+};
+Box g_box[kParts];
+
+struct Drag {
+    int part = -1;       // -1 = no drag
+    bool resize = false; // grabbed by the corner
+    ImVec2 mouse0;       // where the drag started
+    Box box0;            // the part's box then
+    Settings st0;        // and the settings then
+} g_drag;
+
+// Where a part of size w x h goes, given the top-left corner the settings ask for: always fully on
+// screen, on whole pixels.
+ImVec2 Place(float x, float y, float w, float h, ImVec2 ds) {
+    return ImVec2(std::floor(std::max(0.0f, std::min(ds.x - w, x))), std::floor(std::max(0.0f, std::min(ds.y - h, y))));
 }
 
 // ------------------------------------------------------------------ render-thread state
@@ -125,8 +157,15 @@ void DrawSegs(ImDrawList* dl, ImFont* f, float size, ImVec2 pos, const std::vect
     }
 }
 
+// The banners' box: top-centre from the settings (S = screen scale), kept on screen.
+ImVec2 BannerPlace(const Settings& st, float S, float w, float h, ImVec2 ds) {
+    return Place(ds.x * 0.5f + st.bannerX * S - w * 0.5f, st.bannerY * S, w, h, ds);
+}
+
 // The "waiting" banner: what to play in words (+ colour) and as a tiny tab.
-void DrawBanner(ImDrawList* dl, const View& v, float s, ImVec2 ds) {
+// S = screen scale (height / 1080); sizes also follow the player's banner size.
+void DrawBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 ds) {
+    const float s = S * st.bannerSize / 100.0f;
     const int n = v.bass ? 4 : 6;
     const int i = v.string < 0 ? 0 : (v.string >= n ? n - 1 : v.string);
     const ImU32 col = kStringColor[i];
@@ -157,8 +196,9 @@ void DrawBanner(ImDrawList* dl, const View& v, float s, ImVec2 ds) {
     const float pad = 24 * s, sep = 34 * s;
     const float w = pad + textW + sep + labelW + tabW + pad;
     const float h = pad + std::max(textH, tabH + 16 * s) + pad;
-    const ImVec2 p0(std::floor((ds.x - w) * 0.5f), std::floor(ds.y * 0.11f));
+    const ImVec2 p0 = BannerPlace(st, S, w, h, ds);
     const ImVec2 p1(p0.x + w, p0.y + h);
+    g_box[kBanner] = {p0, p1, true};
 
     const float pulse = 0.65f + 0.35f * std::sin((float)ImGui::GetTime() * 4.0f);
     dl->AddRectFilled(p0, p1, IM_COL32(14, 14, 20, 222), 14 * s);
@@ -199,7 +239,8 @@ void DrawBanner(ImDrawList* dl, const View& v, float s, ImVec2 ds) {
 
 // The "waiting" banner for a chord: its name, each string to play in its colour with its fret, and
 // the chord shape as a tab (a bubble per played string, "x" = don't play that string).
-void DrawChordBanner(ImDrawList* dl, const View& v, float s, ImVec2 ds) {
+void DrawChordBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 ds) {
+    const float s = S * st.bannerSize / 100.0f;
     const int n = v.bass ? 4 : 6;
     const ImU32 gold = IM_COL32(255, 206, 84, 255);
     const float big = 46 * s, mid = 26 * s, tiny = 20 * s;
@@ -241,8 +282,9 @@ void DrawChordBanner(ImDrawList* dl, const View& v, float s, ImVec2 ds) {
     const float pad = 24 * s, sep = 34 * s;
     const float w = pad + textW + sep + labelW + tabW + pad;
     const float h = pad + std::max(textH, tabH + 30 * s) + pad;
-    const ImVec2 p0(std::floor((ds.x - w) * 0.5f), std::floor(ds.y * 0.11f));
+    const ImVec2 p0 = BannerPlace(st, S, w, h, ds);
     const ImVec2 p1(p0.x + w, p0.y + h);
+    g_box[kBanner] = {p0, p1, true};
 
     const float pulse = 0.65f + 0.35f * std::sin((float)ImGui::GetTime() * 4.0f);
     dl->AddRectFilled(p0, p1, IM_COL32(14, 14, 20, 222), 14 * s);
@@ -285,8 +327,9 @@ void DrawChordBanner(ImDrawList* dl, const View& v, float s, ImVec2 ds) {
     }
 }
 
-// The song clock, top-left: "1:23 / 4:28". Small and quiet, the game's HUD stays readable.
-void DrawClock(ImDrawList* dl, const View& v, float s) {
+// The song clock, top-left by default: "1:23 / 4:28". Small and quiet, the game's HUD stays readable.
+void DrawClock(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 ds) {
+    const float s = S * st.clockSize / 100.0f;
     auto mmss = [](double t) {
         const int x = (int)std::max(0.0, t);
         char b[16];
@@ -296,8 +339,10 @@ void DrawClock(ImDrawList* dl, const View& v, float s) {
     const std::string text = mmss(v.songTime) + (v.songLength > 0 ? "  /  " + mmss(v.songLength) : "");
     const float size = 26 * s, padX = 14 * s, padY = 6 * s;
     const ImVec2 ts = g_fontBold->CalcTextSizeA(size, FLT_MAX, 0, text.c_str());
-    const ImVec2 p0(std::floor(24 * s), std::floor(24 * s));
-    const ImVec2 p1(p0.x + ts.x + 2 * padX, p0.y + ts.y + 2 * padY);
+    const float w = ts.x + 2 * padX, h = ts.y + 2 * padY;
+    const ImVec2 p0 = Place(st.clockX * S, st.clockY * S, w, h, ds);
+    const ImVec2 p1(p0.x + w, p0.y + h);
+    g_box[kClock] = {p0, p1, true};
     dl->AddRectFilled(p0, p1, IM_COL32(14, 14, 20, 170), 8 * s);
     dl->AddText(g_fontBold, size, ImVec2(p0.x + padX, p0.y + padY), IM_COL32(235, 235, 240, 230), text.c_str());
 }
@@ -307,15 +352,17 @@ void DrawClock(ImDrawList* dl, const View& v, float s) {
 // reach the highway's fretboard. The next note to play is highlighted; played ones fade out. Under
 // the notes, the song's beat grid: bar lines with bar numbers, faint beat lines, every other bar
 // shaded; held notes get a tail. With these, the gaps between notes can be read as rhythm.
-void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float s, ImVec2 ds) {
+void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 ds) {
+    const float s = S * st.tabSize / 100.0f;  // the tab's own size: string gap, text
     const int n = v.bass ? 4 : 6;
     const ImU32 gold = IM_COL32(255, 206, 84, 255);
     // top: a lane for chord names (y0 + 6), then the bar numbers right above the strings.
-    const float w = 640 * s, gap = 28 * s, top = 60 * s, bottom = 18 * s, labelW = 26 * s, pad = 12 * s;
+    const float w = std::min(ds.x, st.tabWidth * S), gap = 28 * s, top = 60 * s, bottom = 18 * s, labelW = 26 * s, pad = 12 * s;
     const float h = top + gap * (n - 1) + bottom;
     // Position from the settings, kept on screen.
-    const float x0 = std::floor(std::max(0.0f, std::min(ds.x - w, ds.x * 0.5f + st.tabX * s)));
-    const float y0 = std::floor(std::max(0.0f, std::min(ds.y - h, st.tabY * s)));
+    const ImVec2 p0 = Place(ds.x * 0.5f + st.tabX * S, st.tabY * S, w, h, ds);
+    const float x0 = p0.x, y0 = p0.y;
+    g_box[kTab] = {p0, ImVec2(x0 + w, y0 + h), true};
     dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x0 + w, y0 + h), IM_COL32(14, 14, 20, 175), 10 * s);
 
     const float lineL = x0 + pad + labelW, lineR = x0 + w - pad;
@@ -429,15 +476,119 @@ void DrawToast(ImDrawList* dl, const std::string& text, DWORD start, DWORD until
     dl->AddText(g_fontBold, size, ImVec2(p0.x + pad, p0.y + pad * 0.5f), IM_COL32(255, 255, 255, (int)(255 * a)), text.c_str());
 }
 
+// The part under the mouse (last frame's boxes, the one drawn on top first), -1 = none. *grip =
+// the mouse is on its bottom-right corner (resize).
+int HitPart(ImVec2 m, float S, bool* grip) {
+    const float margin = 4 * S, corner = 26 * S;
+    for (int p = kParts - 1; p >= 0; --p) {
+        const Box& b = g_box[p];
+        if (!b.drawn || m.x < b.p0.x - margin || m.y < b.p0.y - margin || m.x > b.p1.x + margin || m.y > b.p1.y + margin)
+            continue;
+        *grip = m.x > b.p1.x - corner && m.y > b.p1.y - corner;
+        return p;
+    }
+    return -1;
+}
+
+// While the menu is open, the mouse arranges the screen: dragging a part moves it, dragging its
+// bottom-right corner resizes it. Works on the boxes drawn in the previous frame. During a drag
+// *lay (what this frame draws) follows the mouse; on release the new layout goes into the shared
+// settings (main.cpp then saves it to the ini). S = screen scale.
+void Arrange(bool menu, Settings* lay, float S, ImVec2 ds) {
+    ImGuiIO& io = ImGui::GetIO();
+    if (g_drag.part < 0) {
+        if (!menu || io.WantCaptureMouse) return;  // over the menu window: the click is the menu's
+        bool grip = false;
+        const int hot = HitPart(io.MousePos, S, &grip);
+        if (hot < 0) return;
+        ImGui::SetMouseCursor(grip ? ImGuiMouseCursor_ResizeNWSE : ImGuiMouseCursor_ResizeAll);
+        if (!ImGui::IsMouseClicked(ImGuiMouseButton_Left)) return;
+        g_drag.part = hot;
+        g_drag.resize = grip;
+        g_drag.mouse0 = io.MousePos;
+        g_drag.box0 = g_box[hot];
+        g_drag.st0 = *lay;
+    }
+
+    const float dx = io.MousePos.x - g_drag.mouse0.x, dy = io.MousePos.y - g_drag.mouse0.y;
+    const Box& b = g_drag.box0;
+    const float w0 = b.p1.x - b.p0.x, h0 = b.p1.y - b.p0.y;
+    auto size = [](float pct) { return (int)std::lround(std::max(50.0f, std::min(250.0f, pct))); };
+    Settings e = g_drag.st0;
+    if (!g_drag.resize) {
+        // Move: the box's new corner, kept on screen, turned back into the settings' coordinates.
+        const ImVec2 p = Place(b.p0.x + dx, b.p0.y + dy, w0, h0, ds);
+        if (g_drag.part == kBanner) {
+            e.bannerX = (int)std::lround((p.x + w0 * 0.5f - ds.x * 0.5f) / S);
+            e.bannerY = (int)std::lround(p.y / S);
+        } else if (g_drag.part == kClock) {
+            e.clockX = (int)std::lround(p.x / S);
+            e.clockY = (int)std::lround(p.y / S);
+        } else {
+            e.tabX = (int)std::lround((p.x - ds.x * 0.5f) / S);
+            e.tabY = (int)std::lround(p.y / S);
+        }
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+    } else {
+        // Resize: the banner and the clock size themselves from their text, so the corner scales them
+        // (the average of the width and height change; the banner grows on both sides of its
+        // centre). The tab's width and height change separately: wider = more room between notes.
+        const float ry = (h0 + dy) / h0;
+        if (g_drag.part == kBanner) {
+            e.bannerSize = size(e.bannerSize * ((w0 + 2 * dx) / w0 + ry) * 0.5f);
+        } else if (g_drag.part == kClock) {
+            e.clockSize = size(e.clockSize * ((w0 + dx) / w0 + ry) * 0.5f);
+        } else {
+            e.tabWidth = (int)std::lround(std::max(250.0f, std::min(ds.x / S, (w0 + dx) / S)));
+            e.tabSize = size(e.tabSize * ry);
+        }
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNWSE);
+    }
+    *lay = e;
+
+    if (!menu || !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {  // released (or the menu closed): keep it
+        {
+            std::lock_guard<std::mutex> lk(g.m);
+            CopyLayout(e, &g.settings);
+        }
+        Log("overlay: %s %s", kPartName[g_drag.part], g_drag.resize ? "resized" : "moved");
+        g_drag.part = -1;
+    }
+}
+
+// While the menu is open: an outline, a name and a corner grip on each part, so it's clear they can
+// be dragged. The one under the mouse (or being dragged) is brighter.
+void DrawArrangeHints(ImDrawList* dl, float S) {
+    const ImGuiIO& io = ImGui::GetIO();
+    bool grip = false;
+    const int hot = g_drag.part >= 0 ? g_drag.part : (io.WantCaptureMouse ? -1 : HitPart(io.MousePos, S, &grip));
+    for (int p = 0; p < kParts; ++p) {
+        const Box& b = g_box[p];
+        if (!b.drawn) continue;
+        const ImU32 c = hot == p ? IM_COL32(255, 255, 255, 235) : IM_COL32(255, 255, 255, 110);
+        const float m = 3 * S, g = 20 * S;
+        const ImVec2 q0(b.p0.x - m, b.p0.y - m), q1(b.p1.x + m, b.p1.y + m);
+        dl->AddRect(q0, q1, c, 8 * S, 0, (hot == p ? 2.5f : 1.5f) * S);
+        dl->AddTriangleFilled(ImVec2(q1.x, q1.y - g), q1, ImVec2(q1.x - g, q1.y), c);
+        // The name on a small tag above the top-left corner (below the part at the top of the screen).
+        const ImVec2 ts = g_fontBold->CalcTextSizeA(17 * S, FLT_MAX, 0, kPartName[p]);
+        const float ty = q0.y - ts.y - 6 * S >= 0 ? q0.y - ts.y - 6 * S : q1.y + 6 * S;
+        dl->AddRectFilled(ImVec2(q0.x, ty - 2 * S), ImVec2(q0.x + ts.x + 12 * S, ty + ts.y + 2 * S), IM_COL32(14, 14, 20, 210), 4 * S);
+        dl->AddText(g_fontBold, 17 * S, ImVec2(q0.x + 6 * S, ty), c, kPartName[p]);
+    }
+}
+
 void DrawMenu(const View& v, const Settings& st, float s, ImVec2 ds) {
     ImGui::PushFont(g_fontUi, 24 * s);
-    ImGui::SetNextWindowPos(ImVec2(ds.x * 0.5f, ds.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    // The first time: against the right edge of the screen, so the banner (top centre) and the tab
+    // (left) stay visible to be dragged. After that it stays where the player dragged it (by its
+    // title bar).
+    ImGui::SetNextWindowPos(ImVec2(ds.x - 40 * s, ds.y * 0.5f), ImGuiCond_Once, ImVec2(1.0f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(700 * s, 0), ImGuiCond_Always);
     if (!g_menuWasOpen) ImGui::SetNextWindowFocus();
     bool open = true, skip = false;
     Settings e = st;
-    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                                   ImGuiWindowFlags_NoSavedSettings;
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings;
     if (ImGui::Begin("Note-by-Note", &open, flags)) {
         ImGui::Checkbox("Wait for each note", &e.enabled);
         ImGui::TextDisabled("The song stops at every note until you play it.");
@@ -465,11 +616,12 @@ void DrawMenu(const View& v, const Settings& st, float s, ImVec2 ds) {
             ImGui::Checkbox("Bar lines and beats in the tab (to read the rhythm)", &e.tabBeats);
             ImGui::SetNextItemWidth(-1);
             ImGui::SliderInt("##tabsec", &e.tabSeconds, 2, 8, "Tab shows %d seconds ahead");
-            ImGui::SetNextItemWidth(-1);
-            ImGui::SliderInt("##tabx", &e.tabX, -1600, 1000, "Tab position: left / right (%d)");
-            ImGui::SetNextItemWidth(-1);
-            ImGui::SliderInt("##taby", &e.tabY, 0, 900, "Tab position: up / down (%d)");
         }
+
+        ImGui::Separator();
+        ImGui::TextWrapped("Arrange the screen with the mouse: drag the banner, the clock or the tab to move it, "
+                           "and drag its bottom-right corner to make it bigger or smaller. This menu moves by its title bar.");
+        if (ImGui::Button("Reset positions and sizes")) e = WithDefaultLayout(e);
 
         ImGui::Separator();
         ImGui::TextDisabled("Changes are saved automatically. The song is held while this menu is open.");
@@ -482,8 +634,10 @@ void DrawMenu(const View& v, const Settings& st, float s, ImVec2 ds) {
     ImGui::PopFont();
     if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) open = false;
 
+    // Only when the menu itself changed something (compared with this frame's snapshot), so a layout
+    // just saved by a drag or a change from the main loop is never overwritten with old values.
     std::lock_guard<std::mutex> lk(g.m);
-    if (!Same(e, g.settings)) g.settings = e;
+    if (!(e == st)) g.settings = e;
     if (skip) g.skipRequest = true;
     if (!open) g_menuOpen = false;
 }
@@ -631,15 +785,47 @@ void Frame(IDirect3DDevice9* dev) {
     ApplyScale(s);
     ImGui::NewFrame();
 
+    // Mouse arranging (menu open) uses last frame's boxes; then this frame's drawing records new ones.
+    const ImVec2 ds = io.DisplaySize;
+    Settings lay = st;  // the settings, with the layout being dragged
+    Arrange(menu, &lay, s, ds);
+    for (Box& b : g_box) b.drawn = false;
+
+    // While the menu is open, every part that is switched on is shown so it can be arranged: with
+    // example content when it has nothing to show right now.
     ImDrawList* dl = ImGui::GetBackgroundDrawList();  // under the menu window
-    if (v.inSong && v.waiting && st.enabled && st.showBanner) {
-        if (v.chord) DrawChordBanner(dl, v, s, io.DisplaySize);
-        else DrawBanner(dl, v, s, io.DisplaySize);
+    const bool bannerOn = st.enabled && st.showBanner;
+    if (bannerOn && v.inSong && v.waiting) {
+        if (v.chord) DrawChordBanner(dl, v, lay, s, ds);
+        else DrawBanner(dl, v, lay, s, ds);
+    } else if (bannerOn && menu) {
+        View ex;  // "Play fret 5 on the BLUE string" (D string, note G)
+        ex.bass = v.bass;
+        ex.string = 2;
+        ex.fret = 5;
+        ex.midi = v.bass ? 43 : 55;
+        DrawBanner(dl, ex, lay, s, ds);
     }
-    if (v.inSong && st.showClock && v.songTime >= 0) DrawClock(dl, v, s);
-    if (v.inSong && st.showTab && v.songTime >= 0 && (!v.tab.empty() || !v.tabBeats.empty())) DrawTab(dl, v, st, s, io.DisplaySize);
-    DrawToast(dl, toast, toastStart, toastUntil, s, io.DisplaySize);
-    if (menu) DrawMenu(v, st, s, io.DisplaySize);
+    const bool haveTime = v.inSong && v.songTime >= 0;
+    if (st.showClock && haveTime) {
+        DrawClock(dl, v, lay, s, ds);
+    } else if (st.showClock && menu) {
+        View ex;
+        ex.songTime = 83;
+        ex.songLength = 268;
+        DrawClock(dl, ex, lay, s, ds);
+    }
+    if (st.showTab && haveTime && (!v.tab.empty() || !v.tabBeats.empty())) {
+        DrawTab(dl, v, lay, s, ds);
+    } else if (st.showTab && menu) {
+        View ex;  // just the empty strings
+        ex.bass = v.bass;
+        ex.songTime = 0;
+        DrawTab(dl, ex, lay, s, ds);
+    }
+    if (menu) DrawArrangeHints(dl, s);
+    DrawToast(dl, toast, toastStart, toastUntil, s, ds);
+    if (menu) DrawMenu(v, st, s, ds);
     g_menuWasOpen = menu;
 
     ImGui::Render();
@@ -768,6 +954,11 @@ DWORD WINAPI InstallThread(LPVOID) {
 }  // namespace
 
 // ------------------------------------------------------------------ public API
+Settings WithDefaultLayout(Settings st) {
+    CopyLayout(Settings{}, &st);
+    return st;
+}
+
 void Start(const Settings& initial) {
     {
         std::lock_guard<std::mutex> lk(g.m);

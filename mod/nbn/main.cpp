@@ -105,10 +105,21 @@ Config LoadConfig() {
                 "TabBeats=1\n"
                 "; Seconds of music the tab shows ahead (2..8)\n"
                 "TabSeconds=4\n"
-                "; Tab position (the menu has sliders): X from the screen centre, Y from the top, in\n"
-                "; 1080p pixels (scaled with the screen height)\n"
+                "; Layout. Easier: open the menu and drag the parts with the mouse (corner = resize).\n"
+                "; Positions and widths in 1080p pixels (scaled with the screen height), sizes in percent.\n"
+                "; Banner: X of its centre from the screen centre, Y from the top\n"
+                "BannerX=0\n"
+                "BannerY=119\n"
+                "BannerSize=100\n"
+                "; Clock: top-left corner from the screen's top-left corner\n"
+                "ClockX=24\n"
+                "ClockY=24\n"
+                "ClockSize=100\n"
+                "; Tab: top-left corner, X from the screen centre, Y from the top\n"
                 "TabX=-810\n"
-                "TabY=385\n",
+                "TabY=385\n"
+                "TabWidth=640\n"
+                "TabSize=100\n",
                 f);
             std::fclose(f);
         }
@@ -132,8 +143,20 @@ Config LoadConfig() {
     c.initial.showTab = GetPrivateProfileIntW(L"NoteByNote", L"ShowTab", 1, ini.c_str()) != 0;
     c.initial.tabBeats = GetPrivateProfileIntW(L"NoteByNote", L"TabBeats", 1, ini.c_str()) != 0;
     c.initial.tabSeconds = std::max(2, std::min(8, (int)GetPrivateProfileIntW(L"NoteByNote", L"TabSeconds", 4, ini.c_str())));
-    c.initial.tabX = (int)GetPrivateProfileIntW(L"NoteByNote", L"TabX", -810, ini.c_str());
-    c.initial.tabY = (int)GetPrivateProfileIntW(L"NoteByNote", L"TabY", 385, ini.c_str());
+    // Layout (defaults from overlay::Settings; sizes kept in the range the mouse allows).
+    const overlay::Settings d;
+    auto num = [&](const wchar_t* key, int def) { return (int)GetPrivateProfileIntW(L"NoteByNote", key, def, ini.c_str()); };
+    auto pct = [&](const wchar_t* key, int def) { return std::max(50, std::min(250, num(key, def))); };
+    c.initial.bannerX = num(L"BannerX", d.bannerX);
+    c.initial.bannerY = num(L"BannerY", d.bannerY);
+    c.initial.bannerSize = pct(L"BannerSize", d.bannerSize);
+    c.initial.clockX = num(L"ClockX", d.clockX);
+    c.initial.clockY = num(L"ClockY", d.clockY);
+    c.initial.clockSize = pct(L"ClockSize", d.clockSize);
+    c.initial.tabX = num(L"TabX", d.tabX);
+    c.initial.tabY = num(L"TabY", d.tabY);
+    c.initial.tabWidth = std::max(250, num(L"TabWidth", d.tabWidth));
+    c.initial.tabSize = pct(L"TabSize", d.tabSize);
     return c;
 }
 
@@ -153,15 +176,16 @@ void SaveSettings(const overlay::Settings& st) {
     put(L"ShowTab", st.showTab);
     put(L"TabBeats", st.tabBeats);
     put(L"TabSeconds", st.tabSeconds);
+    put(L"BannerX", st.bannerX);
+    put(L"BannerY", st.bannerY);
+    put(L"BannerSize", st.bannerSize);
+    put(L"ClockX", st.clockX);
+    put(L"ClockY", st.clockY);
+    put(L"ClockSize", st.clockSize);
     put(L"TabX", st.tabX);
     put(L"TabY", st.tabY);
-}
-
-bool SameSettings(const overlay::Settings& a, const overlay::Settings& b) {
-    return a.enabled == b.enabled && a.leadMs == b.leadMs && a.earlyMs == b.earlyMs &&
-           a.acceptOctaves == b.acceptOctaves && a.showBanner == b.showBanner && a.waitChords == b.waitChords &&
-           a.showClock == b.showClock && a.showTab == b.showTab && a.tabSeconds == b.tabSeconds && a.tabX == b.tabX &&
-           a.tabY == b.tabY && a.tabBeats == b.tabBeats;
+    put(L"TabWidth", st.tabWidth);
+    put(L"TabSize", st.tabSize);
 }
 
 std::string Narrow(const std::wstring& w) { return std::string(w.begin(), w.end()); }  // ASCII paths/names only
@@ -410,7 +434,7 @@ DWORD WINAPI MainThread(LPVOID) {
         const bool skip = skipKey.Pressed(cfg.skipKey) | overlay::TakeSkipRequest();
 
         const overlay::Settings newSt = overlay::GetSettings();
-        if (!SameSettings(newSt, st)) {
+        if (!(newSt == st)) {
             if (newSt.enabled != st.enabled) {
                 Log("Note-by-Note %s", newSt.enabled ? "ON" : "OFF");
                 overlay::Toast(newSt.enabled ? "Note-by-Note ON" : "Note-by-Note OFF");

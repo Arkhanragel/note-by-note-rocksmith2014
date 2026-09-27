@@ -10,9 +10,11 @@
 //   - short messages ("toasts"): "Note-by-Note ON", "Skipped", "No chart for this song"...
 //   - the song clock ("1:23 / 4:28") in the top-left corner while a song plays
 //   - the scrolling tab: the next few seconds of the song as guitar tab, moving right to left in
-//     step with the highway (left of the highway, below the lyrics; can be moved from the menu),
+//     step with the highway (left of the highway, below the lyrics by default),
 //     with bar lines + bar numbers, faint beat lines and tails on held notes, to read the rhythm
-//   - the MENU (toggle key, F8 by default): mode on/off, skip note, timing settings
+//   - the MENU (toggle key, F8 by default): mode on/off, skip note, timing settings. While it is
+//     open the banner, clock and tab can be dragged with the mouse (body = move, bottom-right
+//     corner = resize); the menu has a button to put them all back
 //
 // Threads: the mod's main loop (main.cpp) and the game's render thread both use this module. They
 // share one small state object protected by a mutex. The main loop writes what to show (View) and
@@ -40,9 +42,23 @@ struct Settings {
     bool showTab = true;         // show the scrolling tab while playing
     bool tabBeats = true;        // bar lines (with bar numbers) and beat lines in the tab
     int tabSeconds = 4;          // seconds of music ahead of the "now" line
-    int tabX = -810, tabY = 385; // tab's top-left corner: x from the screen centre, y from the top
-                                 // (in 1080p pixels, scaled with the screen height like the game)
+
+    // Layout: where each part is and how big (the player drags them while the menu is open). All
+    // positions and widths are in 1080p pixels, scaled with the screen height like the game's own
+    // layout; sizes are percent of the normal size.
+    int bannerX = 0, bannerY = 119;  // banner's top-centre: x from the screen centre, y from the top
+    int bannerSize = 100;
+    int clockX = 24, clockY = 24;    // clock's top-left corner, from the screen's top-left corner
+    int clockSize = 100;
+    int tabX = -810, tabY = 385;     // tab's top-left corner: x from the screen centre, y from the top
+    int tabWidth = 640;              // tab's width (more width = more room between the notes)
+    int tabSize = 100;               // tab's height and text size
+
+    bool operator==(const Settings&) const = default;
 };
+
+// The settings with the layout fields (positions and sizes) back to their defaults.
+Settings WithDefaultLayout(Settings st);
 
 // One note or chord of the scrolling tab.
 struct TabNote {
