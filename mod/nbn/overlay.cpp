@@ -27,6 +27,7 @@
 #include "imgui_impl_dx9.h"
 #include "imgui_impl_win32.h"
 #include "log.h"
+#include "music.h"
 
 // Declared (commented out) in imgui_impl_win32.h so it doesn't drag <windows.h> into the header.
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -130,7 +131,8 @@ void DrawBanner(ImDrawList* dl, const View& v, float s, ImVec2 ds) {
     if (i == 0) std::snprintf(which, sizeof(which), "%s string - the thickest one", kStringName[i]);
     else if (i == n - 1) std::snprintf(which, sizeof(which), "%s string - the thinnest one", kStringName[i]);
     else std::snprintf(which, sizeof(which), "%s string - the %s counting from the thickest", kStringName[i], kOrdinal[i]);
-    const std::vector<Seg> line2 = {{which, kWhite}};
+    std::vector<Seg> line2 = {{which, kWhite}};
+    if (v.midi >= 0) line2.push_back({"   \xC2\xB7   note " + music::NoteName(v.midi), kGrey});
     const std::vector<Seg> line3 = {{v.fret == 0 ? "(no finger on the neck)   " : "", kGrey}, {"F9 = skip   F8 = menu", kGrey}};
 
     const float textW = std::max({SegsWidth(g_fontBold, big, line1), SegsWidth(g_fontUi, mid, line2), SegsWidth(g_fontUi, tiny, line3)});
@@ -185,22 +187,34 @@ void DrawChordBanner(ImDrawList* dl, const View& v, float s, ImVec2 ds) {
     const ImU32 gold = IM_COL32(255, 206, 84, 255);
     const float big = 46 * s, mid = 26 * s, tiny = 20 * s;
 
+    std::vector<int> notes;  // lowest string first
+    for (int i = 0; i < n; ++i) if (v.frets[i] >= 0 && v.notes[i] >= 0) notes.push_back(v.notes[i]);
+    const bool flats = music::UsesFlats(v.chordName);
+
     std::vector<Seg> line1;
     if (!v.chordName.empty()) line1 = {{"Play the chord  ", kWhite}, {v.chordName, gold}};
     else line1 = {{"Play these strings together", kWhite}};
 
-    std::vector<Seg> line2;  // "RED open   YELLOW 2   BLUE 2 ..." from the thickest string
+    // What the chord is, in words: "B power chord  -  notes B and F#".
+    const std::string meaning = music::ChordMeaning(v.chordName, notes);
+    std::vector<Seg> lineM;
+    if (!meaning.empty()) lineM.push_back({meaning, gold});
+    if (!notes.empty()) lineM.push_back({(meaning.empty() ? "notes " : "   \xC2\xB7   notes ") + music::NoteList(notes, flats), kGrey});
+
+    std::vector<Seg> line2;  // "RED open = E    YELLOW 2 = B ..." from the thickest string
     int played = 0;
     for (int i = 0; i < n; ++i) {
         if (v.frets[i] < 0) continue;
-        if (played++) line2.push_back({"    ", kWhite});
+        if (played++) line2.push_back({"     ", kWhite});
         line2.push_back({kColorName[i], kStringColor[i]});
         line2.push_back({v.frets[i] == 0 ? " open" : " " + std::to_string(v.frets[i]), kWhite});
+        if (v.notes[i] >= 0) line2.push_back({" = " + music::NoteName(v.notes[i], flats), kGrey});
     }
     const std::vector<Seg> line3 = {{played < n ? "x = don't play that string   " : "", kGrey}, {"F9 = skip   F8 = menu", kGrey}};
 
-    const float textW = std::max({SegsWidth(g_fontBold, big, line1), SegsWidth(g_fontUi, mid, line2), SegsWidth(g_fontUi, tiny, line3)});
-    const float textH = big + 8 * s + mid + 10 * s + tiny;
+    const float textW = std::max({SegsWidth(g_fontBold, big, line1), SegsWidth(g_fontUi, mid, lineM),
+                                  SegsWidth(g_fontUi, mid, line2), SegsWidth(g_fontUi, tiny, line3)});
+    const float textH = big + 8 * s + (lineM.empty() ? 0 : mid + 8 * s) + mid + 10 * s + tiny;
 
     // Tab picture, thinnest string on top; wider string spacing than the single-note tab so a
     // bubble fits on every string.
@@ -219,6 +233,10 @@ void DrawChordBanner(ImDrawList* dl, const View& v, float s, ImVec2 ds) {
     ImVec2 t(p0.x + pad, p0.y + (h - textH) * 0.5f);
     DrawSegs(dl, g_fontBold, big, t, line1);
     t.y += big + 8 * s;
+    if (!lineM.empty()) {
+        DrawSegs(dl, g_fontUi, mid, t, lineM);
+        t.y += mid + 8 * s;
+    }
     DrawSegs(dl, g_fontUi, mid, t, line2);
     t.y += mid + 10 * s;
     DrawSegs(dl, g_fontUi, tiny, t, line3);

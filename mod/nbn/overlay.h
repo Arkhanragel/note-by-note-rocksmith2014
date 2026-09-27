@@ -39,9 +39,11 @@ struct View {
     bool bass = false;           // 4-string layout
     int string = 0;              // 0 = thickest string (low E), like the charts
     int fret = 0;                // 0 = open string
+    int midi = -1;               // the note (single notes), for its name ("C", "F#")
     bool chord = false;          // waiting for a chord: chordName + frets instead of string/fret
     std::string chordName;       // as in the song ("Em", "A5"...); empty for double stops
     int frets[6] = {-1, -1, -1, -1, -1, -1};  // per string (0 = thickest): -1 = not played
+    int notes[6] = {-1, -1, -1, -1, -1, -1};  // MIDI per string (for the note names)
     std::string chartInfo;       // one line for the menu, e.g. "Lead - matches the song"
     bool chartOk = false;
     double songTime = -1;        // seconds; < 0 = unknown (no clock shown)

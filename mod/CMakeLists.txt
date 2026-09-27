@@ -33,12 +33,13 @@ target_include_directories(imgui PUBLIC ${IMGUI_DIR} ${IMGUI_DIR}/backends)
 target_compile_definitions(imgui PUBLIC IMGUI_DISABLE_DEMO_WINDOWS IMGUI_IMPL_WIN32_DISABLE_GAMEPAD)
 
 # THE MOD: NoteByNote.dll (loaded by our RS_ASIO build from the game folder).
-add_library(NoteByNote SHARED nbn/main.cpp nbn/game.cpp nbn/detector.cpp nbn/tap.cpp nbn/chart.cpp nbn/log.cpp nbn/overlay.cpp)
+add_library(NoteByNote SHARED nbn/main.cpp nbn/game.cpp nbn/detector.cpp nbn/tap.cpp nbn/chart.cpp nbn/log.cpp nbn/overlay.cpp nbn/music.cpp)
 target_link_libraries(NoteByNote PRIVATE imgui minhook imagehlp winmm)
 target_compile_definitions(NoteByNote PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE _CRT_SECURE_NO_WARNINGS)
 
 # Detector test: C++ NoteTracker on a WAV, to compare with tools/detector/wait_sim.py analyze.
 add_executable(nbn_detector_test nbn/test_detector.cpp nbn/detector.cpp)
+add_executable(nbn_music_test nbn/test_music.cpp nbn/music.cpp)
 
 # Dev injector: loads a DLL into the running game.
 add_executable(nbn_inject injector/inject.cpp)

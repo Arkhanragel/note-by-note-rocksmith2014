@@ -336,7 +336,9 @@ bool ReadSongChart(Chart* chart) {
                 const size_t ch = (size_t)chordId * kChordSize;
                 for (int s = 0; s < 6; ++s) {
                     t.frets[s] = At<int8_t>(chords, ch + kChordFrets + s);
-                    if (t.frets[s] >= 0) t.midi.push_back(At<int32_t>(chords, ch + kChordMidi + s * 4));
+                    if (t.frets[s] < 0) continue;
+                    t.notes[s] = At<int32_t>(chords, ch + kChordMidi + s * 4);
+                    t.midi.push_back(t.notes[s]);
                 }
                 const char* name = (const char*)&chords[ch + kChordName];
                 t.chordName.assign(name, strnlen(name, kChordNameSize));

@@ -306,6 +306,8 @@ DWORD WINAPI MainThread(LPVOID) {
             v.chord = waitFor.chord;
             v.chordName = waitFor.chordName;
             std::copy(std::begin(waitFor.frets), std::end(waitFor.frets), v.frets);
+            std::copy(std::begin(waitFor.notes), std::end(waitFor.notes), v.notes);
+            v.midi = (!waitFor.chord && !waitFor.midi.empty()) ? waitFor.midi[0] : -1;
             // The clock works even with the mode off or without a chart (it's just the song time).
             if (!inSong || !game::GetSongTime(&v.songTime)) v.songTime = -1;
             if (inSong && !game::GetSongLength(&v.songLength)) v.songLength = 0;

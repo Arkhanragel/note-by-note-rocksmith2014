@@ -24,6 +24,7 @@ struct Target {
     // played, 0 = open).
     std::string chordName;
     int frets[6] = {-1, -1, -1, -1, -1, -1};
+    int notes[6] = {-1, -1, -1, -1, -1, -1};  // MIDI note per string (chords; -1 = not played)
 };
 
 struct PhraseIteration {
