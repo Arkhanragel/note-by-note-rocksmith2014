@@ -7,6 +7,8 @@
 //                 read the game state (screen, song key, song clock, Dynamic Difficulty levels)
 //                 WAIT MODE: when the clock reaches the next note ON THE HIGHWAY and it hasn't been
 //                            played -> freeze the song; when the player plays it -> unfreeze
+//                            (single notes: NoteTracker events; chords: ChordDetector checks after
+//                            each pick attack, see detector.h)
 //                 tell the overlay (overlay.h) what to show: "play fret 3 on the BLUE string"...
 //
 // Keys (polled, only while the game window is focused): F8 = the Note-by-Note menu (mode on/off,
@@ -21,6 +23,7 @@
 #include <windows.h>
 #include <timeapi.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <string>
@@ -41,7 +44,7 @@ HMODULE g_self = nullptr;
 // ------------------------------------------------------------------ configuration
 // Fixed settings (read once). The ones the player can change in the menu are overlay::Settings.
 struct Config {
-    overlay::Settings initial;           // Enabled, LeadMs, EarlyMs, AcceptOctaves, ShowBanner
+    overlay::Settings initial;           // Enabled, LeadMs, EarlyMs, AcceptOctaves, ShowBanner, WaitChords
     int menuKey = VK_F8;
     int skipKey = VK_F9;
     std::string menuSuffix = "_Game";    // the mode only acts on screens whose name ends like this
@@ -74,7 +77,7 @@ Config LoadConfig() {
         if (f) {
             std::fputs(
                 "; Note-by-Note for Rocksmith 2014 - settings\n"
-                "; The song waits at each single note until you play it.\n"
+                "; The song waits at each note and chord until you play it.\n"
                 "[NoteByNote]\n"
                 "; Most of these can be changed in the game: press the menu key (F8) during a song.\n"
                 "; 1 = the mode is switched on, 0 = off (the menu changes and saves this)\n"
@@ -91,7 +94,9 @@ Config LoadConfig() {
                 "; 1 = the same note one octave higher/lower also counts\n"
                 "AcceptOctaves=0\n"
                 "; 1 = show what to play (string, colour, fret) while the song waits\n"
-                "ShowBanner=1\n",
+                "ShowBanner=1\n"
+                "; 1 = the song also waits at chords, 0 = chords pass (only single notes wait)\n"
+                "WaitChords=1\n",
                 f);
             std::fclose(f);
         }
@@ -110,6 +115,7 @@ Config LoadConfig() {
     c.initial.earlyMs = GetPrivateProfileIntW(L"NoteByNote", L"EarlyMs", 300, ini.c_str());
     c.initial.acceptOctaves = GetPrivateProfileIntW(L"NoteByNote", L"AcceptOctaves", 0, ini.c_str()) != 0;
     c.initial.showBanner = GetPrivateProfileIntW(L"NoteByNote", L"ShowBanner", 1, ini.c_str()) != 0;
+    c.initial.waitChords = GetPrivateProfileIntW(L"NoteByNote", L"WaitChords", 1, ini.c_str()) != 0;
     return c;
 }
 
@@ -124,11 +130,12 @@ void SaveSettings(const overlay::Settings& st) {
     put(L"EarlyMs", st.earlyMs);
     put(L"AcceptOctaves", st.acceptOctaves);
     put(L"ShowBanner", st.showBanner);
+    put(L"WaitChords", st.waitChords);
 }
 
 bool SameSettings(const overlay::Settings& a, const overlay::Settings& b) {
     return a.enabled == b.enabled && a.leadMs == b.leadMs && a.earlyMs == b.earlyMs &&
-           a.acceptOctaves == b.acceptOctaves && a.showBanner == b.showBanner;
+           a.acceptOctaves == b.acceptOctaves && a.showBanner == b.showBanner && a.waitChords == b.waitChords;
 }
 
 std::string Narrow(const std::wstring& w) { return std::string(w.begin(), w.end()); }  // ASCII paths/names only
@@ -143,7 +150,13 @@ std::string Join(const std::vector<int>& v) {
 std::string Describe(const Chart& chart, const Target& t) {
     static const char* gtr[] = {"6th string (thickest)", "5th string", "4th string", "3rd string", "2nd string", "1st string (thinnest)"};
     static const char* bass[] = {"4th string (thickest)", "3rd string", "2nd string", "1st string (thinnest)"};
-    if (t.chord) return "chord";
+    if (t.chord) {
+        std::string s = "chord " + (t.chordName.empty() ? std::string("(no name)") : t.chordName) + " (frets";
+        for (int i = 0; i < (chart.bass ? 4 : 6); ++i) s += t.frets[i] < 0 ? " x" : " " + std::to_string(t.frets[i]);
+        s += ";";
+        for (int m : t.midi) s += " " + MidiName(m);
+        return s + ")";
+    }
     const char* s = (t.string >= 0 && t.string < (chart.bass ? 4 : 6)) ? (chart.bass ? bass : gtr)[t.string] : "?";
     char buf[128];
     if (t.fret == 0) std::snprintf(buf, sizeof(buf), "%s, open (%s)", s, MidiName(t.midi[0]).c_str());
@@ -151,6 +164,7 @@ std::string Describe(const Chart& chart, const Target& t) {
     return buf;
 }
 
+// Single notes: does this note event match? (chords are matched by the ChordDetector instead)
 bool Matches(const overlay::Settings& st, const Chart& chart, const Target& t, int midi) {
     if (t.chord || t.midi.empty()) return false;
     const int d = midi - t.midi[0];
@@ -158,7 +172,9 @@ bool Matches(const overlay::Settings& st, const Chart& chart, const Target& t, i
     return d == 0 || (st.acceptOctaves && d % 12 == 0) || (chart.bassUnsure && d == -12);
 }
 
-bool Waitable(const Target& t) { return !t.chord && !t.ignore; }  // chords aren't supported yet
+bool Waitable(const overlay::Settings& st, const Target& t) { return !t.ignore && (!t.chord || st.waitChords); }
+
+const std::vector<int> kNoChord;
 
 // ------------------------------------------------------------------ debug recordings of each wait
 // Keeps the last 20 s of guitar audio. When a wait ends (hit, pause menu, mode off), the audio from
@@ -223,8 +239,8 @@ DWORD WINAPI MainThread(LPVOID) {
     Log("Note-by-Note starting");
     const Config cfg = LoadConfig();
     overlay::Settings st = cfg.initial;  // the live settings (the menu can change them)
-    Log("config: enabled=%d menuKey=0x%X skipKey=0x%X lead=%dms early=%dms octaves=%d banner=%d", st.enabled, cfg.menuKey,
-        cfg.skipKey, st.leadMs, st.earlyMs, st.acceptOctaves, st.showBanner);
+    Log("config: enabled=%d menuKey=0x%X skipKey=0x%X lead=%dms early=%dms octaves=%d banner=%d chords=%d", st.enabled,
+        cfg.menuKey, cfg.skipKey, st.leadMs, st.earlyMs, st.acceptOctaves, st.showBanner, st.waitChords);
     if (!game::Init()) return 0;
     overlay::Start(st);
 
@@ -237,6 +253,9 @@ DWORD WINAPI MainThread(LPVOID) {
     bool trackerIsBass = false;
     std::vector<float> samples, pending;
     std::vector<NoteEvent> events;
+    ChordDetector chordDet;
+    std::vector<ChordResult> chordResults;
+    std::vector<int> upcomingChord;   // the next chord on the highway (checked after each attack)
 
     std::string menu, lastMenu, lastKey;
     Chart chart;
@@ -277,6 +296,9 @@ DWORD WINAPI MainThread(LPVOID) {
             v.bass = chart.bass;
             v.string = waitFor.string;
             v.fret = waitFor.fret;
+            v.chord = waitFor.chord;
+            v.chordName = waitFor.chordName;
+            std::copy(std::begin(waitFor.frets), std::end(waitFor.frets), v.frets);
             v.chartOk = chartOk;
             if (chartOk) v.chartInfo = "Song notes read from the game (" + chart.arrangement + ", " + std::to_string(chart.Levels()) + " levels)";
             else if (inSong) v.chartInfo = "Couldn't read this song's notes yet: it plays normally";
@@ -290,15 +312,20 @@ DWORD WINAPI MainThread(LPVOID) {
             if (tap.Open()) Log("guitar input connected (GuitarTap, %u Hz)", tap.SampleRate());
         }
         events.clear();
+        chordResults.clear();
         samples.clear();
         tap.ReadNew(samples);
         totalSamples += (long long)samples.size();
         debugAudio.Push(samples);
         pending.insert(pending.end(), samples.begin(), samples.end());
+        // The chord to check: the one we're waiting for, or the next one on the highway (early hits).
+        const std::vector<int>& expectChord = frozen ? (waitFor.chord ? waitFor.midi : kNoChord) : upcomingChord;
         size_t used = 0;
         for (; used + NoteTracker::kBlock <= pending.size(); used += NoteTracker::kBlock) {
             NoteEvent ev;
             if (tracker.Process(&pending[used], &ev)) events.push_back(ev);
+            ChordResult cr;
+            if (chordDet.Process(&pending[used], expectChord, &cr)) chordResults.push_back(cr);
         }
         pending.erase(pending.begin(), pending.begin() + used);
 
@@ -321,10 +348,14 @@ DWORD WINAPI MainThread(LPVOID) {
                 }
                 if (newSt.enabled) lastT = -1;  // re-sync to the current position
             }
+            if (!newSt.waitChords && frozen && waitFor.chord) {  // chord waits switched off while waiting at one
+                cursor = waitFor.time;
+                releaseWait();
+            }
             st = newSt;
             SaveSettings(st);
-            Log("settings: enabled=%d lead=%dms early=%dms octaves=%d banner=%d (saved)", st.enabled, st.leadMs, st.earlyMs,
-                st.acceptOctaves, st.showBanner);
+            Log("settings: enabled=%d lead=%dms early=%dms octaves=%d banner=%d chords=%d (saved)", st.enabled, st.leadMs,
+                st.earlyMs, st.acceptOctaves, st.showBanner, st.waitChords);
         }
         const double leadS = st.leadMs / 1000.0, earlyS = st.earlyMs / 1000.0;
 
@@ -363,6 +394,7 @@ DWORD WINAPI MainThread(LPVOID) {
             game::ResetSongCache();
             lastT = -1;
             announced = false;
+            upcomingChord.clear();
             songScreenTick = 0;
             continue;
         }
@@ -407,14 +439,19 @@ DWORD WINAPI MainThread(LPVOID) {
             Log("menu: song resumed");
         }
 
+        // Right after the song screen opens (song start, Riff Repeater, unpausing) the clock still
+        // reports the old time for a moment: acting on it froze the song too early. Let it settle.
+        if (now - songScreenTick < 400) continue;
+
         double t;
-        if (!chartOk || !st.enabled || !game::GetSongTime(&t)) continue;
+        if (!chartOk || !st.enabled || !game::GetSongTime(&t)) { upcomingChord.clear(); continue; }
         if (!game::GetPhraseLevels(&levels)) levels.clear();
 
         // ---- 6. keep the cursor in sync with the song position
         // (song start, Riff Repeater loops, the rewind after the game's pause, the mode switched on...)
         if (!frozen && !menuHold && (lastT < 0 || t < lastT - 0.25 || t > lastT + 1.0)) {
             if (lastT >= 0) Log("song position jumped %.2f -> %.2f s", lastT, t);
+            else Log("song position %.3f s: following from here", t);
             cursor = t - 0.05;
         }
         lastT = t;
@@ -423,46 +460,62 @@ DWORD WINAPI MainThread(LPVOID) {
         if (frozen) {
             if (skip) {
                 Log("SKIP %.3f %s after waiting %.2f s", waitFor.time, Describe(chart, waitFor).c_str(), (now - frozenTick) / 1000.0);
+                debugAudio.Save(debugDir, waitFor.time, waitAudioStart, 48000);  // skipped = maybe not detected
                 overlay::Toast("Skipped", 1200);
                 cursor = waitFor.time;
                 releaseWait();
                 continue;
             }
+            bool hit = false;
             for (const auto& ev : events) {
-                if (Matches(st, chart, waitFor, ev.midi)) {
-                    Log("HIT  %.3f %s after waiting %.2f s", waitFor.time, Describe(chart, waitFor).c_str(), (now - frozenTick) / 1000.0);
-                    if (now - frozenTick > 3000) debugAudio.Save(debugDir, waitFor.time, waitAudioStart, 48000);  // long waits only
-                    cursor = waitFor.time;
-                    releaseWait();
-                    break;
-                }
+                if (Matches(st, chart, waitFor, ev.midi)) { hit = true; break; }
                 Log("  heard %s (%+.0f cents, %.1f dB, aper %.2f%s), waiting for %s", MidiName(ev.midi).c_str(), ev.cents, ev.levelDb,
                     ev.aperiodicity, ev.attack ? ", attack" : "", Describe(chart, waitFor).c_str());
+            }
+            for (const auto& cr : chordResults) {  // only produced while waiting for a chord
+                Log("  %s", cr.Describe().c_str());
+                hit = hit || cr.match;
+            }
+            if (hit) {
+                Log("HIT  %.3f %s after waiting %.2f s", waitFor.time, Describe(chart, waitFor).c_str(), (now - frozenTick) / 1000.0);
+                // Keep the audio of long waits, and of every chord for now (to tune chord detection offline).
+                if (waitFor.chord || now - frozenTick > 3000) debugAudio.Save(debugDir, waitFor.time, waitAudioStart, 48000);
+                cursor = waitFor.time;
+                releaseWait();
             }
             continue;
         }
         if (menuHold) continue;
 
-        // Next note on the highway (using the current level of each phrase), skipping chords/ignored
-        // notes, which we don't wait on (yet).
+        // Next note on the highway (using the current level of each phrase), skipping ignored notes
+        // (and chords if the player turned chord waits off).
         const Target* next = chart.NextTarget(cursor, levels);
-        while (next && !Waitable(*next) && next->time <= t + earlyS) {
+        while (next && !Waitable(st, *next) && next->time <= t + earlyS) {
+            if (next->chord) Log("pass %.3f %s (%s)", next->time, Describe(chart, *next).c_str(), next->ignore ? "ignored" : "chord waits off");
             cursor = next->time;
             next = chart.NextTarget(cursor, levels);
         }
-        if (!next) continue;  // end of the chart
+        if (!next) { upcomingChord.clear(); continue; }  // end of the chart
 
-        for (const auto& ev : events) {
-            if (Waitable(*next) && Matches(st, chart, *next, ev.midi) && t >= next->time - earlyS) {
-                // played on time (or a little early): no need to stop
+        if (Waitable(st, *next) && t >= next->time - earlyS) {
+            bool hit = false;
+            if (next->chord) {
+                for (const auto& cr : chordResults) hit = hit || cr.match;
+            } else {
+                for (const auto& ev : events) hit = hit || Matches(st, chart, *next, ev.midi);
+            }
+            if (hit) {  // played on time (or a little early): no need to stop
                 Log("hit  %.3f %s on time (%+.0f ms, level %d)", next->time, Describe(chart, *next).c_str(),
                     (t - next->time) * 1000.0, next->level);
                 cursor = next->time;
                 next = chart.NextTarget(cursor, levels);
-                break;
             }
         }
-        if (!next || !Waitable(*next)) continue;
+        upcomingChord = (next && next->chord && Waitable(st, *next)) ? next->midi : kNoChord;
+        if (!next || !Waitable(st, *next)) continue;
+        // A strum is checked 90 and 180 ms after its attack: while one is being checked, give it a
+        // moment before stopping the song (so a chord played right on time doesn't stop it).
+        if (next->chord && chordDet.Pending() && t < next->time + 0.2) continue;
 
         // ---- 8. reached the next note without it being played -> wait for it
         if (t >= next->time - leadS && now >= nextFreezeTry) {

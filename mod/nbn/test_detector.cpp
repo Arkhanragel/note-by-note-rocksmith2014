@@ -1,15 +1,29 @@
 // nbn_detector_test: runs the C++ NoteTracker on a 48 kHz mono 16-bit WAV and prints the events in
 // the same format as `wait_sim.py analyze`, so the two outputs can be compared line by line.
 // Usage: nbn_detector_test.exe recordings\take1.wav
+//        nbn_detector_test.exe --chord 40,47,52 <file.wav>   (chord checks, like `wait_sim.py chord`)
 #include <cstdio>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include "detector.h"
 
 int main(int argc, char** argv) {
-    if (argc < 2) { std::printf("usage: nbn_detector_test <file.wav>\n"); return 1; }
+    std::vector<int> chord;
+    if (argc >= 4 && std::string(argv[1]) == "--chord") {
+        for (const char* p = argv[2]; *p;) {
+            char* end;
+            chord.push_back((int)std::strtol(p, &end, 10));
+            if (end == p) return 1;
+            p = *end == ',' ? end + 1 : end;
+        }
+        argv += 2;
+        argc -= 2;
+    }
+    if (argc < 2) { std::printf("usage: nbn_detector_test [--chord 40,47,52] <file.wav>\n"); return 1; }
     FILE* f = std::fopen(argv[1], "rb");
     if (!f) { std::printf("cannot open %s\n", argv[1]); return 1; }
     std::vector<uint8_t> data;
@@ -33,6 +47,23 @@ int main(int argc, char** argv) {
         int16_t s;
         std::memcpy(&s, &data[dataOff + 2 * i], 2);
         x[i] = s / 32768.0f;
+    }
+
+    if (!chord.empty()) {
+        std::string names;
+        for (int m : chord) names += (names.empty() ? "" : " ") + nbn::MidiName(m);
+        std::printf("Chord: %s\n", names.c_str());
+        nbn::ChordDetector det;
+        int matches = 0;
+        for (size_t i = 0; i + nbn::NoteTracker::kBlock <= count; i += nbn::NoteTracker::kBlock) {
+            nbn::ChordResult r;
+            if (det.Process(&x[i], chord, &r)) {
+                matches += r.match;
+                std::printf("%s\n", r.Describe().c_str());
+            }
+        }
+        std::printf("%d matches\n", matches);
+        return 0;
     }
 
     nbn::NoteTracker tr{nbn::TrackerConfig{}};

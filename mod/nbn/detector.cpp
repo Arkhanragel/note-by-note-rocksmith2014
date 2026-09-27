@@ -177,4 +177,162 @@ bool NoteTracker::Process(const float* block, NoteEvent* ev) {
     return false;
 }
 
+// ------------------------------------------------------------------ chords (port of chord.py)
+namespace {
+
+const char* kPcNames[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+
+double MidiHz(double m) { return 440.0 * std::pow(2.0, (m - 69.0) / 12.0); }
+
+struct Peaks {
+    std::vector<double> freq, amp, log2f;
+};
+
+// Local maxima of the Hann-windowed, zero-padded magnitude spectrum (parabolic interpolation on
+// the log magnitude), as spectral_peaks() in chord.py.
+Peaks SpectralPeaks(const double* x, int n, const ChordConfig& c) {
+    std::vector<std::complex<double>> a(c.nfft);
+    const double kPi = 3.14159265358979323846;
+    for (int i = 0; i < n; ++i) a[i] = x[i] * (0.5 - 0.5 * std::cos(2 * kPi * i / (n - 1)));  // np.hanning
+    Fft(a, false);
+    const int bins = c.nfft / 2 + 1;
+    std::vector<double> mag(bins);
+    for (int k = 0; k < bins; ++k) mag[k] = std::abs(a[k]);
+    const double hz = (double)c.sr / c.nfft;
+    Peaks p;
+    for (int k = 1; k < bins - 1; ++k) {
+        if (!(mag[k] > mag[k - 1] && mag[k] >= mag[k + 1]) || k * hz < c.fmin || k * hz > c.fmax) continue;
+        const double la = std::log(mag[k - 1] + 1e-12), lb = std::log(mag[k] + 1e-12), lc = std::log(mag[k + 1] + 1e-12);
+        const double den = la - 2 * lb + lc;
+        const double shift = std::fabs(den) > 1e-12 ? 0.5 * (la - lc) / den : 0.0;
+        p.freq.push_back((k + shift) * hz);
+        p.amp.push_back(std::exp(lb - 0.25 * (la - lc) * shift));
+    }
+    if (p.amp.empty()) return p;
+    const double floor = *std::max_element(p.amp.begin(), p.amp.end()) * std::pow(10.0, -c.peakFloorDb / 20);
+    Peaks kept;
+    for (size_t i = 0; i < p.amp.size(); ++i)
+        if (p.amp[i] >= floor) {
+            kept.freq.push_back(p.freq[i]);
+            kept.amp.push_back(p.amp[i]);
+            kept.log2f.push_back(std::log2(p.freq[i]));
+        }
+    return kept;
+}
+
+struct Harm {
+    int h, peak;
+    double amp;
+};
+
+std::vector<Harm> Harmonics(double f0, const Peaks& p, const ChordConfig& c) {
+    std::vector<Harm> out;
+    const double tol = c.tolCents / 1200;
+    for (int h = 1; h <= c.maxHarm; ++h) {
+        const double target = h * f0;
+        if (target > c.fmax) break;
+        const double lt = std::log2(target);
+        int best = -1;
+        for (size_t i = 0; i < p.freq.size(); ++i)
+            if (std::fabs(p.log2f[i] - lt) < tol && (best < 0 || p.amp[i] > p.amp[best])) best = (int)i;
+        if (best >= 0) out.push_back({h, best, p.amp[best]});
+    }
+    return out;
+}
+
+double Salience(double f0, const std::vector<Harm>& harm, const std::vector<char>& claimed, double fundMin) {
+    if (harm.empty() || harm[0].h != 1 || claimed[harm[0].peak] || harm[0].amp < fundMin) return 0.0;
+    double s = 0;
+    for (const auto& h : harm)
+        if (!claimed[h.peak]) s += (f0 + 27) / (h.h * f0 + 320) * h.amp;
+    return s;
+}
+
+}  // namespace
+
+std::vector<std::pair<int, double>> AnalyzeChord(const double* x, int n, int lo, int hi, const ChordConfig& c) {
+    static const int kHarmonicIntervals[] = {36, 31, 28, 24, 19, 12};  // harmonics 8, 6, 5, 4, 3, 2
+    const Peaks p = SpectralPeaks(x, n, c);
+    std::vector<std::vector<Harm>> harm;
+    for (int m = lo; m <= hi; ++m) harm.push_back(Harmonics(MidiHz(m), p, c));
+    const double fundMin = (p.amp.empty() ? 0.0 : *std::max_element(p.amp.begin(), p.amp.end())) *
+                           std::pow(10.0, -c.fundFloorDb / 20);
+    std::vector<char> claimed(p.amp.size(), 0);
+    std::vector<std::pair<int, double>> heard;
+    std::vector<double> sal(hi - lo + 1);
+    double first = 0;
+    while ((int)heard.size() < c.maxNotes) {
+        int best = -1;
+        for (int m = lo; m <= hi; ++m) {
+            const bool done = std::any_of(heard.begin(), heard.end(), [&](const auto& h) { return h.first == m; });
+            sal[m - lo] = done ? 0.0 : Salience(MidiHz(m), harm[m - lo], claimed, fundMin);
+            if (!done && (best < 0 || sal[m - lo] > sal[best - lo])) best = m;
+        }
+        if (best < 0 || sal[best - lo] <= 0 || sal[best - lo] < c.stopRel * first) break;
+        for (int down : kHarmonicIntervals) {
+            const int low = best - down;
+            if (low >= lo && sal[low - lo] >= c.octaveRel * sal[best - lo]) { best = low; break; }
+        }
+        if (first == 0) first = sal[best - lo];
+        heard.emplace_back(best, sal[best - lo]);
+        for (const auto& h : harm[best - lo]) claimed[h.peak] = 1;
+    }
+    return heard;
+}
+
+std::string ChordResult::Describe() const {
+    char buf[512];
+    std::string h, ex;
+    for (const auto& n : heard) h += (h.empty() ? "" : " ") + MidiName(n.first);
+    for (int pc : extra) ex += (ex.empty() ? "" : " ") + std::string(kPcNames[pc]);
+    std::snprintf(buf, sizeof(buf), "%7.2fs  chord %s  heard [%s]  %d/%d chord notes%s%s  level %6.1f dB", time,
+                  match ? "MATCH" : "no   ", h.empty() ? "-" : h.c_str(), hits, needed, ex.empty() ? "" : ", wrong: ",
+                  ex.c_str(), levelDb);
+    return buf;
+}
+
+ChordDetector::ChordDetector(const ChordConfig& cfg)
+    : cfg_(cfg), buf_(cfg.window, 0.0), onset_(cfg.sr, 2.0, cfg.gateDb) {}
+
+bool ChordDetector::Process(const float* block, const std::vector<int>& chord, ChordResult* res) {
+    const int n = NoteTracker::kBlock, W = cfg_.window;
+    std::move(buf_.begin() + n, buf_.end(), buf_.begin());
+    for (int i = 0; i < n; ++i) buf_[W - n + i] = block[i];
+    samples_ += n;
+    if (onset_.Process(buf_.data(), W, Now() * 1000.0)) {
+        due_.clear();
+        for (double d : cfg_.delays) due_.push_back(samples_ + (long long)(d * cfg_.sr));
+    }
+    if (due_.empty() || samples_ < due_.front()) return false;
+    due_.pop_front();
+    if (chord.empty()) return false;
+
+    *res = ChordResult();
+    double e = 0;
+    for (double v : buf_) e += v * v;
+    res->time = Now();
+    res->levelDb = 10.0 * std::log10(e / W + 1e-12);
+    if (res->levelDb < cfg_.gateDb) return true;
+    const int lo = std::max(23, *std::min_element(chord.begin(), chord.end()) - 7);
+    const int hi = std::min(100, *std::max_element(chord.begin(), chord.end()) + 12);
+    res->heard = AnalyzeChord(buf_.data(), W, lo, hi, cfg_);
+
+    // Judge by pitch class (judge() in chord.py).
+    bool want[12] = {};
+    int wantCount = 0;
+    for (int m : chord) if (!want[m % 12]) { want[m % 12] = true; ++wantCount; }
+    res->needed = wantCount <= 2 ? wantCount : wantCount - 1;  // power chords: both; bigger: all but one
+    if (res->heard.empty()) return true;
+    bool got[12] = {}, isExtra[12] = {};
+    const double top = res->heard[0].second;
+    for (const auto& h : res->heard) {
+        const int pc = h.first % 12;
+        if (want[pc] && !got[pc]) { got[pc] = true; ++res->hits; }
+        if (!want[pc] && h.second >= cfg_.extraRel * top) isExtra[pc] = true;
+    }
+    for (int pc = 0; pc < 12; ++pc) if (isExtra[pc]) res->extra.push_back(pc);
+    res->match = want[res->heard[0].first % 12] && res->hits >= res->needed && res->extra.empty();
+    return true;
+}
+
 }  // namespace nbn

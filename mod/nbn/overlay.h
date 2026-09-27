@@ -5,6 +5,7 @@
 // code is protected by VMProtect. Right before each frame is shown we draw our own things on top:
 //
 //   - the "waiting" banner: which string (name + highway colour) and fret to play, with a tiny tab
+//     (for a chord: its name, every string's fret in colour, and the chord shape as a tab)
 //   - short messages ("toasts"): "Note-by-Note ON", "Skipped", "No chart for this song"...
 //   - the MENU (toggle key, F8 by default): mode on/off, skip note, timing settings
 //
@@ -26,6 +27,7 @@ struct Settings {
     int earlyMs = 300;           // a correct note up to this early counts without stopping
     bool acceptOctaves = false;  // the same note one octave higher/lower also counts
     bool showBanner = true;      // show "play this" while the song is waiting
+    bool waitChords = true;      // also wait at chords (off = chords pass, only single notes wait)
 };
 
 // What the main loop wants on screen. Sent every loop iteration with SetView().
@@ -35,6 +37,9 @@ struct View {
     bool bass = false;           // 4-string layout
     int string = 0;              // 0 = thickest string (low E), like the charts
     int fret = 0;                // 0 = open string
+    bool chord = false;          // waiting for a chord: chordName + frets instead of string/fret
+    std::string chordName;       // as in the song ("Em", "A5"...); empty for double stops
+    int frets[6] = {-1, -1, -1, -1, -1, -1};  // per string (0 = thickest): -1 = not played
     std::string chartInfo;       // one line for the menu, e.g. "Lead - matches the song"
     bool chartOk = false;
 };

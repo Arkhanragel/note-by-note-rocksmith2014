@@ -16,3 +16,4 @@ docs/dlc_scan.txt
 *.psarc
 recordings/
 mod/build/
+tools/detector/synth_chords.wav

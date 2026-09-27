@@ -7,6 +7,7 @@ Usage (from the project root):
   .venv\\Scripts\\python tools\\detector\\wait_sim.py monitor                     # live readout (one line, redrawn)
   .venv\\Scripts\\python tools\\detector\\wait_sim.py log --duration 90 --record recordings\\take1.wav
   .venv\\Scripts\\python tools\\detector\\wait_sim.py analyze recordings\\take1.wav   # same logic, offline
+  .venv\\Scripts\\python tools\\detector\\wait_sim.py chord wait_012.345.wav --notes 40,47,52  # chord checks (E5)
   .venv\\Scripts\\python tools\\detector\\wait_sim.py play charts\\notegel1_lead.json [--start 0]
 Options: --channel 0|1  --device <index>  --threshold  --gate  --stable  --bass
 """
@@ -149,6 +150,21 @@ def cmd_log(args):
         print(f"Recorded {len(pcm) / SR:.1f}s to {args.record}", flush=True)
 
 
+def cmd_chord(args):
+    """Check a recording against a chord after every pick attack (same code as the mod's chord waits)."""
+    from chord import ChordConfig, ChordDetector, note_name
+    notes = [int(n) for n in args.notes.split(",")]
+    det = ChordDetector(ChordConfig())
+    print(f"Chord: {' '.join(note_name(m) for m in notes)}")
+    matches = 0
+    for block in wav_blocks(args.target):
+        r = det.process(block, notes)
+        if r:
+            matches += r.match
+            print(r.describe())
+    print(f"{matches} matches")
+
+
 def cmd_analyze(args):
     """Run the recorded WAV through the exact same tracker. Used to tune the parameters offline."""
     tracker = NoteTracker(make_config(args, args.bass))
@@ -269,8 +285,9 @@ def cmd_play(args):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=["monitor", "log", "analyze", "play"])
-    ap.add_argument("target", nargs="?", help="chart .json (play) or .wav (analyze)")
+    ap.add_argument("mode", choices=["monitor", "log", "analyze", "chord", "play"])
+    ap.add_argument("target", nargs="?", help="chart .json (play) or .wav (analyze, chord)")
+    ap.add_argument("--notes", default="40,47,52", help="chord: the chord's MIDI notes, e.g. 40,47,52 (E5)")
     ap.add_argument("--device", type=int, default=None)
     ap.add_argument("--channel", type=int, default=0, help="Focusrite input channel: 0 = input 1, 1 = input 2")
     ap.add_argument("--start", type=int, default=0, help="play: target index to start from")
@@ -288,7 +305,7 @@ def main():
     if args.mode in ("monitor", "log", "play") and args.device is None and args.source != "tap":
         args.device = find_focusrite()
     try:
-        {"monitor": cmd_monitor, "log": cmd_log, "analyze": cmd_analyze, "play": cmd_play}[args.mode](args)
+        {"monitor": cmd_monitor, "log": cmd_log, "analyze": cmd_analyze, "chord": cmd_chord, "play": cmd_play}[args.mode](args)
     except KeyboardInterrupt:
         print("\nStopped.")
 

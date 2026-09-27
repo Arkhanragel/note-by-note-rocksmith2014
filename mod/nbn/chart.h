@@ -19,6 +19,11 @@ struct Target {
     bool ignore = false;      // notes marked "ignore" in the chart are never scored by the game
     std::vector<int> midi;    // one pitch for a single note, several for a chord
     int string = -1, fret = -1;  // single notes: 0 = thickest string
+    // Chords (from the song's chord template; unknown in .nbn files): the name shown in the game
+    // ("Em", "A5"...; empty for double stops) and the fret on each string (0 = thickest; -1 = not
+    // played, 0 = open).
+    std::string chordName;
+    int frets[6] = {-1, -1, -1, -1, -1, -1};
 };
 
 struct PhraseIteration {

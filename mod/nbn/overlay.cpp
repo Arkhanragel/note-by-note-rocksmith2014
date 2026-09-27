@@ -47,7 +47,7 @@ std::atomic<bool> g_menuOpen{false};
 
 bool Same(const Settings& a, const Settings& b) {
     return a.enabled == b.enabled && a.leadMs == b.leadMs && a.earlyMs == b.earlyMs &&
-           a.acceptOctaves == b.acceptOctaves && a.showBanner == b.showBanner;
+           a.acceptOctaves == b.acceptOctaves && a.showBanner == b.showBanner && a.waitChords == b.waitChords;
 }
 
 // ------------------------------------------------------------------ render-thread state
@@ -177,6 +177,73 @@ void DrawBanner(ImDrawList* dl, const View& v, float s, ImVec2 ds) {
     dl->AddText(g_fontBold, fs, ImVec2(bc.x - nsz.x * 0.5f, bc.y - nsz.y * 0.5f), kWhite, num);
 }
 
+// The "waiting" banner for a chord: its name, each string to play in its colour with its fret, and
+// the chord shape as a tab (a bubble per played string, "x" = don't play that string).
+void DrawChordBanner(ImDrawList* dl, const View& v, float s, ImVec2 ds) {
+    const int n = v.bass ? 4 : 6;
+    const ImU32 gold = IM_COL32(255, 206, 84, 255);
+    const float big = 46 * s, mid = 26 * s, tiny = 20 * s;
+
+    std::vector<Seg> line1;
+    if (!v.chordName.empty()) line1 = {{"Play the chord  ", kWhite}, {v.chordName, gold}};
+    else line1 = {{"Play these strings together", kWhite}};
+
+    std::vector<Seg> line2;  // "RED open   YELLOW 2   BLUE 2 ..." from the thickest string
+    int played = 0;
+    for (int i = 0; i < n; ++i) {
+        if (v.frets[i] < 0) continue;
+        if (played++) line2.push_back({"    ", kWhite});
+        line2.push_back({kColorName[i], kStringColor[i]});
+        line2.push_back({v.frets[i] == 0 ? " open" : " " + std::to_string(v.frets[i]), kWhite});
+    }
+    const std::vector<Seg> line3 = {{played < n ? "x = don't play that string   " : "", kGrey}, {"F9 = skip   F8 = menu", kGrey}};
+
+    const float textW = std::max({SegsWidth(g_fontBold, big, line1), SegsWidth(g_fontUi, mid, line2), SegsWidth(g_fontUi, tiny, line3)});
+    const float textH = big + 8 * s + mid + 10 * s + tiny;
+
+    // Tab picture, thinnest string on top; wider string spacing than the single-note tab so a
+    // bubble fits on every string.
+    const float gap = 34 * s, tabW = 150 * s, labelW = 22 * s;
+    const float tabH = gap * (n - 1);
+    const float pad = 24 * s, sep = 34 * s;
+    const float w = pad + textW + sep + labelW + tabW + pad;
+    const float h = pad + std::max(textH, tabH + 30 * s) + pad;
+    const ImVec2 p0(std::floor((ds.x - w) * 0.5f), std::floor(ds.y * 0.11f));
+    const ImVec2 p1(p0.x + w, p0.y + h);
+
+    const float pulse = 0.65f + 0.35f * std::sin((float)ImGui::GetTime() * 4.0f);
+    dl->AddRectFilled(p0, p1, IM_COL32(14, 14, 20, 222), 14 * s);
+    dl->AddRect(p0, p1, (gold & 0x00FFFFFF) | ((ImU32)(255 * pulse) << 24), 14 * s, 0, 3.5f * s);
+
+    ImVec2 t(p0.x + pad, p0.y + (h - textH) * 0.5f);
+    DrawSegs(dl, g_fontBold, big, t, line1);
+    t.y += big + 8 * s;
+    DrawSegs(dl, g_fontUi, mid, t, line2);
+    t.y += mid + 10 * s;
+    DrawSegs(dl, g_fontUi, tiny, t, line3);
+
+    const float tx = p0.x + pad + textW + sep, ty = p0.y + (h - tabH) * 0.5f;
+    const float bx = tx + labelW + tabW * 0.5f, fs = 20 * s;
+    for (int r = 0; r < n; ++r) {
+        const int str = n - 1 - r;
+        const float y = ty + r * gap;
+        const bool on = v.frets[str] >= 0;
+        const ImU32 c = on ? kStringColor[str] : ((kStringColor[str] & 0x00FFFFFF) | (90u << 24));
+        const char* name = kStringName[str];
+        const ImVec2 ns = g_fontUi->CalcTextSizeA(tiny, FLT_MAX, 0, name);
+        dl->AddText(g_fontUi, tiny, ImVec2(tx, y - ns.y * 0.5f), c, name);
+        dl->AddLine(ImVec2(tx + labelW, y), ImVec2(tx + labelW + tabW, y), c, on ? 4 * s : 2 * s);
+        const std::string label = on ? std::to_string(v.frets[str]) : "x";
+        const ImVec2 lsz = g_fontBold->CalcTextSizeA(fs, FLT_MAX, 0, label.c_str());
+        if (on) {
+            const float rad = std::min(gap * 0.48f, std::max(lsz.x, lsz.y) * 0.5f + 4 * s);
+            dl->AddCircleFilled(ImVec2(bx, y), rad, IM_COL32(14, 14, 20, 255));
+            dl->AddCircle(ImVec2(bx, y), rad, kStringColor[str], 0, 3 * s);
+        }
+        dl->AddText(g_fontBold, fs, ImVec2(bx - lsz.x * 0.5f, y - lsz.y * 0.5f), on ? kWhite : kGrey, label.c_str());
+    }
+}
+
 void DrawToast(ImDrawList* dl, const std::string& text, DWORD start, DWORD until, float s, ImVec2 ds) {
     const DWORD now = GetTickCount();
     if (text.empty() || now >= until) return;
@@ -202,11 +269,14 @@ void DrawMenu(const View& v, const Settings& st, float s, ImVec2 ds) {
                                    ImGuiWindowFlags_NoSavedSettings;
     if (ImGui::Begin("Note-by-Note", &open, flags)) {
         ImGui::Checkbox("Wait for each note", &e.enabled);
-        ImGui::TextDisabled("The song stops at every single note until you play it.");
+        ImGui::TextDisabled("The song stops at every note until you play it.");
+        ImGui::BeginDisabled(!e.enabled);
+        ImGui::Checkbox("Wait for chords too", &e.waitChords);
+        ImGui::EndDisabled();
         ImGui::TextColored(v.chartOk ? ImVec4(0.45f, 0.85f, 0.45f, 1) : ImVec4(1.0f, 0.65f, 0.25f, 1), "%s", v.chartInfo.c_str());
         ImGui::Spacing();
         ImGui::BeginDisabled(!v.waiting);
-        if (ImGui::Button("Skip this note  (F9)")) skip = true;
+        if (ImGui::Button(v.chord ? "Skip this chord  (F9)" : "Skip this note  (F9)")) skip = true;
         ImGui::EndDisabled();
 
         ImGui::Separator();
@@ -380,7 +450,10 @@ void Frame(IDirect3DDevice9* dev) {
     ImGui::NewFrame();
 
     ImDrawList* dl = ImGui::GetBackgroundDrawList();  // under the menu window
-    if (v.inSong && v.waiting && st.enabled && st.showBanner) DrawBanner(dl, v, s, io.DisplaySize);
+    if (v.inSong && v.waiting && st.enabled && st.showBanner) {
+        if (v.chord) DrawChordBanner(dl, v, s, io.DisplaySize);
+        else DrawBanner(dl, v, s, io.DisplaySize);
+    }
     DrawToast(dl, toast, toastStart, toastUntil, s, io.DisplaySize);
     if (menu) DrawMenu(v, st, s, io.DisplaySize);
     g_menuWasOpen = menu;

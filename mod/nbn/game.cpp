@@ -39,6 +39,10 @@ constexpr uintptr_t kSongDataPis = 0x64;      //   vector<PhraseIteration>, 0x18
 constexpr uintptr_t kPiSize = 0x18;
 constexpr uintptr_t kSongDataChords = 0x94;   //   vector<Chord>, 0x48 bytes (the SNG chord template):
 constexpr uintptr_t kChordSize = 0x48;        //     +0x4 frets[6] (int8, -1 = not played), +0x10 MIDI notes[6] (int32)
+constexpr uintptr_t kChordFrets = 0x4;        //     +0xA fingers[6], +0x28 name char[32]
+constexpr uintptr_t kChordMidi = 0x10;
+constexpr uintptr_t kChordName = 0x28;
+constexpr size_t kChordNameSize = 32;
 constexpr uintptr_t kSongDataTuning = 0x110;  //   vector<int16>: semitones per string vs E standard
 constexpr uintptr_t kSongDataCapo = 0x11C;    //   int8, -1 = no capo
 // Note (0x1C8 bytes, same field order as the SNG note). Levels are stored in difficulty order.
@@ -297,8 +301,8 @@ bool ReadSongChart(Chart* chart) {
     std::set<int> offsets;
     for (size_t i = 0; i < chords.size(); i += kChordSize)
         for (int s = 0; s < 6; ++s) {
-            const int8_t fret = At<int8_t>(chords, i + 4 + s);
-            if (fret >= 0) offsets.insert(At<int32_t>(chords, i + 0x10 + s * 4) - (kGuitarOpen[s] + tuning[s] + fretOf(fret)));
+            const int8_t fret = At<int8_t>(chords, i + kChordFrets + s);
+            if (fret >= 0) offsets.insert(At<int32_t>(chords, i + kChordMidi + s * 4) - (kGuitarOpen[s] + tuning[s] + fretOf(fret)));
         }
     c.bass = offsets.size() == 1 && *offsets.begin() == -12;
 
@@ -320,9 +324,13 @@ bool ReadSongChart(Chart* chart) {
             t.ignore = (mask & kMaskIgnore) != 0;
             if (chordId >= 0 && (mask & kMaskChord) && (size_t)chordId * kChordSize < chords.size()) {
                 t.chord = true;
-                for (int s = 0; s < 6; ++s)
-                    if (At<int8_t>(chords, chordId * kChordSize + 4 + s) >= 0)
-                        t.midi.push_back(At<int32_t>(chords, chordId * kChordSize + 0x10 + s * 4));
+                const size_t ch = (size_t)chordId * kChordSize;
+                for (int s = 0; s < 6; ++s) {
+                    t.frets[s] = At<int8_t>(chords, ch + kChordFrets + s);
+                    if (t.frets[s] >= 0) t.midi.push_back(At<int32_t>(chords, ch + kChordMidi + s * 4));
+                }
+                const char* name = (const char*)&chords[ch + kChordName];
+                t.chordName.assign(name, strnlen(name, kChordNameSize));
             } else {
                 t.string = At<int8_t>(notes, n + kNoteString);
                 t.fret = At<int8_t>(notes, n + kNoteFret);
