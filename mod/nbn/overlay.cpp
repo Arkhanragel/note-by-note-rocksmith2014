@@ -310,8 +310,8 @@ void DrawClock(ImDrawList* dl, const View& v, float s) {
 void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float s, ImVec2 ds) {
     const int n = v.bass ? 4 : 6;
     const ImU32 gold = IM_COL32(255, 206, 84, 255);
-    // top: a lane for bar numbers (y0 + 5), then one for chord names (y0 + 20), then the strings.
-    const float w = 640 * s, gap = 28 * s, top = 54 * s, bottom = 18 * s, labelW = 26 * s, pad = 12 * s;
+    // top: a lane for chord names (y0 + 6), then the bar numbers right above the strings.
+    const float w = 640 * s, gap = 28 * s, top = 60 * s, bottom = 18 * s, labelW = 26 * s, pad = 12 * s;
     const float h = top + gap * (n - 1) + bottom;
     // Position from the settings, kept on screen.
     const float x0 = std::floor(std::max(0.0f, std::min(ds.x - w, ds.x * 0.5f + st.tabX * s)));
@@ -357,7 +357,8 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float s, ImVec2 
             dl->AddLine(ImVec2(x, staffTop), ImVec2(x, staffBottom), IM_COL32(255, 255, 255, 150), 2 * s);
             const std::string num = std::to_string(b.measure);
             const ImVec2 ns = g_fontUi->CalcTextSizeA(15 * s, FLT_MAX, 0, num.c_str());  // centred on the line
-            dl->AddText(g_fontUi, 15 * s, ImVec2(std::floor(x - ns.x * 0.5f), y0 + 5 * s), IM_COL32(200, 200, 210, 170), num.c_str());
+            const float numY = rowY(n - 1) - gap * 0.46f - 2 * s - ns.y;  // just above the top string's fret boxes
+            dl->AddText(g_fontUi, 15 * s, ImVec2(std::floor(x - ns.x * 0.5f), std::floor(numY)), IM_COL32(200, 200, 210, 170), num.c_str());
         } else {
             dl->AddLine(ImVec2(x, staffTop + 6 * s), ImVec2(x, staffBottom - 6 * s), IM_COL32(255, 255, 255, 45), 1 * s);
         }
@@ -388,7 +389,7 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float s, ImVec2 
             dl->AddLine(ImVec2(x, rowY(hi)), ImVec2(x, rowY(lo)), IM_COL32(255, 206, 84, (int)(170 * a)), 2 * s);
         if (t.chord && !t.name.empty()) {
             const ImVec2 ts = g_fontBold->CalcTextSizeA(tiny, FLT_MAX, 0, t.name.c_str());
-            dl->AddText(g_fontBold, tiny, ImVec2(x - ts.x * 0.5f, y0 + 20 * s), (gold & 0x00FFFFFF) | ((ImU32)(255 * a) << 24),
+            dl->AddText(g_fontBold, tiny, ImVec2(x - ts.x * 0.5f, y0 + 6 * s), (gold & 0x00FFFFFF) | ((ImU32)(255 * a) << 24),
                         t.name.c_str());
         }
         // Held notes: a tail in the string's colour until the note ends (like the highway's tails).
