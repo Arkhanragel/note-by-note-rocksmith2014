@@ -100,6 +100,10 @@ struct ChordConfig {
     double stopRel = 0.2;           // stop picking notes below this fraction of the first salience
     double octaveRel = 0.5;         // prefer a lower note (best = its harmonic) with this fraction
     double extraRel = 0.4;          // a non-chord note counts as "wrong" above this fraction
+    // A chord must be STRUMMED: a check only counts if the sound is at most strumRelDb below the
+    // loudest moment of the last strumWindow seconds (faint remains of an earlier strum don't count).
+    double strumRelDb = 12.0;
+    double strumWindow = 2.0;
 };
 
 struct ChordResult {
@@ -108,6 +112,7 @@ struct ChordResult {
     std::vector<std::pair<int, double>> heard;  // (midi, salience) in the order found
     int hits = 0, needed = 0;       // chord pitch classes heard / required
     std::vector<int> extra;         // wrong pitch classes heard (strong ones)
+    bool quiet = false;             // much quieter than the last strum: doesn't count
     bool match = false;
     std::string Describe() const;   // same text as ChordResult.describe() in chord.py
 };
@@ -131,6 +136,7 @@ private:
     OnsetDetector onset_;
     long long samples_ = 0;
     std::deque<long long> due_;     // sample counts at which to check
+    std::deque<std::pair<double, double>> levels_;  // (time, window level dB), last strumWindow s
 };
 
 }  // namespace nbn

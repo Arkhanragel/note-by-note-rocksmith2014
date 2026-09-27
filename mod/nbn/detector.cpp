@@ -285,9 +285,9 @@ std::string ChordResult::Describe() const {
     std::string h, ex;
     for (const auto& n : heard) h += (h.empty() ? "" : " ") + MidiName(n.first);
     for (int pc : extra) ex += (ex.empty() ? "" : " ") + std::string(kPcNames[pc]);
-    std::snprintf(buf, sizeof(buf), "%7.2fs  chord %s  heard [%s]  %d/%d chord notes%s%s  level %6.1f dB", time,
+    std::snprintf(buf, sizeof(buf), "%7.2fs  chord %s  heard [%s]  %d/%d chord notes%s%s  level %6.1f dB%s", time,
                   match ? "MATCH" : "no   ", h.empty() ? "-" : h.c_str(), hits, needed, ex.empty() ? "" : ", wrong: ",
-                  ex.c_str(), levelDb);
+                  ex.c_str(), levelDb, quiet ? "  (too quiet: not a new strum)" : "");
     return buf;
 }
 
@@ -299,6 +299,11 @@ bool ChordDetector::Process(const float* block, const std::vector<int>& chord, C
     std::move(buf_.begin() + n, buf_.end(), buf_.begin());
     for (int i = 0; i < n; ++i) buf_[W - n + i] = block[i];
     samples_ += n;
+    double e = 0;
+    for (double v : buf_) e += v * v;
+    const double lvl = 10.0 * std::log10(e / W + 1e-12);
+    while (!levels_.empty() && Now() - levels_.front().first >= cfg_.strumWindow) levels_.pop_front();
+    levels_.emplace_back(Now(), lvl);
     if (onset_.Process(buf_.data(), W, Now() * 1000.0)) {
         due_.clear();
         for (double d : cfg_.delays) due_.push_back(samples_ + (long long)(d * cfg_.sr));
@@ -308,14 +313,15 @@ bool ChordDetector::Process(const float* block, const std::vector<int>& chord, C
     if (chord.empty()) return false;
 
     *res = ChordResult();
-    double e = 0;
-    for (double v : buf_) e += v * v;
     res->time = Now();
-    res->levelDb = 10.0 * std::log10(e / W + 1e-12);
+    res->levelDb = lvl;
     if (res->levelDb < cfg_.gateDb) return true;
     const int lo = std::max(23, *std::min_element(chord.begin(), chord.end()) - 7);
     const int hi = std::min(100, *std::max_element(chord.begin(), chord.end()) + 12);
     res->heard = AnalyzeChord(buf_.data(), W, lo, hi, cfg_);
+    double peak = lvl;  // "too quiet" = faint remains, not a new strum
+    for (const auto& l : levels_) peak = std::max(peak, l.second);
+    res->quiet = lvl < peak - cfg_.strumRelDb;
 
     // Judge by pitch class (judge() in chord.py).
     bool want[12] = {};
@@ -331,7 +337,7 @@ bool ChordDetector::Process(const float* block, const std::vector<int>& chord, C
         if (!want[pc] && h.second >= cfg_.extraRel * top) isExtra[pc] = true;
     }
     for (int pc = 0; pc < 12; ++pc) if (isExtra[pc]) res->extra.push_back(pc);
-    res->match = want[res->heard[0].first % 12] && res->hits >= res->needed && res->extra.empty();
+    res->match = want[res->heard[0].first % 12] && res->hits >= res->needed && res->extra.empty() && !res->quiet;
     return true;
 }
 

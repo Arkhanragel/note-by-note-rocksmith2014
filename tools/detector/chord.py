@@ -57,6 +57,11 @@ class ChordConfig:
     stop_rel: float = 0.2         # stop picking notes below this fraction of the first salience
     octave_rel: float = 0.5       # prefer a lower note (best = its harmonic) with this fraction of the salience
     extra_rel: float = 0.4        # a non-chord note counts as "wrong" above this fraction
+    # A chord must be STRUMMED: a check is only valid if the sound is at most strum_rel_db below the
+    # loudest moment of the last strum_window seconds. (In-game: a chord played with one wrong string
+    # was fixed by putting a finger down 2.5 s later; the faint remains matched, 14 dB down.)
+    strum_rel_db: float = 12.0
+    strum_window: float = 2.0
 
 
 @dataclass
@@ -67,6 +72,7 @@ class ChordResult:
     hits: int = 0                  # chord pitch classes heard
     needed: int = 0                # how many are required
     extra: list = field(default_factory=list)   # wrong pitch classes heard (strong ones)
+    quiet: bool = False            # much quieter than the last strum: doesn't count
     match: bool = False
 
     def describe(self) -> str:
@@ -74,7 +80,7 @@ class ChordResult:
         return (f"{self.time:7.2f}s  chord {'MATCH' if self.match else 'no   '}  heard [{heard}]  "
                 f"{self.hits}/{self.needed} chord notes"
                 + (f", wrong: {' '.join(NAMES[p] for p in self.extra)}" if self.extra else "")
-                + f"  level {self.level_db:6.1f} dB")
+                + f"  level {self.level_db:6.1f} dB" + ("  (too quiet: not a new strum)" if self.quiet else ""))
 
 
 def spectral_peaks(x: np.ndarray, cfg: ChordConfig) -> tuple[np.ndarray, np.ndarray]:
@@ -189,6 +195,7 @@ class ChordDetector:
         self.onset = OnsetDetector(cfg.sr, gate_db=cfg.gate_db)
         self.samples = 0
         self.due: list[int] = []   # sample counts at which to check
+        self.levels: list[tuple[float, float]] = []  # (time, window level dB), last strum_window s
 
     @property
     def now(self) -> float:
@@ -200,6 +207,8 @@ class ChordDetector:
         self.buf = np.roll(self.buf, -n)
         self.buf[-n:] = block
         self.samples += n
+        lvl = 10 * np.log10(float(np.mean(self.buf * self.buf)) + 1e-12)
+        self.levels = [(t, v) for t, v in self.levels if self.now - t < c.strum_window] + [(self.now, lvl)]
         if self.onset.process(self.buf, self.now * 1000):
             self.due = [self.samples + int(d * c.sr) for d in c.delays]
         if not self.due or self.samples < self.due[0]:
@@ -207,7 +216,6 @@ class ChordDetector:
         self.due.pop(0)
         if not chord:
             return None
-        lvl = 10 * np.log10(float(np.mean(self.buf * self.buf)) + 1e-12)
         res = ChordResult(self.now, lvl)
         if lvl < c.gate_db:
             return res
@@ -216,4 +224,6 @@ class ChordDetector:
         lo, hi = max(23, min(chord) - 7), min(100, max(chord) + 12)
         res.heard = analyze(self.buf, lo, hi, c)
         res.match, res.hits, res.needed, res.extra = judge(res.heard, chord, c)
+        res.quiet = lvl < max(v for _, v in self.levels) - c.strum_rel_db
+        res.match = res.match and not res.quiet
         return res

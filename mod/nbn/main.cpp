@@ -192,6 +192,8 @@ public:
         CreateDirectoryW(dir.c_str(), nullptr);
         wchar_t name[64];
         swprintf_s(name, L"wait_%07.3f.wav", songTime);
+        for (int n = 2; GetFileAttributesW((dir + name).c_str()) != INVALID_FILE_ATTRIBUTES && n < 100; ++n)
+            swprintf_s(name, L"wait_%07.3f_%d.wav", songTime, n);  // the same note waited again: keep both
         FILE* f = _wfopen((dir + name).c_str(), L"wb");
         if (!f) return;
         const uint32_t n = (uint32_t)(pos_ - fromPos), bytes = n * 2;
