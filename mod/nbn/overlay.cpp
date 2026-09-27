@@ -356,7 +356,8 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float s, ImVec2 
         if (b.downbeat) {
             dl->AddLine(ImVec2(x, staffTop), ImVec2(x, staffBottom), IM_COL32(255, 255, 255, 150), 2 * s);
             const std::string num = std::to_string(b.measure);
-            dl->AddText(g_fontUi, 15 * s, ImVec2(x + 3 * s, y0 + 5 * s), IM_COL32(200, 200, 210, 170), num.c_str());
+            const ImVec2 ns = g_fontUi->CalcTextSizeA(15 * s, FLT_MAX, 0, num.c_str());  // centred on the line
+            dl->AddText(g_fontUi, 15 * s, ImVec2(std::floor(x - ns.x * 0.5f), y0 + 5 * s), IM_COL32(200, 200, 210, 170), num.c_str());
         } else {
             dl->AddLine(ImVec2(x, staffTop + 6 * s), ImVec2(x, staffBottom - 6 * s), IM_COL32(255, 255, 255, 45), 1 * s);
         }
