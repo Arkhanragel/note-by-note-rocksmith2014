@@ -21,6 +21,7 @@ constexpr DWORD kExpectedChecksum = 0x0176EC34;  // PE checksum of the supported
 
 constexpr uintptr_t kRoot = 0x00F6062C;               // root pointer of the song/menu structures
 constexpr uint32_t kMenuChain[] = {0x28, 0x8C, 0x0};  // -> menu name string
+constexpr uint32_t kPreMenuChain[] = {0x28, 0x8C};    // before the first dialog: a short name stored in place
 constexpr uintptr_t kPreviewName = 0x00F60514;        // -> "Play_<SongKey>_Preview"
 constexpr uint32_t kPreviewChain[] = {0xBC, 0x0};
 constexpr uint32_t kSongObjChain[] = {0xB0};          // [root]+0xB0 -> song object
@@ -226,6 +227,11 @@ bool Init() {
 bool GetMenu(std::string* menu) {
     uintptr_t a;
     return g_ready && ReadChain(g_base + kRoot, kMenuChain, 3, &a) && ReadText(a, menu);
+}
+
+bool GetPreMenu(std::string* name) {
+    uintptr_t a;
+    return g_ready && ReadChain(g_base + kRoot, kPreMenuChain, 2, &a) && ReadText(a, name);
 }
 
 bool GetSongKey(std::string* key) {

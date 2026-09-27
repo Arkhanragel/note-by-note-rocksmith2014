@@ -31,9 +31,11 @@
 
 #include "chart.h"
 #include "detector.h"
+#include "fastintro.h"
 #include "game.h"
 #include "log.h"
 #include "overlay.h"
+#include "startup.h"
 #include "tap.h"
 
 namespace nbn {
@@ -105,6 +107,11 @@ Config LoadConfig() {
                 "TabBeats=1\n"
                 "; Seconds of music the tab shows ahead (2..8)\n"
                 "TabSeconds=4\n"
+                "; 1 = at game start, close the Ubisoft login and \"servers not available\" popups by\n"
+                ";     themselves (the title's Press Enter and the profile choice stay yours)\n"
+                "SkipUbisoftPopups=1\n"
+                "; Play the start-up logos this many times faster (1 = normal speed, up to 8)\n"
+                "FastIntro=4\n"
                 "; Layout. Easier: open the menu and drag the parts with the mouse (corner = resize).\n"
                 "; Positions and widths in 1080p pixels (scaled with the screen height), sizes in percent.\n"
                 "; Banner: X of its centre from the screen centre, Y from the top\n"
@@ -143,6 +150,8 @@ Config LoadConfig() {
     c.initial.showTab = GetPrivateProfileIntW(L"NoteByNote", L"ShowTab", 1, ini.c_str()) != 0;
     c.initial.tabBeats = GetPrivateProfileIntW(L"NoteByNote", L"TabBeats", 1, ini.c_str()) != 0;
     c.initial.tabSeconds = std::max(2, std::min(8, (int)GetPrivateProfileIntW(L"NoteByNote", L"TabSeconds", 4, ini.c_str())));
+    c.initial.skipPopups = GetPrivateProfileIntW(L"NoteByNote", L"SkipUbisoftPopups", 1, ini.c_str()) != 0;
+    c.initial.fastIntro = std::max(1, std::min(8, (int)GetPrivateProfileIntW(L"NoteByNote", L"FastIntro", 4, ini.c_str())));
     // Layout (defaults from overlay::Settings; sizes kept in the range the mouse allows).
     const overlay::Settings d;
     auto num = [&](const wchar_t* key, int def) { return (int)GetPrivateProfileIntW(L"NoteByNote", key, def, ini.c_str()); };
@@ -176,6 +185,8 @@ void SaveSettings(const overlay::Settings& st) {
     put(L"ShowTab", st.showTab);
     put(L"TabBeats", st.tabBeats);
     put(L"TabSeconds", st.tabSeconds);
+    put(L"SkipUbisoftPopups", st.skipPopups);
+    put(L"FastIntro", st.fastIntro);
     put(L"BannerX", st.bannerX);
     put(L"BannerY", st.bannerY);
     put(L"BannerSize", st.bannerSize);
@@ -293,7 +304,8 @@ DWORD WINAPI MainThread(LPVOID) {
     overlay::Settings st = cfg.initial;  // the live settings (the menu can change them)
     Log("config: enabled=%d menuKey=0x%X skipKey=0x%X lead=%dms early=%dms octaves=%d banner=%d chords=%d", st.enabled,
         cfg.menuKey, cfg.skipKey, st.leadMs, st.earlyMs, st.acceptOctaves, st.showBanner, st.waitChords);
-    if (!game::Init()) return 0;
+    fastintro::Start(st.fastIntro);  // first: the logos are already playing
+    if (!game::Init()) { fastintro::Tick(true); return 0; }
     overlay::Start(st);
 
     KeyEdge menuKey, skipKey;
@@ -315,7 +327,9 @@ DWORD WINAPI MainThread(LPVOID) {
     std::vector<int> tabLevels;
     DWORD nextTabRefresh = 0;
 
-    std::string menu, lastMenu, lastKey;
+    std::string menu, lastMenu, lastKey, preMenu, lastPreMenu;
+    bool menuOk = false;
+    DWORD nextMenuTry = 0;
     Chart chart;
     uintptr_t chartData = 0;          // address of the song data the chart was read from
     bool chartOk = false;             // chart matches the song being played
@@ -462,7 +476,19 @@ DWORD WINAPI MainThread(LPVOID) {
         }
 
         // ---- 3. game state
-        const bool menuOk = game::GetMenu(&menu);
+        // Before the first dialog the menu pointer isn't valid and every read of it fails with an
+        // exception (caught); don't do that every millisecond while the game is loading.
+        if (menuOk || now >= nextMenuTry) {
+            menuOk = game::GetMenu(&menu);
+            if (!menuOk) {
+                nextMenuTry = now + 50;
+                if (game::GetPreMenu(&preMenu) && preMenu != lastPreMenu) {
+                    Log("pre-menu: %s", preMenu.c_str());
+                    lastPreMenu = preMenu;
+                }
+            }
+        }
+        fastintro::Tick(menuOk || lastPreMenu == "TitleScreen");
         if (now - lastHeartbeat > 5000) {  // what the mod sees, every 5 s (diagnostics)
             lastHeartbeat = now;
             double ht = -1;
@@ -472,6 +498,7 @@ DWORD WINAPI MainThread(LPVOID) {
                 menuOk ? menu.c_str() : "?", lastKey.c_str(), chartOk ? chart.arrangement.c_str() : "-", st.enabled,
                 tOk ? "" : "(n/a)", ht, cursor, frozen, menuHold, tap.IsOpen(), totalSamples, Join(levels).c_str());
         }
+        startup::Tick(st.skipPopups, menuOk, menu, overlay::GameWindow(), now);  // Ubisoft popups at game start
         if (!menuOk) continue;
         if (menu != lastMenu) { Log("screen: %s", menu.c_str()); lastMenu = menu; }
         inSong = menu.size() >= cfg.menuSuffix.size() &&
@@ -651,6 +678,7 @@ DWORD WINAPI MainThread(LPVOID) {
 
     // Unload (dev): release the song if we're holding it, remove the overlay, then free the DLL.
     if (frozen || menuHold) game::Unfreeze();
+    fastintro::Stop();  // before the overlay: it uninitializes MinHook
     overlay::Stop();
     timeEndPeriod(1);
     Log("Note-by-Note unloaded");

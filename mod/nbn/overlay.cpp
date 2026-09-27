@@ -103,6 +103,7 @@ HANDLE g_installThread = nullptr;
 
 IDirect3DDevice9* g_dev = nullptr;
 HWND g_hwnd = nullptr;
+std::atomic<HWND> g_gameWindow{nullptr};  // g_hwnd for other threads (GameWindow())
 WNDPROC g_oldWndProc = nullptr;
 bool g_unicodeWnd = true;
 ImFont* g_fontBold = nullptr;
@@ -624,6 +625,12 @@ void DrawMenu(const View& v, const Settings& st, float s, ImVec2 ds) {
         if (ImGui::Button("Reset positions and sizes")) e = WithDefaultLayout(e);
 
         ImGui::Separator();
+        ImGui::TextUnformatted("Game start (from the next time you start the game)");
+        ImGui::Checkbox("Close the Ubisoft login / server popups", &e.skipPopups);
+        bool fast = e.fastIntro > 1;
+        if (ImGui::Checkbox("Play the start-up logos 4x faster", &fast)) e.fastIntro = fast ? 4 : 1;
+
+        ImGui::Separator();
         ImGui::TextDisabled("Changes are saved automatically. The song is held while this menu is open.");
         if (ImGui::Button("Close  (F8 / Esc)")) open = false;
         ImGui::PushFont(nullptr, 17 * s);
@@ -702,6 +709,7 @@ bool InitImGui(IDirect3DDevice9* dev) {
     ImGui_ImplDX9_Init(dev);
     g_dev = dev;
     g_hwnd = hwnd;
+    g_gameWindow = hwnd;
     g_unicodeWnd = IsWindowUnicode(hwnd) != FALSE;
     g_oldWndProc = (WNDPROC)(g_unicodeWnd ? SetWindowLongPtrW(hwnd, GWLP_WNDPROC, (LONG_PTR)HkWndProc)
                                           : SetWindowLongPtrA(hwnd, GWLP_WNDPROC, (LONG_PTR)HkWndProc));
@@ -1005,6 +1013,7 @@ void Toast(const std::string& text, DWORD ms) {
 }
 
 void ToggleMenu() { g_menuOpen = !g_menuOpen; }
+HWND GameWindow() { return g_gameWindow; }
 bool MenuOpen() { return g_menuOpen; }
 
 Settings GetSettings() {

@@ -11,6 +11,7 @@
 //
 // Usage:
 //   ChartDump list  <song.psarc>
+//   ChartDump files <any.psarc>       -> every file name in the archive
 //   ChartDump dump  <song.psarc> <sng-name-or-substring> [out.json]
 //   ChartDump scan  <folder>          -> one summary line per arrangement, to find easy test songs
 
@@ -40,6 +41,11 @@ static class Program
         {
             case "list":
                 foreach (var name in ListSngEntries(args[1])) Console.WriteLine(name);
+                return 0;
+
+            case "files": // files <psarc>: every entry in the archive (not only charts), e.g. video.psarc
+                using (var psarc = OpenPsarc(args[1]))
+                    foreach (var name in psarc.Manifest) Console.WriteLine(name);
                 return 0;
 
             case "dump":

@@ -21,6 +21,10 @@ bool Init();
 // Internal menu/screen name, e.g. "LearnASong_Game", "LearnASong_Pause", "MainMenu".
 bool GetMenu(std::string* menu);
 
+// Before the first dialog (intro, title) GetMenu fails: the same field then holds a short name in
+// place instead of a pointer to it (per RSMods: "", "TitleScreen", "MainOverlay"...).
+bool GetPreMenu(std::string* name);
+
 // The SongKey of the song highlighted in the song list (e.g. "NoteGel1"). The game only keeps it
 // while browsing, so callers should remember the last value.
 bool GetSongKey(std::string* key);
