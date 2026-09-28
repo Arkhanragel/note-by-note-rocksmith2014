@@ -19,7 +19,8 @@
 // game memory (see game.h / chart.h), so any song or CDLC works without preparing anything.
 //
 // Configuration: NoteByNote.ini next to the DLL (created with defaults on first run).
-// Log: NoteByNote.log next to the DLL.
+// Log: NoteByNote.log next to the DLL. NoteByNote_report.txt: what was found in this game build and
+// whether the checks passed (report.h; for testing other game versions).
 #include <windows.h>
 #include <timeapi.h>
 
@@ -36,6 +37,7 @@
 #include "game.h"
 #include "log.h"
 #include "overlay.h"
+#include "report.h"
 #include "startup.h"
 #include "tap.h"
 
@@ -53,6 +55,9 @@ struct Config {
     std::string menuSuffix = "_Game";    // the mode only acts on screens whose name ends like this
     std::string menuSound = "Nav_InGame_Options";
     bool saveWaitAudio = false;          // record each wait to NoteByNote_debug\ (for bug reports)
+    bool testUnverifiedGame = false;     // run on a game build nobody verified (addresses found by pattern)
+    int testAutoPassMs = 0;              // a wait passes by itself after this long (testing without a guitar)
+    bool testPatternsOnly = false;       // dev: ignore the verified addresses, use only the patterns
 };
 
 std::wstring DllDir() {
@@ -138,6 +143,13 @@ Config LoadConfig() {
                 "; 1 = save the guitar audio of each wait to NoteByNote_debug\\wait_<time>.wav (useful\n"
                 ";     to report a note that wasn't recognised; the files add up, delete them by hand)\n"
                 "SaveWaitAudio=0\n"
+                "; For testers of other game versions (leave both at 0 otherwise):\n"
+                "; 1 = on a game version Note-by-Note doesn't know yet, use the game addresses it finds by\n"
+                ";     itself (see NoteByNote_report.txt)\n"
+                "TestUnverifiedGame=0\n"
+                "; Milliseconds after which a wait passes by itself, as if you played the note (0 = off;\n"
+                "; to test without a guitar, e.g. 2000)\n"
+                "TestAutoPassMs=0\n"
                 "; Layout. Easier: open the menu and drag the parts with the mouse (corner = resize).\n"
                 "; Positions and widths in 1080p pixels (scaled with the screen height), sizes in percent.\n"
                 "; Banner: X of its centre from the screen centre, Y from the top\n"
@@ -186,6 +198,9 @@ Config LoadConfig() {
     c.initial.fastIntro = std::max(1, std::min(8, (int)GetPrivateProfileIntW(L"NoteByNote", L"FastIntro", 4, ini.c_str())));
     c.initial.fixCrash = GetPrivateProfileIntW(L"NoteByNote", L"FixGameCrash", 1, ini.c_str()) != 0;
     c.saveWaitAudio = GetPrivateProfileIntW(L"NoteByNote", L"SaveWaitAudio", 0, ini.c_str()) != 0;
+    c.testUnverifiedGame = GetPrivateProfileIntW(L"NoteByNote", L"TestUnverifiedGame", 0, ini.c_str()) != 0;
+    c.testAutoPassMs = std::max(0, (int)GetPrivateProfileIntW(L"NoteByNote", L"TestAutoPassMs", 0, ini.c_str()));
+    c.testPatternsOnly = GetPrivateProfileIntW(L"NoteByNote", L"TestPatternsOnly", 0, ini.c_str()) != 0;  // not in the default ini
     // Layout (defaults from overlay::Settings; sizes kept in the range the mouse allows).
     const overlay::Settings d;
     auto num = [&](const wchar_t* key, int def) { return (int)GetPrivateProfileIntW(L"NoteByNote", key, def, ini.c_str()); };
@@ -328,6 +343,24 @@ bool GameFocused() {
     return pid == GetCurrentProcessId();
 }
 
+// Report: what was read of a song's chart, and whether Dynamic Difficulty matches it.
+void ReportChart(const Chart& chart, const std::string& songKey) {
+    size_t notes = 0;
+    for (int n : chart.levelCounts) notes += (size_t)n;
+    std::vector<int> levels;
+    double len = 0;
+    const bool dd = game::GetPhraseLevels(&levels);
+    game::GetSongLength(&len);
+    report::Limited("chart", 4, "  Song %s: %s, %d levels, %zu phrase iterations, %zu notes, %zu beats, capo %d, %.1f s long",
+                    songKey.empty() ? "?" : songKey.c_str(), chart.arrangement.c_str(), chart.Levels(), chart.pis.size(),
+                    notes, chart.beats.size(), chart.capo, len);
+    const std::string ddText = !dd ? "NOT READ"
+                               : levels.size() == chart.pis.size() ? "one level per phrase iteration: OK"
+                               : "DIFFERENT count (" + std::to_string(levels.size()) + " levels for " +
+                                     std::to_string(chart.pis.size()) + " phrase iterations)";
+    report::Limited("dd", 4, "  Dynamic Difficulty: %s", ddText.c_str());
+}
+
 // A key press edge detector (GetAsyncKeyState polling, only while the game window is focused).
 struct KeyEdge {
     bool down = false;
@@ -343,13 +376,16 @@ struct KeyEdge {
 DWORD WINAPI MainThread(LPVOID) {
     LogOpen(DllDir() + L"NoteByNote.log");
     Log("Note-by-Note starting");
+    report::Open(DllDir() + L"NoteByNote_report.txt");
     const Config cfg = LoadConfig();
     overlay::Settings st = cfg.initial;  // the live settings (the menu can change them)
     Log("config: enabled=%d menuKey=0x%X skipKey=0x%X lead=%dms early=%dms octaves=%d banner=%d chords=%d", st.enabled,
         cfg.menuKey, cfg.skipKey, st.leadMs, st.earlyMs, st.acceptOctaves, st.showBanner, st.waitChords);
     crashfix::Start(st.fixCrash);    // first of all: the game can crash any moment until then
     fastintro::Start(st.fastIntro);  // then: the logos are already playing
-    if (!game::Init()) { fastintro::Tick(true); return 0; }
+    if (cfg.testUnverifiedGame || cfg.testAutoPassMs)
+        report::Line("Test settings: TestUnverifiedGame=%d, TestAutoPassMs=%d", cfg.testUnverifiedGame, cfg.testAutoPassMs);
+    if (!game::Init(cfg.testUnverifiedGame, cfg.testPatternsOnly)) { fastintro::Tick(true); return 0; }
     overlay::Start(st);
 
     KeyEdge menuKey, skipKey;
@@ -387,6 +423,12 @@ DWORD WINAPI MainThread(LPVOID) {
     hint::Line waitHint;              // how to fix the last wrong note played during this wait
     DWORD frozenTick = 0, lastTapTry = 0, nextFreezeTry = 0, lastHeartbeat = 0, lastUnloadCheck = 0, nextChartTry = 0,
           songScreenTick = 0;
+    // Report: does the song clock run with the music? Checked once per song, over 1 s with the song
+    // not held.
+    bool clockChecked = false;
+    DWORD clockTick = 0;
+    int clockStill = 0;  // seconds the clock stood still (the song has not started yet)
+    double clockT = 0;
     long long totalSamples = 0;
     DebugAudio debugAudio;
     debugAudio.enabled = cfg.saveWaitAudio;
@@ -405,6 +447,7 @@ DWORD WINAPI MainThread(LPVOID) {
     for (;;) {
         Sleep(1);
         const DWORD now = GetTickCount();
+        game::Tick();
 
         // ---- 0. what the overlay shows (state of the previous iteration; 1 ms old is fine)
         {
@@ -549,11 +592,18 @@ DWORD WINAPI MainThread(LPVOID) {
         }
         startup::Tick(st.skipPopups, menuOk, menu, overlay::GameWindow(), now);  // Ubisoft popups at game start
         if (!menuOk) continue;
-        if (menu != lastMenu) { Log("screen: %s", menu.c_str()); lastMenu = menu; }
+        if (menu != lastMenu) {
+            Log("screen: %s", menu.c_str());
+            report::Limited(("screen " + menu).c_str(), 1, "  Screen: %s", menu.c_str());
+            lastMenu = menu;
+        }
         inSong = menu.size() >= cfg.menuSuffix.size() &&
                  menu.compare(menu.size() - cfg.menuSuffix.size(), std::string::npos, cfg.menuSuffix) == 0;
         std::string key;
-        if (game::GetSongKey(&key)) lastKey = key;  // only valid while browsing songs
+        if (game::GetSongKey(&key)) {  // only valid while browsing songs
+            if (key != lastKey) report::Limited("songkey", 3, "  Song highlighted in the list: %s", key.c_str());
+            lastKey = key;
+        }
 
         if (!inSong) {
             // Pause menu, song end, other screens: the game is in charge. If we were holding the song,
@@ -566,6 +616,7 @@ DWORD WINAPI MainThread(LPVOID) {
             game::ResetSongCache();
             lastT = -1;
             announced = false;
+            clockTick = 0;
             upcomingChord.clear();
             songScreenTick = 0;
             continue;
@@ -582,6 +633,10 @@ DWORD WINAPI MainThread(LPVOID) {
                 chartOk = true;
                 chartData = data;
                 lastT = -1;
+                clockChecked = false;
+                clockStill = 0;
+                clockTick = 0;
+                ReportChart(chart, lastKey);
                 const bool bassTracker = chart.bass || chart.bassUnsure;  // bass needs a longer window
                 if (bassTracker != trackerIsBass) {
                     trackerIsBass = bassTracker;
@@ -596,6 +651,27 @@ DWORD WINAPI MainThread(LPVOID) {
                 overlay::Toast("Note-by-Note: couldn't read this song's notes, it plays normally", 4000);
             } else if (st.enabled) {
                 overlay::Toast("Note-by-Note ON  -  F8 menu", 3500);
+            }
+        }
+
+        // Report: the song clock must run with the music (1 s with the song not held).
+        if (chartOk && !clockChecked) {
+            double ct;
+            if (frozen || menuHold || !game::GetSongTime(&ct)) {
+                clockTick = 0;
+            } else if (!clockTick) {
+                clockTick = now;
+                clockT = ct;
+            } else if (now - clockTick >= 1000) {
+                const double moved = ct - clockT;
+                if (moved == 0 && ++clockStill < 20) {
+                    clockTick = 0;  // not started yet (the song's intro): measure again
+                } else {
+                    report::Limited("clock", 3, "  Song clock: moved %.2f s in 1 s: %s", moved,
+                                    (moved > 0.5 && moved < 1.6) ? "OK"
+                                    : moved == 0 ? "FAILED (it never moved in 20 s)" : "FAILED (or the game was paused)");
+                    clockChecked = true;
+                }
             }
         }
 
@@ -630,10 +706,13 @@ DWORD WINAPI MainThread(LPVOID) {
 
         // ---- 7. waiting: the player's notes, or a skip
         if (frozen) {
-            if (skip) {
-                Log("SKIP %.3f %s after waiting %.2f s", waitFor.time, Describe(chart, waitFor).c_str(), (now - frozenTick) / 1000.0);
-                debugAudio.Save(debugDir, waitFor.time, waitAudioStart, 48000);  // skipped = maybe not detected
-                overlay::Toast("Skipped", 1200);
+            // Testing without a guitar: after TestAutoPassMs the wait passes as if the note was played.
+            const bool autoPass = !skip && cfg.testAutoPassMs > 0 && now - frozenTick >= (DWORD)cfg.testAutoPassMs;
+            if (skip || autoPass) {
+                Log("%s %.3f %s after waiting %.2f s", skip ? "SKIP" : "AUTO-PASS (test)", waitFor.time,
+                    Describe(chart, waitFor).c_str(), (now - frozenTick) / 1000.0);
+                if (skip) debugAudio.Save(debugDir, waitFor.time, waitAudioStart, 48000);  // skipped = maybe not detected
+                overlay::Toast(skip ? "Skipped" : "Test: passed by itself", 1200);
                 cursor = waitFor.time;
                 releaseWait();
                 continue;

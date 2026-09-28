@@ -1,7 +1,10 @@
-// game.h: everything the mod knows about Rocksmith2014.exe (Steam, "LPDecember2024" build).
+// game.h: everything the mod knows about Rocksmith2014.exe.
 //
-// All addresses were verified on this build by disassembling a memory dump of the running game
-// (the exe is encrypted on disk and protected by VMProtect). See BITACORA.md, "the freeze mechanism".
+// Verified build: Steam "Learn & Play" (December 2024, RSMods "LPDecember2024"): every address was
+// checked by disassembling a memory dump of the running game (the exe is encrypted on disk and
+// protected by VMProtect; see BITACORA.md, "the freeze mechanism"). Other builds (the older
+// Remastered of September 2022) are handled by finding the same addresses by byte pattern; they
+// only run in test mode until verified, and NoteByNote_report.txt says what was found.
 // Nothing here modifies game CODE: we only read/write game DATA and call game functions.
 #pragma once
 #include <cstdint>
@@ -16,7 +19,13 @@ namespace nbn::game {
 
 // Checks the exe version and waits (up to ~2 min) until the game's code has been decrypted in memory
 // and every function we call looks right. Returns false if the mod must stay disabled.
-bool Init();
+// allowUnverified: on a build that isn't verified, use the addresses found by pattern (test mode).
+// patternsOnly (dev): ignore the verified table, as if the build were unknown (tests the patterns).
+// Writes the start of the report (report.h), which must be open.
+bool Init(bool allowUnverified, bool patternsOnly = false);
+
+// Call often from the main loop: finishes the report's checks that need time (song clock after a resume).
+void Tick();
 
 // Internal menu/screen name, e.g. "LearnASong_Game", "LearnASong_Pause", "MainMenu".
 bool GetMenu(std::string* menu);

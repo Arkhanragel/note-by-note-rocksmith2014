@@ -130,8 +130,8 @@ class SetupForm : Form {
             lines.Add("Game version: supported, but Rocksmith2014.exe was changed (patched?). Note-by-Note will try; "
                       + "if it stays off, please report: " + st.ExeInfo + ".");
         else if (st.VersionOlder)
-            lines.Add("Game version: the older Rocksmith 2014 Remastered (September 2022). Note-by-Note only works "
-                      + "with the current Steam version (December 2024 update) for now: it would stay switched off.");
+            lines.Add("Game version: the older Rocksmith 2014 Remastered (September 2022). Note-by-Note isn't verified "
+                      + "on it yet: it stays switched off, except for testers (TestUnverifiedGame=1 in NoteByNote.ini).");
         else
             lines.Add("Game version: NOT the one Note-by-Note was made for (it will stay switched off). "
                       + "Please report: " + st.ExeInfo + ".");
