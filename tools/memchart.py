@@ -4,7 +4,7 @@ against the charts ChartDump exports from the song files:
 
     python tools/memchart.py > mem.nbn          then compare with charts/nbn/<song>/<arrangement>.nbn
 
-Layout (verified on the Dec 2024 build, see .claude/skills/rocksmith-internals):
+Layout (verified on the Dec 2024 build, see BITACORA.md, "Song data"):
   song data = [song + 0x78]  (the SNG file, loaded; std::vector = begin, end, capacity)
     +0x40 levels vector (Level = 0x64 bytes, in difficulty order: +0x30 notes vector)
     +0x64 phrase iterations (0x18 bytes: phraseId, start, end, ...)

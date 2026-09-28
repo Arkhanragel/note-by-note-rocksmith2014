@@ -23,3 +23,6 @@ dist/
 
 # Editor settings (per machine)
 .vscode/
+
+# Local development notes (not published)
+.claude/

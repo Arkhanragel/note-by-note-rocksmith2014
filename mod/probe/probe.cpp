@@ -1321,7 +1321,7 @@ static DWORD WINAPI MainThread(LPVOID) {
 
         // Commands come from a text file instead of keys. Every key we tried clashed with something:
         // F10 = Windows menu bar, F11 = white flash, F12 = Steam screenshot, Ctrl+number = the game's
-        // own shortcuts. With a file, Claude (or a script) sends commands while the player just plays.
+        // own shortcuts. With a file, a script sends commands while the player just plays.
         std::string cmd = ReadCommand();
         if (cmd.empty()) continue;
         Log("CMD    %s", cmd.c_str());
