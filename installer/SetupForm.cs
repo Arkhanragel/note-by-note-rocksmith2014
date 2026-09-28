@@ -13,12 +13,15 @@ class SetupForm : Form {
     readonly TextBox folder = new TextBox();
     readonly Label status = new Label();
     readonly GroupBox audio = new GroupBox();
+    readonly Label audioKept = new Label();  // shown in the audio box instead of the choices when RS_ASIO.ini exists
+    readonly Control[] audioChoices;                 // the driver / input choices (only for a new RS_ASIO.ini)
     readonly ComboBox driver = new ComboBox();
     readonly NumericUpDown channel = new NumericUpDown();
     readonly CheckBox removeData = new CheckBox();
     readonly Button install = new Button(), uninstall = new Button();
     readonly TextBox output = new TextBox();
     string gameDir;  // the resolved game folder (null = none)
+    bool newIni;     // no RS_ASIO.ini yet: the install creates it from the audio choices
 
     public SetupForm() {
         Text = $"Note-by-Note for Rocksmith 2014 - Setup {GameInstall.AppVersion()}";
@@ -44,23 +47,25 @@ class SetupForm : Form {
         browse.Click += (s, e) => Browse();
         Controls.Add(browse);
         y += 34;
-        status.SetBounds(12, y, 616, 64);
+        status.SetBounds(12, y, 616, 84);
         Controls.Add(status);
-        y += 70;
+        y += 90;
 
-        // Audio: only when RS_ASIO isn't installed yet (then RS_ASIO.ini is created from this).
-        audio.Text = "Audio (RS_ASIO is not installed yet: it will be, with this device)";
+        // Audio: the choices are only used when there's no RS_ASIO.ini yet (it's created from them);
+        // an existing RS_ASIO.ini is kept as it is, and then the box just says so.
         audio.SetBounds(12, y, 616, 92);
         Controls.Add(audio);
-        audio.Controls.Add(new Label { Text = "ASIO driver of your audio interface:", AutoSize = true, Location = new Point(12, 28) });
+        var driverLabel = new Label { Text = "ASIO driver of your audio interface:", AutoSize = true, Location = new Point(12, 28) };
         driver.DropDownStyle = ComboBoxStyle.DropDownList;
         driver.SetBounds(250, 24, 350, 26);
-        audio.Controls.Add(driver);
-        audio.Controls.Add(new Label { Text = "Input your guitar is plugged into:", AutoSize = true, Location = new Point(12, 60) });
+        var channelLabel = new Label { Text = "Input your guitar is plugged into:", AutoSize = true, Location = new Point(12, 60) };
         channel.SetBounds(250, 56, 60, 26);
         channel.Minimum = 1;
         channel.Maximum = 32;
-        audio.Controls.Add(channel);
+        audioChoices = new Control[] { driverLabel, driver, channelLabel, channel };
+        audio.Controls.AddRange(audioChoices);
+        audioKept.SetBounds(12, 26, 590, 56);
+        audio.Controls.Add(audioKept);
         y += 100;
 
         install.SetBounds(12, y, 150, 34);
@@ -119,19 +124,40 @@ class SetupForm : Form {
         }
         var st = new GameInstall(gameDir, Log).Status();
         var lines = new System.Collections.Generic.List<string> { "Found: " + gameDir };
-        lines.Add(st.VersionSupported ? "Game version: supported."
-                                      : "Game version: NOT the one Note-by-Note was made for. It can be installed, but it will stay switched off.");
+        if (st.VersionSupported)
+            lines.Add("Game version: supported.");
+        else if (st.VersionModified)
+            lines.Add("Game version: supported, but Rocksmith2014.exe was changed (patched?). Note-by-Note will try; "
+                      + "if it stays off, please report: " + st.ExeInfo + ".");
+        else if (st.VersionOlder)
+            lines.Add("Game version: the older Rocksmith 2014 Remastered (September 2022). Note-by-Note only works "
+                      + "with the current Steam version (December 2024 update) for now: it would stay switched off.");
+        else
+            lines.Add("Game version: NOT the one Note-by-Note was made for (it will stay switched off). "
+                      + "Please report: " + st.ExeInfo + ".");
         lines.Add(st.RsAsio ? "RS_ASIO: installed" + (st.RsAsioVersion != null ? $" ({st.RsAsioVersion})" : "") + "; it will be replaced by Note-by-Note's build (backed up)."
                             : "RS_ASIO: not installed (Note-by-Note hears your guitar through it; it will be installed).");
         if (st.Installed != null)
             lines.Add("Note-by-Note: installed" + (st.Installed != "" ? " (" + st.Installed + ")" : " (by hand)") + ".");
         status.Text = string.Join(Environment.NewLine, lines);
-        status.ForeColor = st.VersionSupported ? SystemColors.ControlText : Color.DarkOrange;
+        status.ForeColor = st.VersionSupported ? SystemColors.ControlText : st.VersionModified ? Color.DarkOrange : Color.Firebrick;
         install.Enabled = true;
         install.Text = st.Installed != null ? "Update / Repair" : "Install";
         uninstall.Enabled = st.Installed != null;
-        audio.Enabled = !st.RsAsio && st.Installed == null;
-        if (!afterRun && audio.Enabled && driver.Items.Count == 0)
+        // The same test as GameInstall.Install: a new RS_ASIO.ini only when there's none.
+        newIni = !st.RsAsioIni;
+        audio.Enabled = true;
+        foreach (var c in audioChoices) c.Visible = newIni;
+        audioKept.Visible = !newIni;
+        if (newIni) {
+            audio.Text = "Audio (there's no RS_ASIO.ini yet: it will be created with this device)";
+        } else {
+            audio.Text = "Audio";
+            audioKept.Text = "Your RS_ASIO.ini is kept as it is"
+                + (string.IsNullOrEmpty(st.RsAsioDriver) ? "." : $" (it uses \"{st.RsAsioDriver}\").")
+                + " To change the audio device, edit RS_ASIO.ini in the game folder.";
+        }
+        if (!afterRun && newIni && driver.Items.Count == 0)
             Log("No ASIO driver found. Rocksmith with RS_ASIO needs one: your audio interface's own driver, or ASIO4ALL.");
     }
 
@@ -148,7 +174,7 @@ class SetupForm : Form {
         UseWaitCursor = true;
         try {
             var gi = new GameInstall(gameDir, Log);
-            if (doInstall) gi.Install(audio.Enabled ? driver.SelectedItem as string : null, (int)channel.Value - 1);
+            if (doInstall) gi.Install(newIni ? driver.SelectedItem as string : null, (int)channel.Value - 1);
             else gi.Uninstall(removeData.Checked);
         } catch (Exception ex) {
             Log("ERROR: " + ex.Message);

@@ -74,7 +74,12 @@ class Manifest {
 class GameStatus {
     public bool GameFound;
     public bool VersionSupported;  // the exe the mod was made for (else the mod stays switched off)
+    public bool VersionModified;   // that same build, but changed on disk (a patched exe): may work
+    public bool VersionOlder;      // the older Remastered build (September 2022), not supported yet
+    public string ExeInfo;         // the exe's numbers, for a bug report when it isn't supported
     public bool RsAsio;            // RS_ASIO is installed (avrt.dll + RS_ASIO.dll + RS_ASIO.ini)
+    public bool RsAsioIni;         // RS_ASIO.ini is there: the install keeps it (and the player's audio device)
+    public string RsAsioDriver;    // the ASIO driver in that RS_ASIO.ini (output's, else the guitar input's)
     public string RsAsioVersion;   // its file version, if it has one
     public string Installed;       // installed Note-by-Note version (null = not installed, "" = unknown)
 }
@@ -84,6 +89,11 @@ class GameInstall {
     public const string SetupExeName = "Note-by-Note Setup.exe";
     // PE checksum of the Rocksmith2014.exe the mod supports (the same check as mod/nbn/game.cpp).
     const uint SupportedChecksum = 0x0176EC34;
+    // Link time in its PE header. A patched copy of that exe keeps this and the CheckSum field of
+    // its header, while the checksum computed over the file changes.
+    const uint SupportedTimestamp = 0x67497D00;
+    // The older build many players keep (RSMods' "RemasteredSeptember2022", same kind of checksum).
+    const uint OlderChecksum = 0x00B13D7C;
     static readonly string[] Dlls = { "avrt.dll", "RS_ASIO.dll", "NoteByNote.dll" };
 
     readonly string game, inst, backup, manifestPath;
@@ -110,9 +120,25 @@ class GameInstall {
     public GameStatus Status() {
         var st = new GameStatus { GameFound = GameLocator.IsGameDir(game) };
         if (!st.GameFound) return st;
-        try { st.VersionSupported = PeChecksum(Path.Combine(game, GameLocator.ExeName)) == SupportedChecksum; } catch { }
+        try {
+            var b = File.ReadAllBytes(Path.Combine(game, GameLocator.ExeName));
+            uint sum = PeChecksum(b), header = PeHeaderChecksum(b), time = PeTimestamp(b);
+            st.VersionSupported = sum == SupportedChecksum;
+            st.VersionModified = !st.VersionSupported && header == SupportedChecksum && time == SupportedTimestamp;
+            st.VersionOlder = sum == OlderChecksum;
+            st.ExeInfo = $"checksum {sum:X8}, header {header:X8}, time {time:X8}, size {b.Length}";
+            var build = SteamBuildId();
+            if (build != null) st.ExeInfo += ", Steam build " + build;
+        } catch (Exception ex) { st.ExeInfo = "could not read the exe: " + ex.Message; }
         var rs = Path.Combine(game, "RS_ASIO.dll");
-        st.RsAsio = File.Exists(rs) && File.Exists(Path.Combine(game, "avrt.dll")) && File.Exists(Path.Combine(game, "RS_ASIO.ini"));
+        var rsIni = Path.Combine(game, "RS_ASIO.ini");
+        st.RsAsioIni = File.Exists(rsIni);
+        st.RsAsio = File.Exists(rs) && File.Exists(Path.Combine(game, "avrt.dll")) && st.RsAsioIni;
+        if (st.RsAsioIni) {
+            // Sound can go out through WASAPI instead (EnableWasapiOutputs): then the guitar's driver.
+            st.RsAsioDriver = ReadIni(rsIni, "Asio.Output", "Driver");
+            if (string.IsNullOrWhiteSpace(st.RsAsioDriver)) st.RsAsioDriver = ReadIni(rsIni, "Asio.Input.0", "Driver");
+        }
         if (File.Exists(rs)) {
             var fv = FileVersionInfo.GetVersionInfo(rs).FileVersion;
             st.RsAsioVersion = string.IsNullOrWhiteSpace(fv) ? null : fv.Trim();
@@ -354,8 +380,7 @@ class GameInstall {
 
     // The PE checksum Windows' MapFileAndCheckSum computes: the file as 16-bit words, added with
     // end-around carry, skipping the header's own CheckSum field, plus the file length.
-    static uint PeChecksum(string path) {
-        var b = File.ReadAllBytes(path);
+    static uint PeChecksum(byte[] b) {
         var field = BitConverter.ToInt32(b, 0x3C) + 24 + 64;  // e_lfanew -> optional header -> CheckSum
         ulong sum = 0;
         for (var i = 0; i < b.Length; i += 2) {
@@ -365,6 +390,23 @@ class GameInstall {
         }
         sum = (sum & 0xFFFF) + (sum >> 16);
         return (uint)sum + (uint)b.Length;
+    }
+
+    // The CheckSum field written in the header (by the linker; not updated when the file is patched).
+    static uint PeHeaderChecksum(byte[] b) => BitConverter.ToUInt32(b, BitConverter.ToInt32(b, 0x3C) + 24 + 64);
+
+    // The link time in the file header (e_lfanew -> PE signature -> Machine, NumberOfSections, TimeDateStamp).
+    static uint PeTimestamp(byte[] b) => BitConverter.ToUInt32(b, BitConverter.ToInt32(b, 0x3C) + 8);
+
+    // Steam's build number of the installed game, from steamapps\appmanifest_221680.acf next to
+    // steamapps\common\Rocksmith2014 (null = not a Steam folder layout or not readable).
+    string SteamBuildId() {
+        try {
+            var acf = Path.GetFullPath(Path.Combine(game, @"..\..\appmanifest_221680.acf"));
+            if (!File.Exists(acf)) return null;
+            var mm = System.Text.RegularExpressions.Regex.Match(File.ReadAllText(acf), @"""buildid""\s+""(\d+)""");
+            return mm.Success ? mm.Groups[1].Value : null;
+        } catch { return null; }
     }
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]

@@ -18,6 +18,10 @@ namespace {
 
 // ------------------------------------------------------------------ verified addresses (RVAs)
 constexpr DWORD kExpectedChecksum = 0x0176EC34;  // PE checksum of the supported exe
+// The same build patched on disk (e.g. by an old CDLC exe patcher) keeps the checksum and link
+// time written in its header, while the checksum computed over the file changes.
+constexpr DWORD kExpectedTimestamp = 0x67497D00;  // link time in the PE header of the supported exe
+constexpr DWORD kOlderChecksum = 0x00B13D7C;      // the older Remastered build (Sept 2022): not supported yet
 
 constexpr uintptr_t kRoot = 0x00F6062C;               // root pointer of the song/menu structures
 constexpr uint32_t kMenuChain[] = {0x28, 0x8C, 0x0};  // -> menu name string
@@ -205,8 +209,16 @@ bool Init() {
     GetModuleFileNameA(nullptr, exe, MAX_PATH);
     DWORD headerSum = 0, checksum = 0;
     MapFileAndCheckSumA(exe, &headerSum, &checksum);
-    Log("game: %s base=0x%08X checksum=0x%08X", exe, (unsigned)g_base, checksum);
-    if (checksum != kExpectedChecksum) {
+    auto dos = (const IMAGE_DOS_HEADER*)g_base;
+    auto nt = (const IMAGE_NT_HEADERS*)(g_base + dos->e_lfanew);
+    DWORD timestamp = nt->FileHeader.TimeDateStamp;
+    Log("game: %s base=0x%08X checksum=0x%08X header=0x%08X time=0x%08X", exe, (unsigned)g_base, checksum,
+        headerSum, timestamp);
+    if (checksum != kExpectedChecksum && headerSum == kExpectedChecksum && timestamp == kExpectedTimestamp) {
+        // Same build, some bytes changed on disk. The function check below still has to pass.
+        Log("the supported game version, modified on disk (patched exe?): trying anyway.");
+    } else if (checksum != kExpectedChecksum) {
+        if (checksum == kOlderChecksum) Log("this is the older Rocksmith 2014 Remastered build (September 2022).");
         Log("UNSUPPORTED game version (expected checksum 0x%08X). Note-by-Note stays disabled.", kExpectedChecksum);
         return false;
     }
