@@ -17,3 +17,9 @@ docs/dlc_scan.txt
 recordings/
 mod/build/
 tools/detector/synth_chords.wav
+
+# Release packages (package.ps1)
+dist/
+
+# Editor settings (per machine)
+.vscode/

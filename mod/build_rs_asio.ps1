@@ -23,4 +23,10 @@ $msArgs = @((Join-Path $sub "RS_ASIO\RS_ASIO.vcxproj"), "/nologo", "/v:minimal",
             "/p:Platform=Win32", "/p:PlatformToolset=v143", "/p:OutDir=$out", "/p:IntDir=$int")
 & $msbuild @msArgs
 if ($LASTEXITCODE -ne 0) { throw "RS_ASIO build failed" }
+# avrt.dll: RS_ASIO's small loader (the game loads it as Windows' avrt.dll, it loads RS_ASIO.dll).
+# Unchanged upstream code; built too so the installer can ship a matching pair.
+$msArgs[0] = Join-Path $sub "avrt\avrt.vcxproj"
+$msArgs[-1] = "/p:IntDir=" + (Join-Path $PSScriptRoot "build\avrt_obj\")
+& $msbuild @msArgs
+if ($LASTEXITCODE -ne 0) { throw "avrt build failed" }
 Get-ChildItem (Join-Path $out "*.dll") | ForEach-Object { "Built: " + $_.FullName }

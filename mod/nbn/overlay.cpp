@@ -353,112 +353,394 @@ void DrawClock(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec
 // reach the highway's fretboard. The next note to play is highlighted; played ones fade out. Under
 // the notes, the song's beat grid: bar lines with bar numbers, faint beat lines, every other bar
 // shaded; held notes get a tail. With these, the gaps between notes can be read as rhythm.
+// Fast passages (setting tabSpread): the whole tab zooms in smoothly so the notes coming up are far
+// enough apart to read, and a fast repeat of one fret is drawn once, "12 x8".
 void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 ds) {
     const float s = S * st.tabSize / 100.0f;  // the tab's own size: string gap, text
     const int n = v.bass ? 4 : 6;
     const ImU32 gold = IM_COL32(255, 206, 84, 255);
     // top: a lane for chord names (y0 + 6), then the bar numbers right above the strings.
-    const float w = std::min(ds.x, st.tabWidth * S), gap = 28 * s, top = 60 * s, bottom = 18 * s, labelW = 26 * s, pad = 12 * s;
-    const float h = top + gap * (n - 1) + bottom;
+    // bottom: room under the low string, plus the rhythm lane (stems, beams, triplet "3") when shown.
+    const bool rhythm = st.tabRhythm && !v.tabBeats.empty();
+    const float stemLen = 24 * s;
+    const float w = std::min(ds.x, st.tabWidth * S), gap = 28 * s, top = 60 * s, labelW = 26 * s, pad = 12 * s;
+    const float bottom = rhythm ? 18 * s + stemLen + 18 * s : 18 * s;
+    // Two rows (pages only, setting tabTwoRows): the box holds two staffs, one under the other.
+    const bool twoRows = st.tabPage && st.tabTwoRows;
+    const float rowH = top + gap * (n - 1) + bottom;  // one staff with its lanes
+    const float h = rowH * (twoRows ? 2 : 1);
     // Position from the settings, kept on screen.
     const ImVec2 p0 = Place(ds.x * 0.5f + st.tabX * S, st.tabY * S, w, h, ds);
     const float x0 = p0.x, y0 = p0.y;
     g_box[kTab] = {p0, ImVec2(x0 + w, y0 + h), true};
-    dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x0 + w, y0 + h), IM_COL32(14, 14, 20, 175), 10 * s);
+    // Background: how solid is the player's choice (100 % hides the game's own text behind the tab).
+    const int bgA = std::max(0, std::min(100, st.tabOpacity)) * 255 / 100;
+    dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x0 + w, y0 + h), IM_COL32(14, 14, 20, bgA), 10 * s);
 
     const float lineL = x0 + pad + labelW, lineR = x0 + w - pad;
-    const float nowX = lineL + (lineR - lineL) * 0.16f;  // a little of the past stays visible on the left
+    // Where "now" sits: scrolling = the fixed line; pages = where the cursor starts on a new page (the
+    // same place, so both modes look alike). A little of the past stays visible on its left.
+    constexpr float kCursorStart = 0.08f;  // of the width, from the left edge (+ a small margin)
+    const float pageL = lineL + 6 * s;
+    const float nowX = pageL + (lineR - pageL) * kCursorStart;
     const double secs = std::max(1, st.tabSeconds);
     const float pxPerS = (float)((lineR - nowX) / secs);
-    const float tiny = 19 * s, fs = 21 * s;
-    auto rowY = [&](int str) { return y0 + top + (n - 1 - str) * gap; };  // thinnest on top
-
-    for (int str = 0; str < n; ++str) {
-        const float y = rowY(str);
-        const ImU32 c = (kStringColor[str] & 0x00FFFFFF) | (150u << 24);
-        const ImVec2 ns = g_fontUi->CalcTextSizeA(tiny, FLT_MAX, 0, kStringName[str]);
-        dl->AddText(g_fontUi, tiny, ImVec2(x0 + pad, y - ns.y * 0.5f), c, kStringName[str]);
-        dl->AddLine(ImVec2(lineL, y), ImVec2(lineR, y), c, 1.5f * s);
-    }
+    // nsz: the size of the fret numbers and their boxes. Starts at the player's note size (menu), and in fast
+    // passages shrinks by itself a little below it (see the zoom below); the items' widths are measured at
+    // the player's size first. fs follows it.
+    const float baseNote = std::max(60, std::min(130, st.tabNoteSize)) / 100.0f;
+    float nsz = baseNote;
+    const float tiny = 19 * s;
+    float fs = 21 * s * nsz;
+    float staffY = y0;  // top of the staff being drawn (the lower row: y0 + rowH)
+    auto rowY = [&](int str) { return staffY + top + (n - 1 - str) * gap; };  // thinnest on top
 
     const double now = v.songTime;
-    auto timeX = [&](double t) { return nowX + (float)((t - now) * pxPerS); };
-    const float staffTop = rowY(n - 1) - 8 * s, staffBottom = rowY(0) + 8 * s;
-    dl->PushClipRect(ImVec2(lineL - 4 * s, y0), ImVec2(lineR + 4 * s, y0 + h), true);
 
-    // Rhythm grid, under everything else (like the bar lines of printed tab): every other bar gets a
-    // faint shade so bars read at a glance, each bar starts with a clear line and its number, and the
-    // other beats get a thin faint line. Notes between two beat lines are "in between" the beats.
-    for (size_t i = 0; i < v.tabBeats.size(); ++i) {
-        const TabBeat& b = v.tabBeats[i];
-        if (!b.downbeat || (b.measure & 1) == 0) continue;
-        double end = b.time + 3600;  // until the next bar line (or off the right edge)
-        for (size_t j = i + 1; j < v.tabBeats.size(); ++j)
-            if (v.tabBeats[j].downbeat) { end = v.tabBeats[j].time; break; }
-        const float xa = std::max(lineL, timeX(b.time)), xb = std::min(lineR, timeX(end));
-        if (xb > xa) dl->AddRectFilled(ImVec2(xa, staffTop), ImVec2(xb, staffBottom), IM_COL32(255, 255, 255, 14));
+    // What gets drawn: one item per note or chord. With "spread" on, a fast repeat of the same fret
+    // on the same string (4+ notes, each within kRunGap of the previous one) becomes ONE item drawn
+    // as "12 x8" (x = how many are still to play), so a tremolo-like run doesn't fill the tab.
+    struct Item {
+        const TabNote* note;  // the (first) note: frets, chord name, ignore
+        double time, last;    // first and last note's time (the same unless it's a run)
+        double end;           // when the last note stops ringing
+        int count, left;      // notes in the run / still to play (1 / 1 for a plain note)
+        float half;           // half the width it takes on screen (widest fret box or chord name)
+    };
+    const bool spread = st.tabSpread;
+    constexpr double kRunGap = 0.12;  // 16th notes at 125 bpm or faster
+    auto sameFret = [](const TabNote& a, const TabNote& b) {
+        return !a.chord && !b.chord && a.ignore == b.ignore && std::equal(std::begin(a.frets), std::end(a.frets), b.frets);
+    };
+    // The fret box label, and for a run the small "x8" after it.
+    auto runText = [](const Item& it) { return it.count > 1 ? "x" + std::to_string(it.left > 0 ? it.left : it.count) : std::string(); };
+    auto boxHalf = [&](const std::string& fret, const std::string& run) {
+        const ImVec2 ls = g_fontBold->CalcTextSizeA(fs, FLT_MAX, 0, fret.c_str());
+        float w = std::max(ls.x, ls.y * 0.8f);
+        if (!run.empty()) w += 3 * s * nsz + g_fontUi->CalcTextSizeA(tiny * 0.85f * nsz, FLT_MAX, 0, run.c_str()).x;
+        return w * 0.5f + 5 * s * nsz;
+    };
+    std::vector<Item> items;
+    for (size_t i = 0; i < v.tab.size();) {
+        size_t j = i + 1;
+        if (spread)
+            while (j < v.tab.size() && sameFret(v.tab[j], v.tab[i]) && v.tab[j].time - v.tab[j - 1].time <= kRunGap) ++j;
+        if (j - i < 4) j = i + 1;  // 2 or 3 quick repeats stay separate notes
+        Item it{&v.tab[i], v.tab[i].time, v.tab[j - 1].time, v.tab[j - 1].time + v.tab[j - 1].sustain, (int)(j - i), 0, 0};
+        for (size_t k = i; k < j; ++k) it.left += v.tab[k].time >= now - 0.02;
+        const std::string run = runText(it);
+        for (int str = 0; str < n; ++str)
+            if (it.note->frets[str] >= 0) it.half = std::max(it.half, boxHalf(std::to_string(it.note->frets[str]), run));
+        if (it.note->chord && !it.note->name.empty())
+            it.half = std::max(it.half, g_fontBold->CalcTextSizeA(tiny, FLT_MAX, 0, it.note->name.c_str()).x * 0.5f + 2 * s);
+        items.push_back(it);
+        i = j;
     }
-    for (const TabBeat& b : v.tabBeats) {
-        const float x = timeX(b.time);
-        if (x < lineL - 4 * s || x > lineR + 4 * s) continue;
-        if (b.downbeat) {
-            dl->AddLine(ImVec2(x, staffTop), ImVec2(x, staffBottom), IM_COL32(255, 255, 255, 150), 2 * s);
-            const std::string num = std::to_string(b.measure);
-            const ImVec2 ns = g_fontUi->CalcTextSizeA(15 * s, FLT_MAX, 0, num.c_str());  // centred on the line
-            const float numY = rowY(n - 1) - gap * 0.46f - 2 * s - ns.y;  // just above the top string's fret boxes
-            dl->AddText(g_fontUi, 15 * s, ImVec2(std::floor(x - ns.x * 0.5f), std::floor(numY)), IM_COL32(200, 200, 210, 170), num.c_str());
-        } else {
-            dl->AddLine(ImVec2(x, staffTop + 6 * s), ImVec2(x, staffBottom - 6 * s), IM_COL32(255, 255, 255, 45), 1 * s);
+
+    // Time -> x: ONE speed for the whole tab at any moment, so every note moves at the same speed and
+    // the spacing stays exactly proportional to time (the rhythm reads true). Spread: the tab zooms in
+    // when the notes coming up are too close to read. Target zoom = the most any gap from 0.5 s ago to
+    // the end of the tab needs (both half widths + a small gap, over the gap's length), at most kMaxZoom.
+    // The zoom follows the target smoothly (zooming in in ~0.4 s, BEFORE the dense passage arrives,
+    // since the target looks ahead the whole tab; back out in ~1.5 s once it has passed), so the speed
+    // only changes gently, when the music gets denser or sparser. (Tried before: stretching each gap on
+    // its own / a speed that varies along the tab: the notes sped up and slowed down as they moved.)
+    constexpr double kMaxZoom = 6.0;
+    auto needIn = [&](double from, double to) {  // the zoom the gaps between from and to need
+        double need = 1.0;
+        if (spread)
+            for (size_t i = 1; i < items.size(); ++i) {
+                const double a = items[i - 1].time, dt = items[i].time - a;
+                if (dt <= 0 || items[i].time < from || a > to) continue;
+                const double px = (items[i - 1].half + items[i].half + 4 * s) / pxPerS;
+                need = std::max(need, std::min(kMaxZoom, px / dt));
+            }
+        return need;
+    };
+    const double target = needIn(now - 0.5, now + secs);
+    const double frameS = std::min(0.1, (double)ImGui::GetIO().DeltaTime);
+    // First the notes shrink (down to kMinNote of the player's size), so the tab keeps its speed; only
+    // past that does it zoom (moves faster). need = zoom needed at the player's note size.
+    constexpr double kMinNote = 0.75;
+    auto shrinkFor = [&](double need) { return std::max(kMinNote, std::min(1.0, 1.0 / need)); };
+    auto zoomFor = [&](double need) { return std::max(1.0, need * shrinkFor(need)); };
+    static double s_zoom = 1.0;  // the zoom need being shown (smoothed)
+    double originT = now;        // time -> x: x = originX + (t - originT) * pxPerS * zoom
+    float originX = nowX;
+    // Two rows: the row the cursor is on (current page) and the other one (the next page).
+    double nextT = 0, nextNeed = 1.0;  // the next page: song time at its left edge, its zoom need
+    bool curOnTop = true;              // the current page is the upper row
+    if (twoRows) {
+        // Pages follow each other: the next page starts where the cursor leaves this one, minus the
+        // bit of the past a new page keeps on its left (kCursorStart), so the cursor jumps from the
+        // right end of one row to the same point in the music on the other row. Each page's zoom is
+        // set from the notes on it alone, when it's laid out, so its notes never move. The rows take
+        // turns: when the cursor leaves a row, that row gets the page after the next.
+        static double s_rowT = -1e9;   // song time at the left edge of the current page
+        static double s_rowNeed = 1.0; // its zoom need
+        static bool s_rowTop = true;   // the current page is on the upper row
+        originX = pageL;
+        const float width = lineR - originX;
+        auto pageLen = [&](double need) { return width / (pxPerS * zoomFor(need)); };  // seconds on a page
+        // The need of the page starting at t: measured over the longest a page can be (need 1).
+        auto pageNeed = [&](double t) { return needIn(t - 0.2, t + pageLen(1.0)); };
+        auto after = [&](double t, double need) { return t + pageLen(need) * (1.0 - kCursorStart); };
+        if (now < s_rowT - 0.05 || now > s_rowT + 2 * pageLen(s_rowNeed)) {  // seek / new song
+            s_rowNeed = pageNeed(now);
+            s_rowT = now - kCursorStart * pageLen(s_rowNeed);
+            s_rowTop = true;
         }
+        for (int i = 0; i < 8 && now >= s_rowT + pageLen(s_rowNeed); ++i) {  // the cursor left the row
+            s_rowT = after(s_rowT, s_rowNeed);
+            s_rowNeed = pageNeed(s_rowT);
+            s_rowTop = !s_rowTop;
+        }
+        nextT = after(s_rowT, s_rowNeed);
+        nextNeed = pageNeed(nextT);
+        curOnTop = s_rowTop;
+        originT = s_rowT;
+        s_zoom = s_rowNeed;
+    } else if (!st.tabPage) {
+        // Scrolling: the notes move past a fixed "now" line. The zoom follows the target smoothly
+        // (zooming in in ~0.4 s, BEFORE the dense passage arrives, since the target looks ahead the
+        // whole tab; back out in ~1.5 s once it has passed).
+        const double tau = target > s_zoom ? 0.4 : 1.5;
+        s_zoom += (target - s_zoom) * (1.0 - std::exp(-frameS / tau));
+    } else {
+        // Pages (like Guitar Pro / Songsterr): the notes stand still and a cursor moves over them; fixed
+        // numbers stay readable however fast the cursor goes. When the cursor passes 75 % of the width,
+        // the page turns: the tab glides left (~0.3 s) so the cursor is back near the left edge. The
+        // zoom only changes when a page turns (a denser passage coming up than this page was laid out
+        // for turns the page early), so notes on a page never move.
+        static double s_pageT = -1e9;   // song time at the left edge of the page (where it's going)
+        static double s_shownT = -1e9;  // same, as shown (glides to s_pageT)
+        static double s_pageNeed = 1.0; // zoom need the page was laid out for
+        originX = pageL;
+        const float width = lineR - originX;
+        auto pageLen = [&](double need) { return width / (pxPerS * zoomFor(need)); };  // seconds on a page
+        const double cursor = (now - s_pageT) / pageLen(s_pageNeed);  // 0..1 across the page
+        const bool jumped = now < s_shownT - 0.05 || now > s_shownT + 3 * pageLen(s_pageNeed);  // seek / new song
+        if (jumped || cursor > 0.75 || target > s_pageNeed * 1.25) {
+            s_pageNeed = target;
+            s_pageT = now - kCursorStart * pageLen(target);
+            if (jumped) { s_shownT = s_pageT; s_zoom = s_pageNeed; }
+        }
+        const double k = 1.0 - std::exp(-frameS / 0.1);
+        s_shownT += (s_pageT - s_shownT) * k;
+        s_zoom += (s_pageNeed - s_zoom) * k;
+        originT = s_shownT;
     }
-
-    // The "now" line: where the highway's notes reach the fretboard.
-    dl->AddLine(ImVec2(nowX, y0 + top - 16 * s), ImVec2(nowX, rowY(0) + 12 * s), IM_COL32(255, 255, 255, 200), 2.5f * s);
-
-    bool nextFound = false;
+    double zoom = 1.0;
+    auto timeX = [&](double t) { return originX + (float)((t - originT) * pxPerS * zoom); };
+    // Sets up one staff: its zoom need (note size + zoom), the song time at originX, its top.
+    auto layout = [&](double need, double t, float top) {
+        nsz = baseNote * (float)shrinkFor(need);
+        fs = 21 * s * nsz;
+        zoom = zoomFor(need);
+        originT = t;
+        staffY = top;
+    };
+    bool nextFound = false;  // the next note to play is highlighted once (on the cursor's row first)
     const float pulse = 0.6f + 0.4f * std::sin((float)ImGui::GetTime() * 5.0f);
-    for (const auto& t : v.tab) {
-        const float x = timeX(t.time), xEnd = timeX(t.time + t.sustain);
-        if (xEnd < lineL - 30 * s || x > lineR + 30 * s) continue;
+    dl->PushClipRect(ImVec2(x0, y0), ImVec2(x0 + w, y0 + h), true);
+
+    // One staff: the strings, the beat grid, the cursor ("now" line, only on the row it's on), the
+    // rhythm lane and the notes, as set up by layout().
+    auto drawStaff = [&](bool withCursor) {
+        for (int str = 0; str < n; ++str) {
+            const float y = rowY(str);
+            const ImU32 c = (kStringColor[str] & 0x00FFFFFF) | (150u << 24);
+            const ImVec2 ns = g_fontUi->CalcTextSizeA(tiny, FLT_MAX, 0, kStringName[str]);
+            dl->AddText(g_fontUi, tiny, ImVec2(x0 + pad, y - ns.y * 0.5f), c, kStringName[str]);
+            dl->AddLine(ImVec2(lineL, y), ImVec2(lineR, y), c, 1.5f * s);
+        }
+        const float cursorX = timeX(now);  // the "now" line (fixed while scrolling, moving on pages)
+        const float staffTop = rowY(n - 1) - 8 * s, staffBottom = rowY(0) + 8 * s;
+        dl->PushClipRect(ImVec2(lineL - 4 * s, staffY), ImVec2(lineR + 4 * s, staffY + rowH), true);
+
+        // Rhythm grid, under everything else (like the bar lines of printed tab): every other bar gets a
+        // faint shade so bars read at a glance, each bar starts with a clear line and its number, and the
+        // other beats get a thin faint line. Notes between two beat lines are "in between" the beats.
+        // (The beats always come with the View, for the rhythm below; the lines are the tabBeats setting.)
+        static const std::vector<TabBeat> kNoBeats;
+        const std::vector<TabBeat>& grid = st.tabBeats ? v.tabBeats : kNoBeats;
+        for (size_t i = 0; i < grid.size(); ++i) {
+            const TabBeat& b = grid[i];
+            if (!b.downbeat || (b.measure & 1) == 0) continue;
+            double end = b.time + 3600;  // until the next bar line (or off the right edge)
+            for (size_t j = i + 1; j < grid.size(); ++j)
+                if (grid[j].downbeat) { end = grid[j].time; break; }
+            const float xa = std::max(lineL, timeX(b.time)), xb = std::min(lineR, timeX(end));
+            if (xb > xa) dl->AddRectFilled(ImVec2(xa, staffTop), ImVec2(xb, staffBottom), IM_COL32(255, 255, 255, 14));
+        }
+        for (const TabBeat& b : grid) {
+            const float x = timeX(b.time);
+            if (x < lineL - 4 * s || x > lineR + 4 * s) continue;
+            if (b.downbeat) {
+                dl->AddLine(ImVec2(x, staffTop), ImVec2(x, staffBottom), IM_COL32(255, 255, 255, 150), 2 * s);
+                const std::string num = std::to_string(b.measure);
+                const ImVec2 ns = g_fontUi->CalcTextSizeA(15 * s, FLT_MAX, 0, num.c_str());  // centred on the line
+                const float numY = rowY(n - 1) - gap * 0.46f - 2 * s - ns.y;  // just above the top string's fret boxes
+                dl->AddText(g_fontUi, 15 * s, ImVec2(std::floor(x - ns.x * 0.5f), std::floor(numY)), IM_COL32(200, 200, 210, 170), num.c_str());
+            } else {
+                dl->AddLine(ImVec2(x, staffTop + 6 * s), ImVec2(x, staffBottom - 6 * s), IM_COL32(255, 255, 255, 45), 1 * s);
+            }
+        }
+
+        // The "now" line: where the highway's notes reach the fretboard.
+        if (withCursor)
+            dl->AddLine(ImVec2(cursorX, staffY + top - 16 * s), ImVec2(cursorX, rowY(0) + 12 * s), IM_COL32(255, 255, 255, 200), 2.5f * s);
+
         // Played/passed notes fade out over half a second after they end (held notes stay while they
         // ring); ignored ones are always faint.
-        const float past = (float)std::max(0.0, now - (t.time + t.sustain));
-        float a = std::max(0.0f, 1.0f - past / 0.5f);
-        if (t.ignore) a *= 0.4f;
-        if (a <= 0) continue;
-        const bool next = !nextFound && !t.ignore && t.time >= now - 0.02;
-        if (next) nextFound = true;
+        // On pages they stay, dimmed, until the page turns (the left part of the page isn't left empty).
+        auto alphaOf = [&](const Item& it) {
+            float a = std::max(0.0f, 1.0f - (float)std::max(0.0, now - it.end) / 0.5f);
+            if (st.tabPage) a = std::max(a, 0.35f);
+            return it.note->ignore ? a * 0.4f : a;
+        };
 
-        int lo = -1, hi = -1;  // lowest/highest string played (for the chord bracket)
-        for (int str = 0; str < n; ++str)
-            if (t.frets[str] >= 0) { if (lo < 0) lo = str; hi = str; }
-        if (lo < 0) continue;
-        if (t.chord && hi > lo)
-            dl->AddLine(ImVec2(x, rowY(hi)), ImVec2(x, rowY(lo)), IM_COL32(255, 206, 84, (int)(170 * a)), 2 * s);
-        if (t.chord && !t.name.empty()) {
-            const ImVec2 ts = g_fontBold->CalcTextSizeA(tiny, FLT_MAX, 0, t.name.c_str());
-            dl->AddText(g_fontBold, tiny, ImVec2(x - ts.x * 0.5f, y0 + 6 * s), (gold & 0x00FFFFFF) | ((ImU32)(255 * a) << 24),
-                        t.name.c_str());
+        // Rhythm under the staff, like printed tab with rhythm (Guitar Pro, Songsterr): each note gets a
+        // stem, and the beams say how many notes fit in one beat: none = 1 (quarter note), 1 beam = 2
+        // (eighths), 2 = 4 (16ths), 3 = 8 (32nds), 4 = 16; a small "3" = triplets (3 in the time of 2).
+        // Half notes get a short stem, whole notes none; a dot after the stem = dotted (1.5x as long).
+        // A note's value = the time to the next note in the song's beats, rounded to the nearest of these.
+        // Notes starting in the same beat are beamed together; a run ("12 x8") gets its own notes' value.
+        if (rhythm && !items.empty()) {
+            struct Value { double beats; int beams; bool dot, triplet; };
+            static const Value kValues[] = {
+                {4, 0, false, false},      {3, 0, true, false},     {2, 0, false, false},       {1.5, 0, true, false},
+                {1, 0, false, false},      {0.75, 1, true, false},  {0.5, 1, false, false},     {1.0 / 3, 1, false, true},
+                {0.375, 2, true, false},   {0.25, 2, false, false}, {1.0 / 6, 2, false, true},  {0.125, 3, false, false},
+                {1.0 / 12, 3, false, true}, {0.0625, 4, false, false}};
+            // The beat t falls in (index into tabBeats, -1 = before the first one) and that beat's length.
+            const std::vector<TabBeat>& beats = v.tabBeats;
+            auto beatAt = [&](double t, double* len) {
+                const int i = (int)(std::upper_bound(beats.begin(), beats.end(), t,
+                                                     [](double x, const TabBeat& b) { return x < b.time; }) - beats.begin()) - 1;
+                const int j = std::max(0, std::min(i, (int)beats.size() - 2));
+                *len = beats.size() > 1 ? beats[j + 1].time - beats[j].time : 0.5;
+                return i;
+            };
+            struct Stem { float x, a; const Value* val; int beat; bool beamable; };
+            std::vector<Stem> stems(items.size());
+            for (size_t i = 0; i < items.size(); ++i) {
+                const Item& it = items[i];
+                double len = 0.5;
+                const int beat = beatAt(it.time, &len);
+                // Time to the next note; a run: the gap between its own notes; the last item: unknown (a beat).
+                const double d = it.count > 1 ? (it.last - it.time) / (it.count - 1)
+                                              : (i + 1 < items.size() ? items[i + 1].time - it.time : len);
+                const double q = len > 0 && d > 0 ? d / len : 1;
+                const Value* best = &kValues[4];
+                for (const Value& val : kValues)
+                    if (std::abs(std::log(q / val.beats)) < std::abs(std::log(q / best->beats))) best = &val;
+                stems[i] = {timeX(it.time), alphaOf(it), best, beat, it.count == 1};
+            }
+            // Beamed together at level k: neighbours in the same beat, both with more than k beams.
+            auto joined = [&](size_t i, int k) {
+                return i + 1 < stems.size() && stems[i].beamable && stems[i + 1].beamable && stems[i].beat >= 0 &&
+                       stems[i].beat == stems[i + 1].beat && stems[i].val->beams > k && stems[i + 1].val->beams > k;
+            };
+            const float yTop = staffBottom + 6 * s, yBot = yTop + stemLen, beamH = 3 * s, beamStep = 5 * s, stub = 8 * s;
+            auto ink = [](float a) { return IM_COL32(220, 220, 230, (int)(230 * a)); };
+            for (size_t i = 0; i < stems.size(); ++i) {
+                const Stem& m = stems[i];
+                if (m.a <= 0 || m.x < lineL - 40 * s || m.x > lineR + 40 * s) continue;
+                const Value& val = *m.val;
+                if (val.beats >= 4 && !val.dot) continue;  // whole note: no stem
+                const float end = val.beats >= 2 ? yTop + stemLen * 0.5f : yBot;  // half notes: a short stem
+                dl->AddLine(ImVec2(m.x, yTop), ImVec2(m.x, end), ink(m.a), 1.5f * s);
+                if (val.dot) dl->AddCircleFilled(ImVec2(m.x + 5 * s, end - 4 * s), 1.8f * s, ink(m.a));
+                for (int k = 0; k < val.beams; ++k) {
+                    const float y = yBot - k * beamStep;
+                    if (joined(i, k)) {  // a beam to the next note
+                        dl->AddRectFilled(ImVec2(m.x, y - beamH), ImVec2(stems[i + 1].x, y), ink(std::min(m.a, stems[i + 1].a)));
+                    } else if (!(i > 0 && joined(i - 1, k))) {
+                        // Not beamed at this level on either side: a short stub, pointing to the note it
+                        // shares a beam with (or right when it's alone: a flag).
+                        const bool left = i > 0 && joined(i - 1, 0);
+                        const float x2 = left ? m.x - stub : m.x + stub;
+                        dl->AddRectFilled(ImVec2(std::min(m.x, x2), y - beamH), ImVec2(std::max(m.x, x2), y), ink(m.a));
+                    }
+                }
+                // Triplets: a "3" under each beamed group of triplet notes (under a lone one too).
+                if (val.triplet && !(i > 0 && joined(i - 1, 0) && stems[i - 1].val->triplet)) {
+                    size_t j = i;
+                    while (joined(j, 0) && stems[j + 1].val->triplet) ++j;
+                    const float cx = (m.x + stems[j].x) * 0.5f, fsz = 13 * s;
+                    const ImVec2 ts = g_fontUi->CalcTextSizeA(fsz, FLT_MAX, 0, "3");
+                    dl->AddText(g_fontUi, fsz, ImVec2(cx - ts.x * 0.5f, yBot + 2 * s), ink(m.a), "3");
+                }
+            }
         }
-        // Held notes: a tail in the string's colour until the note ends (like the highway's tails).
-        if (xEnd > x + 16 * s)
+
+        for (const Item& it : items) {
+            const TabNote& t = *it.note;
+            const float x = timeX(it.time), xEnd = timeX(it.end);
+            if (xEnd < lineL - 30 * s || x > lineR + 30 * s) continue;
+            const float a = alphaOf(it);
+            if (a <= 0) continue;
+            const bool next = !nextFound && !t.ignore && it.last >= now - 0.02;  // a run stays "next" until its last note
+            if (next) nextFound = true;
+            const std::string run = runText(it);
+
+            int lo = -1, hi = -1;  // lowest/highest string played (for the chord bracket)
             for (int str = 0; str < n; ++str)
-                if (t.frets[str] >= 0)
-                    dl->AddRectFilled(ImVec2(x, rowY(str) - 3 * s), ImVec2(xEnd, rowY(str) + 3 * s),
-                                      (kStringColor[str] & 0x00FFFFFF) | ((ImU32)(150 * a) << 24), 3 * s);
-        for (int str = 0; str < n; ++str) {
-            if (t.frets[str] < 0) continue;
-            const std::string label = std::to_string(t.frets[str]);
-            const ImVec2 ls = g_fontBold->CalcTextSizeA(fs, FLT_MAX, 0, label.c_str());
-            const float y = rowY(str), bw = std::max(ls.x, ls.y * 0.8f) * 0.5f + 5 * s, bh = gap * 0.46f;
-            const ImU32 col = (kStringColor[str] & 0x00FFFFFF) | ((ImU32)(255 * a) << 24);
-            dl->AddRectFilled(ImVec2(x - bw, y - bh), ImVec2(x + bw, y + bh), IM_COL32(14, 14, 20, (int)(255 * a)), 5 * s);
-            if (next) dl->AddRect(ImVec2(x - bw - 2 * s, y - bh - 2 * s), ImVec2(x + bw + 2 * s, y + bh + 2 * s),
-                                  IM_COL32(255, 255, 255, (int)(255 * pulse)), 6 * s, 0, 2.5f * s);
-            else dl->AddRect(ImVec2(x - bw, y - bh), ImVec2(x + bw, y + bh), col, 5 * s, 0, 2 * s);
-            dl->AddText(g_fontBold, fs, ImVec2(x - ls.x * 0.5f, y - ls.y * 0.5f), IM_COL32(255, 255, 255, (int)(255 * a)),
-                        label.c_str());
+                if (t.frets[str] >= 0) { if (lo < 0) lo = str; hi = str; }
+            if (lo < 0) continue;
+            if (t.chord && hi > lo)
+                dl->AddLine(ImVec2(x, rowY(hi)), ImVec2(x, rowY(lo)), IM_COL32(255, 206, 84, (int)(170 * a)), 2 * s);
+            if (t.chord && !t.name.empty()) {
+                const ImVec2 ts = g_fontBold->CalcTextSizeA(tiny, FLT_MAX, 0, t.name.c_str());
+                dl->AddText(g_fontBold, tiny, ImVec2(x - ts.x * 0.5f, staffY + 6 * s), (gold & 0x00FFFFFF) | ((ImU32)(255 * a) << 24),
+                            t.name.c_str());
+            }
+            // Held notes (and runs): a tail in the string's colour until the note ends (like the highway's
+            // tails).
+            if (xEnd > x + it.half * nsz + 4 * s)
+                for (int str = 0; str < n; ++str)
+                    if (t.frets[str] >= 0)
+                        dl->AddRectFilled(ImVec2(x, rowY(str) - 3 * s), ImVec2(xEnd, rowY(str) + 3 * s),
+                                          (kStringColor[str] & 0x00FFFFFF) | ((ImU32)(150 * a) << 24), 3 * s);
+            for (int str = 0; str < n; ++str) {
+                if (t.frets[str] < 0) continue;
+                const std::string label = std::to_string(t.frets[str]);
+                const ImVec2 ls = g_fontBold->CalcTextSizeA(fs, FLT_MAX, 0, label.c_str());
+                const float y = rowY(str), bw = boxHalf(label, run), bh = gap * 0.46f * std::max(0.7f, std::min(1.1f, nsz));
+                const ImU32 col = (kStringColor[str] & 0x00FFFFFF) | ((ImU32)(255 * a) << 24);
+                dl->AddRectFilled(ImVec2(x - bw, y - bh), ImVec2(x + bw, y + bh), IM_COL32(14, 14, 20, (int)(255 * a)), 5 * s);
+                if (next) dl->AddRect(ImVec2(x - bw - 2 * s, y - bh - 2 * s), ImVec2(x + bw + 2 * s, y + bh + 2 * s),
+                                      IM_COL32(255, 255, 255, (int)(255 * pulse)), 6 * s, 0, 2.5f * s);
+                else dl->AddRect(ImVec2(x - bw, y - bh), ImVec2(x + bw, y + bh), col, 5 * s, 0, 2 * s);
+                if (run.empty()) {
+                    dl->AddText(g_fontBold, fs, ImVec2(x - ls.x * 0.5f, y - ls.y * 0.5f), IM_COL32(255, 255, 255, (int)(255 * a)),
+                                label.c_str());
+                } else {  // "12" then a small, dimmer "x8"
+                    const float rs = tiny * 0.85f * nsz;
+                    const ImVec2 es = g_fontUi->CalcTextSizeA(rs, FLT_MAX, 0, run.c_str());
+                    const float lx = x - (ls.x + 3 * s * nsz + es.x) * 0.5f;
+                    dl->AddText(g_fontBold, fs, ImVec2(lx, y - ls.y * 0.5f), IM_COL32(255, 255, 255, (int)(255 * a)), label.c_str());
+                    dl->AddText(g_fontUi, rs, ImVec2(lx + ls.x + 3 * s * nsz, y - es.y * 0.5f + 1 * s), IM_COL32(210, 210, 220, (int)(230 * a)),
+                                run.c_str());
+                }
+            }
         }
+        dl->PopClipRect();
+    };  // drawStaff
+
+    if (twoRows) {
+        // The cursor's row first (the next note is highlighted there if it's on both), then the next
+        // page on the other row, with a thin line between the rows.
+        const float curY = curOnTop ? y0 : y0 + rowH, nextY = curOnTop ? y0 + rowH : y0;
+        layout(s_zoom, originT, curY);
+        drawStaff(true);
+        layout(nextNeed, nextT, nextY);
+        drawStaff(false);
+        dl->AddLine(ImVec2(x0 + pad, y0 + rowH), ImVec2(x0 + w - pad, y0 + rowH), IM_COL32(255, 255, 255, 40), 1 * s);
+    } else {
+        layout(s_zoom, originT, y0);
+        drawStaff(true);
     }
     dl->PopClipRect();
 }
@@ -615,6 +897,20 @@ void DrawMenu(const View& v, const Settings& st, float s, ImVec2 ds) {
         ImGui::Checkbox("Show the notes coming up as a scrolling tab", &e.showTab);
         if (e.showTab) {
             ImGui::Checkbox("Bar lines and beats in the tab (to read the rhythm)", &e.tabBeats);
+            ImGui::Checkbox("Rhythm under the tab (beams: 1 = 2 notes per beat, 2 = 4, 3 = 8)", &e.tabRhythm);
+            ImGui::SetNextItemWidth(-1);
+            ImGui::SliderInt("##tabbg", &e.tabOpacity, 0, 100, "Tab background %d %% (100 = solid)");
+            ImGui::SetNextItemWidth(-1);
+            ImGui::SliderInt("##tabnote", &e.tabNoteSize, 60, 130, "Tab note size %d %%");
+            // How the tab moves: the two modes side by side (same setting, tabPage).
+            ImGui::TextUnformatted("Tab movement:");
+            ImGui::SameLine();
+            if (ImGui::RadioButton("Pages (notes still, a cursor moves)", e.tabPage)) e.tabPage = true;
+            ImGui::SameLine();
+            if (ImGui::RadioButton("Scrolling (notes move to the line)", !e.tabPage)) e.tabPage = false;
+            if (e.tabPage)
+                ImGui::Checkbox("Two rows: the next page waits in the other row (no page turns)", &e.tabTwoRows);
+            ImGui::Checkbox("Spread out fast notes in the tab so every fret can be read", &e.tabSpread);
             ImGui::SetNextItemWidth(-1);
             ImGui::SliderInt("##tabsec", &e.tabSeconds, 2, 8, "Tab shows %d seconds ahead");
         }

@@ -11,7 +11,8 @@
 //   - the song clock ("1:23 / 4:28") in the top-left corner while a song plays
 //   - the scrolling tab: the next few seconds of the song as guitar tab, moving right to left in
 //     step with the highway (left of the highway, below the lyrics by default),
-//     with bar lines + bar numbers, faint beat lines and tails on held notes, to read the rhythm
+//     with bar lines + bar numbers, faint beat lines, tails on held notes and rhythm stems/beams
+//     under the staff, to read the rhythm; fast passages spread out so every fret stays readable
 //   - the MENU (toggle key, F8 by default): mode on/off, skip note, timing settings. While it is
 //     open the banner, clock and tab can be dragged with the mouse (body = move, bottom-right
 //     corner = resize); the menu has a button to put them all back
@@ -41,7 +42,18 @@ struct Settings {
     bool showClock = true;       // show the song time while playing
     bool showTab = true;         // show the scrolling tab while playing
     bool tabBeats = true;        // bar lines (with bar numbers) and beat lines in the tab
+    bool tabRhythm = true;       // rhythm under the tab: stems + beams (how many notes per beat)
     int tabSeconds = 4;          // seconds of music ahead of the "now" line
+    bool tabSpread = true;       // fast notes get a minimum gap (readable runs) and a fast repeat of
+                                 // one fret is drawn once as "12 x8"; off = spacing exactly by time
+    bool tabPage = true;         // the tab stands still and a cursor moves over it, turning the page
+                                 // near the right edge; off = the notes scroll past a fixed line
+    bool tabTwoRows = false;     // pages only: two rows, one under the other. The cursor plays one row
+                                 // while the other already shows the next page; when the cursor jumps
+                                 // to it, the row it left gets the page after (no page turn to wait for)
+    int tabOpacity = 69;        // tab background, percent: 0 = none, 100 = solid (hides the game behind)
+    int tabNoteSize = 100;       // size of the tab's fret numbers, percent (60..130); fast passages
+                                 // shrink them a little below this by themselves
     bool skipPopups = true;      // at game start, answer the Ubisoft login/server dialogs (startup.h)
     int fastIntro = 4;           // start-up logos this many times faster, 1 = normal (fastintro.h)
     bool fixCrash = true;        // remove the protector's NtProtectVirtualMemory redirect (crashfix.h)

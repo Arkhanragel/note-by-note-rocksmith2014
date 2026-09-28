@@ -52,6 +52,7 @@ struct Config {
     int skipKey = VK_F9;
     std::string menuSuffix = "_Game";    // the mode only acts on screens whose name ends like this
     std::string menuSound = "Nav_InGame_Options";
+    bool saveWaitAudio = false;          // record each wait to NoteByNote_debug\ (for bug reports)
 };
 
 std::wstring DllDir() {
@@ -106,8 +107,26 @@ Config LoadConfig() {
                 "ShowTab=1\n"
                 "; 1 = bar lines (with bar numbers) and beat lines in the tab, to read the rhythm\n"
                 "TabBeats=1\n"
+                "; 1 = rhythm under the tab, as in printed tab: a stem per note, beams = notes per beat\n"
+                ";     (no beam = 1, 1 beam = 2, 2 beams = 4, 3 beams = 8; a small 3 = triplets)\n"
+                "TabRhythm=1\n"
                 "; Seconds of music the tab shows ahead (2..8)\n"
                 "TabSeconds=4\n"
+                "; 1 = in fast passages the tab spreads the notes out so every fret can be read (the tab\n"
+                ";     scrolls faster there), and a fast repeat of one fret shows once as \"12 x8\";\n"
+                "; 0 = spacing exactly by time\n"
+                "TabSpread=1\n"
+                "; Size of the fret numbers in the tab, percent (60..130); fast passages make them a\n"
+                "; little smaller by themselves\n"
+                "TabNoteSize=100\n"
+                "; 1 = the tab stands still and a cursor moves over the notes, turning the page near the\n"
+                ";     right edge (easy to read fast parts); 0 = the notes scroll past a fixed line\n"
+                "TabPages=1\n"
+                "; Pages only: 1 = two rows; the cursor plays one while the other already shows the\n"
+                ";     next page (swapped in as soon as the cursor leaves it), 0 = one row\n"
+                "TabTwoRows=0\n"
+                "; Tab background, percent: 0 = see-through, 100 = solid (hides the game's text behind it)\n"
+                "TabBackground=69\n"
                 "; 1 = at game start, close the Ubisoft login and \"servers not available\" popups by\n"
                 ";     themselves (the title's Press Enter and the profile choice stay yours)\n"
                 "SkipUbisoftPopups=1\n"
@@ -116,6 +135,9 @@ Config LoadConfig() {
                 "; 1 = work around the game's own random crash / freeze (mostly at start-up): puts back\n"
                 ";     a Windows function the game's copy protection redirects (in memory only)\n"
                 "FixGameCrash=1\n"
+                "; 1 = save the guitar audio of each wait to NoteByNote_debug\\wait_<time>.wav (useful\n"
+                ";     to report a note that wasn't recognised; the files add up, delete them by hand)\n"
+                "SaveWaitAudio=0\n"
                 "; Layout. Easier: open the menu and drag the parts with the mouse (corner = resize).\n"
                 "; Positions and widths in 1080p pixels (scaled with the screen height), sizes in percent.\n"
                 "; Banner: X of its centre from the screen centre, Y from the top\n"
@@ -154,9 +176,16 @@ Config LoadConfig() {
     c.initial.showTab = GetPrivateProfileIntW(L"NoteByNote", L"ShowTab", 1, ini.c_str()) != 0;
     c.initial.tabBeats = GetPrivateProfileIntW(L"NoteByNote", L"TabBeats", 1, ini.c_str()) != 0;
     c.initial.tabSeconds = std::max(2, std::min(8, (int)GetPrivateProfileIntW(L"NoteByNote", L"TabSeconds", 4, ini.c_str())));
+    c.initial.tabRhythm = GetPrivateProfileIntW(L"NoteByNote", L"TabRhythm", 1, ini.c_str()) != 0;
+    c.initial.tabSpread = GetPrivateProfileIntW(L"NoteByNote", L"TabSpread", 1, ini.c_str()) != 0;
+    c.initial.tabPage = GetPrivateProfileIntW(L"NoteByNote", L"TabPages", 1, ini.c_str()) != 0;
+    c.initial.tabTwoRows = GetPrivateProfileIntW(L"NoteByNote", L"TabTwoRows", 0, ini.c_str()) != 0;
+    c.initial.tabOpacity =std::max(0, std::min(100, (int)GetPrivateProfileIntW(L"NoteByNote", L"TabBackground", 69, ini.c_str())));
+    c.initial.tabNoteSize =std::max(60, std::min(130, (int)GetPrivateProfileIntW(L"NoteByNote", L"TabNoteSize", 100, ini.c_str())));
     c.initial.skipPopups = GetPrivateProfileIntW(L"NoteByNote", L"SkipUbisoftPopups", 1, ini.c_str()) != 0;
     c.initial.fastIntro = std::max(1, std::min(8, (int)GetPrivateProfileIntW(L"NoteByNote", L"FastIntro", 4, ini.c_str())));
     c.initial.fixCrash = GetPrivateProfileIntW(L"NoteByNote", L"FixGameCrash", 1, ini.c_str()) != 0;
+    c.saveWaitAudio = GetPrivateProfileIntW(L"NoteByNote", L"SaveWaitAudio", 0, ini.c_str()) != 0;
     // Layout (defaults from overlay::Settings; sizes kept in the range the mouse allows).
     const overlay::Settings d;
     auto num = [&](const wchar_t* key, int def) { return (int)GetPrivateProfileIntW(L"NoteByNote", key, def, ini.c_str()); };
@@ -190,6 +219,12 @@ void SaveSettings(const overlay::Settings& st) {
     put(L"ShowTab", st.showTab);
     put(L"TabBeats", st.tabBeats);
     put(L"TabSeconds", st.tabSeconds);
+    put(L"TabSpread", st.tabSpread);
+    put(L"TabNoteSize", st.tabNoteSize);
+    put(L"TabBackground", st.tabOpacity);
+    put(L"TabPages", st.tabPage);
+    put(L"TabTwoRows", st.tabTwoRows);
+    put(L"TabRhythm", st.tabRhythm);
     put(L"SkipUbisoftPopups", st.skipPopups);
     put(L"FastIntro", st.fastIntro);
     put(L"FixGameCrash", st.fixCrash);
@@ -253,7 +288,9 @@ public:
         for (float v : s) { ring_[pos_ % kSize] = v; ++pos_; }
     }
     long long Pos() const { return pos_; }
+    bool enabled = false;  // setting SaveWaitAudio (off = Save does nothing)
     void Save(const std::wstring& dir, double songTime, long long fromPos, unsigned sr) {
+        if (!enabled) return;
         if (pos_ - fromPos > kSize) fromPos = pos_ - kSize;
         if (fromPos < 0) fromPos = 0;
         CreateDirectoryW(dir.c_str(), nullptr);
@@ -352,6 +389,7 @@ DWORD WINAPI MainThread(LPVOID) {
           songScreenTick = 0;
     long long totalSamples = 0;
     DebugAudio debugAudio;
+    debugAudio.enabled = cfg.saveWaitAudio;
     long long waitAudioStart = 0;
     const std::wstring debugDir = DllDir() + L"NoteByNote_debug\\";
 
@@ -391,11 +429,14 @@ DWORD WINAPI MainThread(LPVOID) {
                 if (now >= nextTabRefresh) {
                     nextTabRefresh = now + 50;
                     if (!game::GetPhraseLevels(&tabLevels)) tabLevels.clear();
-                    chart.TargetsBetween(v.songTime - 1.0, v.songTime + st.tabSeconds + 1.0, tabLevels, &tabTargets);
-                    chart.BeatsBetween(v.songTime - 1.0, v.songTime + st.tabSeconds + 1.0, &tabBeatsRaw);
-                    tabBeats.clear();
-                    if (st.tabBeats)
-                        for (const Beat& b : tabBeatsRaw) tabBeats.push_back({b.time, b.measure, b.downbeat});
+                    // The past part: a page (tab pages mode) can show up to ~90 % of a page behind the cursor.
+                    const double back = st.tabPage ? st.tabSeconds * 1.3 + 1.0 : 1.0;
+                    // The future part: two rows also show the whole next page (up to ~2.2 tabs ahead).
+                    const double ahead = (st.tabPage && st.tabTwoRows ? st.tabSeconds * 2.3 : st.tabSeconds) + 1.0;
+                    chart.TargetsBetween(v.songTime - back, v.songTime + ahead, tabLevels, &tabTargets);
+                    chart.BeatsBetween(v.songTime - back, v.songTime + ahead, &tabBeatsRaw);
+                    tabBeats.clear();  // always sent: the rhythm needs them even with the lines off
+                    for (const Beat& b : tabBeatsRaw) tabBeats.push_back({b.time, b.measure, b.downbeat});
                     tabNotes.clear();
                     for (const Target* t : tabTargets) {
                         overlay::TabNote tn;
