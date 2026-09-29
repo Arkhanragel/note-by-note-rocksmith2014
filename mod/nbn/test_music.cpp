@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "music.h"
+#include "technique.h"
 
 int main() {
     struct Case {
@@ -36,6 +37,25 @@ int main() {
         if (!ok) std::printf("   (wanted \"%s\", \"%s\")", c.meaning, c.list);
         std::printf("\n");
     }
+    // Techniques in words (technique.h).
+    namespace tq = nbn::technique;
+    auto words = [&](const char* what, const tq::Technique& t, int fret, const char* want) {
+        std::string got;
+        for (const auto& w : tq::Describe(t, fret)) got += (got.empty() ? "" : " | ") + w.name + ": " + w.how;
+        const bool ok = got == want;
+        fails += !ok;
+        std::printf("%s  %-16s -> \"%s\"\n", ok ? "ok  " : "FAIL", what, got.c_str());
+        if (!ok) std::printf("      wanted \"%s\"\n", want);
+    };
+    words("slide up", {tq::kSlide, 9, -1, 0}, 7, "Slide: then slide UP to fret 9, keep the string pressed");
+    words("unpitched slide", {tq::kUnpitchedSlide, -1, 10, 0}, 12, "Slide: at the end, slide down towards fret 10 as the note fades");
+    words("bend 1 step", {tq::kBend, -1, -1, 1.0f}, 12, "Bend: push the string sideways until it sounds 1 step higher (like 2 frets up)");
+    words("bend half", {tq::kBend, -1, -1, 0.5f}, 12, "Bend: push the string sideways until it sounds half a step higher (like 1 fret up)");
+    words("hammer + vibrato", {tq::kHammerOn | tq::kVibrato, -1, -1, 0}, 7,
+          "Hammer-on: don't pick: hit the fret hard with a finger of your fretting hand | Vibrato: shake the note a little while it rings");
+    words("nothing", {0x800000, -1, -1, 0}, 5, "");  // the "single note" bit alone tells nothing
+    std::printf("bend labels: %s, %s, %s\n", tq::BendLabel(0.5f).c_str(), tq::BendLabel(1).c_str(), tq::BendLabel(1.5f).c_str());
+
     std::printf("%s\n", fails ? "FAILED" : "all passed");
     return fails ? 1 : 0;
 }

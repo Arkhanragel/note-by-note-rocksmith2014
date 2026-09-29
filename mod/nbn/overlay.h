@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "hint.h"
+#include "technique.h"
 #include "theme.h"
 
 namespace nbn::overlay {
@@ -138,6 +139,7 @@ struct View {
     int string = 0;              // 0 = thickest string (low E), like the charts
     int fret = 0;                // 0 = open string
     int midi = -1;               // the note (single notes), for its name ("C", "F#")
+    technique::Technique tech;   // single notes: how to play it (slide, bend...; the banner explains it)
     bool chord = false;          // waiting for a chord: chordName + frets instead of string/fret
     std::string chordName;       // as in the song ("Em", "A5"...); empty for double stops
     int frets[6] = {-1, -1, -1, -1, -1, -1};  // per string (0 = thickest): -1 = not played

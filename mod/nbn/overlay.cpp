@@ -256,6 +256,8 @@ struct NeckPic {
     std::vector<Dot> dots;     // what to play
     std::vector<Dot> marks;    // where wrong notes were played (inside the window only)
     int lo = 1, hi = 5;        // fret cells shown (1 = the first fret, with the nut on its left)
+    technique::Technique tech; // single notes: the technique (a slide's end, a bend)
+    int slideEnd = -1;         // the fret a slide goes to (-1 = none)
     float s = 1, gap = 0, cell = 0, rad = 0, nameW = 0, openW = 0, tailW = 0, top = 0, w = 0, h = 0;
 
     NeckPic(const View& v, float scale) : s(scale) {
@@ -273,6 +275,12 @@ struct NeckPic {
         // the same note's other spots too, up to a wider window (the frets get narrower).
         int mn = 99, mx = -1;
         for (const auto& d : dots) if (d.fret > 0) { mn = std::min(mn, d.fret); mx = std::max(mx, d.fret); }
+        if (!chord) {  // a slide: where it ends is part of the picture
+            tech = v.tech;
+            slideEnd = (tech.mask & technique::kSlide) ? tech.slideTo
+                     : (tech.mask & technique::kUnpitchedSlide) ? tech.slideUnpitchTo : -1;
+            if (slideEnd > 0) { mn = std::min(mn, slideEnd); mx = std::max(mx, slideEnd); }
+        }
         for (const bool likely : {true, false}) {
             for (const auto& m : v.heardAt) {
                 if (m.likely != likely || m.string < 0 || m.string >= n || m.fret < 0) continue;
@@ -415,6 +423,43 @@ struct NeckPic {
             if (!chord && m.midi >= 0) tag(c, dx > 0, music::NoteName(m.midi, flats), red);
         }
 
+        // Techniques of a single note. A slide: a dashed line along the string to a ring at the fret
+        // where it ends (solid ring = a slide to that note; faint = an unpitched slide that just fades).
+        // A bend: an arrow above the dot with how many steps ("1/2", "1").
+        if (!chord && !dots.empty()) {
+            const Dot& d = dots[0];
+            const ImVec2 c(X(FretX(p0.x, d.fret)), Y(d.string));
+            const ImU32 sc = kStringColor[d.string];
+            if (slideEnd >= 0 && slideEnd != d.fret) {
+                const bool pitched = (tech.mask & technique::kSlide) != 0;
+                const ImVec2 e(X(FretX(p0.x, slideEnd)), c.y);
+                const float dir = e.x > c.x ? 1.0f : -1.0f;
+                const ImU32 lc = pitched ? Col(theme::kText, 230) : Col(theme::kText, 140);
+                for (float x = c.x + dir * (rad + 4 * s); dir * (e.x - dir * (rad * 0.8f + 10 * s) - x) > 0; x += dir * 10 * s)
+                    dl->AddLine(ImVec2(x, c.y - 0), ImVec2(x + dir * 6 * s, c.y), lc, 3 * s);
+                const float hx = e.x - dir * (rad * 0.8f + 3 * s), hl = 8 * s;
+                dl->AddTriangleFilled(ImVec2(hx, c.y), ImVec2(hx - dir * hl, c.y - hl * 0.6f), ImVec2(hx - dir * hl, c.y + hl * 0.6f), lc);
+                dl->AddCircleFilled(e, rad * 0.8f, Col(theme::kPanel, 235));
+                dl->AddCircle(e, rad * 0.8f, pitched ? sc : ((sc & 0x00FFFFFF) | (140u << 24)), 0, 2.5f * s);
+                const std::string t = std::to_string(slideEnd);
+                const float efs = 18 * s;
+                const ImVec2 ts = g_fontBold->CalcTextSizeA(efs, FLT_MAX, 0, t.c_str());
+                dl->AddText(g_fontBold, efs, ImVec2(e.x - ts.x * 0.5f, e.y - ts.y * 0.5f), pitched ? Col(theme::kText) : Col(theme::kTextDim), t.c_str());
+            }
+            if ((tech.mask & technique::kBend) && tech.bend > 0.1f) {
+                const float top = c.y - rad - 4 * s, len = 16 * s;
+                const ImU32 bc = Col(theme::kText, 235);
+                dl->AddLine(ImVec2(c.x, top), ImVec2(c.x, top - len + 5 * s), bc, 2.5f * s);
+                dl->AddTriangleFilled(ImVec2(c.x, top - len - 2 * s), ImVec2(c.x - 5 * s, top - len + 6 * s), ImVec2(c.x + 5 * s, top - len + 6 * s), bc);
+                const std::string t = technique::BendLabel(tech.bend);
+                const float bfs = 17 * s;
+                const ImVec2 ts = g_fontBold->CalcTextSizeA(bfs, FLT_MAX, 0, t.c_str());
+                const ImVec2 tp(c.x + 7 * s, top - len - ts.y * 0.5f);
+                dl->AddRectFilled(ImVec2(tp.x - 3 * s, tp.y), ImVec2(tp.x + ts.x + 3 * s, tp.y + ts.y), Col(theme::kPanel, 230), 4 * s);
+                dl->AddText(g_fontBold, bfs, tp, bc, t.c_str());
+            }
+        }
+
         // The notes to play: a dot in the string's colour with the fret number, like tab.
         const float fs = (chord ? 19 : 23) * s;
         for (const auto& d : dots) {
@@ -431,6 +476,7 @@ struct NeckPic {
                 // Name tag on the right, unless a wrong note sits there on the same string.
                 bool busyRight = false;
                 for (const auto& m : marks) busyRight = busyRight || (m.string == d.string && X(FretX(p0.x, m.fret)) > c.x);
+                if (slideEnd >= 0 && X(FretX(p0.x, slideEnd)) > c.x) busyRight = true;  // the slide's arrow is there
                 tag(c, busyRight, music::NoteName(d.midi), sc);
             }
         }
@@ -488,10 +534,14 @@ void DrawBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVe
     if (v.midi >= 0 && !st.bannerNeck) line2.push_back({"note " + music::NoteName(v.midi), Col(theme::kTextDim)});
     const std::vector<Seg> line3 = {{v.fret == 0 ? "(no finger on the neck)   " : "", Col(theme::kTextDim)}, {"F9 = skip   F8 = menu", Col(theme::kTextDim)}};
     const std::vector<std::vector<Seg>> linesH = HintLines(v.hint);
+    // How to play it (slide, bend, hammer-on...), from the song: "Slide: then slide UP to fret 9 ..."
+    std::vector<std::vector<Seg>> linesT;
+    for (const auto& w : technique::Describe(v.tech, v.fret))
+        linesT.push_back({{w.name + ":  ", Col(theme::kChord)}, {w.how, Col(theme::kText)}});
 
-    const float textW = std::max({SegsWidth(g_fontBold, big, line1), SegsWidth(g_fontUi, mid, line2),
+    const float textW = std::max({SegsWidth(g_fontBold, big, line1), SegsWidth(g_fontUi, mid, line2), LinesWidth(g_fontUi, mid, linesT),
                                   LinesWidth(g_fontUi, mid, linesH), SegsWidth(g_fontUi, tiny, line3)});
-    const float textH = big + 8 * s + (line2.empty() ? 0 : mid + 10 * s) + linesH.size() * (mid + 10 * s) + tiny;
+    const float textH = big + 8 * s + (line2.empty() ? 0 : mid + 10 * s) + (linesT.size() + linesH.size()) * (mid + 10 * s) + tiny;
 
     // Picture: a piece of fretboard, or a small tab (thinnest string on top, like tab and sheet music).
     const float gap = 17 * s, tabW = 190 * s, labelW = 22 * s;
@@ -514,6 +564,10 @@ void DrawBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVe
     t.y += big + 8 * s;
     if (!line2.empty()) {
         DrawSegs(dl, g_fontUi, mid, t, line2);
+        t.y += mid + 10 * s;
+    }
+    for (const auto& lt : linesT) {
+        DrawSegs(dl, g_fontUi, mid, t, lt);
         t.y += mid + 10 * s;
     }
     for (const auto& lh : linesH) {
@@ -664,6 +718,7 @@ bool DrawCalmBanner(ImDrawList* dl, const View& v, const Settings& st, bool on, 
         s_note.string = v.string;
         s_note.fret = v.fret;
         s_note.midi = v.midi;
+        s_note.tech = v.tech;
         s_note.chord = v.chord;
         s_note.chordName = v.chordName;
         std::copy(std::begin(v.frets), std::end(v.frets), s_note.frets);

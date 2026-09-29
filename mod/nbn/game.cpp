@@ -143,6 +143,11 @@ constexpr uintptr_t kNoteMask = 0x0, kNoteTime = 0xC, kNoteString = 0x10, kNoteF
 // song file). Checked when read: a value that isn't a sane duration counts as 0.
 constexpr uintptr_t kNoteSustain = 0x3C;
 constexpr uint32_t kMaskChord = 0x2, kMaskIgnore = 0x40000;
+// The technique's details (technique.h): in memory these sit 6 bytes later than in the song file
+// (+0x2E/+0x2F there), found 2026-09-29 by dumping Ode to Joy's slide and bend notes: slide-to fret
+// (int8, -1 = none), unpitched-slide-to fret, and the largest bend (float, steps; the bend's curve
+// follows from +0x44 as (time, steps) pairs). Checked when read, like the sustain.
+constexpr uintptr_t kNoteSlideTo = 0x34, kNoteSlideUnpitchTo = 0x35, kNoteMaxBend = 0x40;
 
 constexpr int kActionPause = 1, kActionResume = 2, kCurveLinear = 4;
 
@@ -691,6 +696,12 @@ struct NoteDecoder {
             t.fret = At<int8_t>(notes, n + kNoteFret);
             if (t.string < 0 || t.string > 5) return false;
             t.midi.push_back(open[t.string] + SoundingFret(t.fret, capo));
+            t.tech.mask = mask;
+            const int slideTo = At<int8_t>(notes, n + kNoteSlideTo), unpitch = At<int8_t>(notes, n + kNoteSlideUnpitchTo);
+            const float bend = At<float>(notes, n + kNoteMaxBend);
+            t.tech.slideTo = (slideTo >= 0 && slideTo <= 24) ? slideTo : -1;
+            t.tech.slideUnpitchTo = (unpitch >= 0 && unpitch <= 24) ? unpitch : -1;
+            t.tech.bend = (bend > 0 && bend <= 3) ? bend : 0;
         }
         *out = std::move(t);
         return true;

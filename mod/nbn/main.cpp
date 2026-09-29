@@ -558,6 +558,7 @@ struct MainLoop {
         std::copy(std::begin(note.frets), std::end(note.frets), v.frets);
         std::copy(std::begin(note.notes), std::end(note.notes), v.notes);
         v.midi = (!note.chord && !note.midi.empty()) ? note.midi[0] : -1;
+        v.tech = note.chord ? technique::Technique{} : note.tech;
         if (frozen) {
             v.hint = waitHint;
             v.heardAt = waitMarks;
