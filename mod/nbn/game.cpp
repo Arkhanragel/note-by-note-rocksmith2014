@@ -23,13 +23,18 @@ namespace nbn::game {
 namespace {
 
 // ------------------------------------------------------------------ game builds
-// What differs between builds of Rocksmith2014.exe: the addresses (RVAs) of code and globals.
-// Everything below this section (pointer chains, song data and note layouts...) is assumed to be
-// the same in every build; the report (report.h) checks it while playing.
+// What differs between builds of Rocksmith2014.exe, one row per build in kBuilds (like RSMods'
+// VersioningStruct, picked by the same exe checksum):
+//   - Addresses: the RVAs of code and globals (these always move between builds);
+//   - Layout: offsets inside the game's objects (song object, clock, Dynamic Difficulty, clock
+//     provider, menu chains). Probably the same in every build (RSMods finds the same for its own
+//     chains), but if a tester's report shows one moved, the fix is one value in that build's row.
+// The chart's inner layout (levels, notes, chords, beats) is the song-file (SNG) format itself, so
+// it stays shared (constants below). The report (report.h) checks all of it while playing.
 struct Addresses {
     uintptr_t root = 0;                     // root pointer of the song/menu structures
     uintptr_t previewName = 0;              // -> "Play_<SongKey>_Preview"
-    uintptr_t providerVtable = 0;           // vtable of the song clock provider (+0x0C = song object)
+    uintptr_t providerVtable = 0;           // vtable of the song clock provider (+Layout::providerSong = song object)
     uintptr_t postEventChar = 0;            // Wwise PostEvent(const char*, obj, flags, cb, cookie, nExt, ext, pid)
     uintptr_t executeActionOnEventId = 0;   // Wwise ExecuteActionOnEvent(eventId, action, obj, ms, curve, pid)
     uintptr_t getEventIdFromPlayingId = 0;  // Wwise GetEventIDFromPlayingID(playingId)
@@ -51,6 +56,35 @@ constexpr Field kFields[] = {
     {"GetEventIDFromPlayingID", &Addresses::getEventIdFromPlayingId, true, true},
 };
 
+// Offsets inside the game's objects (bytes). A chain is followed from a global: read the pointer,
+// add the offset, repeat.
+struct Layout {
+    uint32_t menuChain[3];      // [root] -> ... -> the current screen's name ("LearnASong_Game")
+    uint32_t preMenuChain[2];   // before the first dialog: a short name stored in place
+    uint32_t previewChain[2];   // [previewName] -> ... -> "Play_<SongKey>_Preview"
+    uint32_t songObj;           // [root]+songObj -> the song object
+    uint32_t songClock;         // float in the song object: THE song clock (seconds)
+    uint32_t songData;          // song object -> the loaded arrangement (SNG layout, see below)
+    uint32_t songDd;            // song object -> Dynamic Difficulty state
+    uint32_t ddEntries;         //   DD state: vector of entries, one per phrase iteration
+    uint32_t ddEntrySize;       //   bytes per entry
+    uint32_t ddLevel;           //   entry+ddLevel: current level (int, negative = none)
+    uint32_t providerSong;      // clock provider -> back to the song object
+    uint32_t providerPlayingId; // clock provider: the Wwise playing ID the clock follows
+    uint32_t providerStopped;   // clock provider, byte: != 0 -> the clock does not advance
+    uint32_t songGameObject;    // the Wwise game object the game plays the song on
+};
+
+// Learn & Play, all verified (BITACORA: "the freeze mechanism", "Song data", test 24). Other
+// builds start from these until their report says otherwise.
+constexpr Layout kLayoutLearnAndPlay = {
+    {0x28, 0x8C, 0x0}, {0x28, 0x8C}, {0xBC, 0x0},
+    0xB0, 0x3B4, 0x78, 0x7C,
+    0x18, 64, 4,
+    0x0C, 0xCC, 0xDA,
+    0x1234,
+};
+
 struct Build {
     const char* name;
     DWORD checksum;   // PE checksum computed over the file (MapFileAndCheckSum; RSMods uses the same)
@@ -58,27 +92,24 @@ struct Build {
                       // and the header's CheckSum field, while the computed checksum changes.
     bool verified;    // addresses checked by hand on this build; otherwise only compared in the report
     Addresses addr;
+    Layout layout;
 };
 
 constexpr Build kBuilds[] = {
     // Ours: every address verified by disassembly (BITACORA "the freeze mechanism").
     {"Learn & Play (December 2024)", 0x0176EC34, 0x67497D00, true,
-     {0x00F6062C, 0x00F60514, 0x00DA0E70, 0x00AC4870, 0x00AC4900, 0x00ABFE80}},
+     {0x00F6062C, 0x00F60514, 0x00DA0E70, 0x00AC4870, 0x00AC4900, 0x00ABFE80},
+     kLayoutLearnAndPlay},
     // The older build most players have (RSMods' "RemasteredSeptember2022"). From RSMods' tables
     // (absolute there, exe base 0x400000), NOT verified; the provider vtable isn't known. Their
     // ExecuteActionOnEvent(id) was 0x30 past the real start on our build, maybe here too.
     {"Remastered (September 2022)", 0x00B13D7C, 0, false,
-     {0x00F5F62C, 0x00F5F514, 0, 0x00AC51B0, 0x00AC5240, 0x00AC0850}},
+     {0x00F5F62C, 0x00F5F514, 0, 0x00AC51B0, 0x00AC5240, 0x00AC0850},
+     kLayoutLearnAndPlay},  // RSMods: "the offsets stay the same"; the report checks each one
 };
 
-constexpr uint32_t kMenuChain[] = {0x28, 0x8C, 0x0};  // root -> menu name string
-constexpr uint32_t kPreMenuChain[] = {0x28, 0x8C};    // before the first dialog: a short name stored in place
-constexpr uint32_t kPreviewChain[] = {0xBC, 0x0};     // previewName -> "Play_<SongKey>_Preview"
-constexpr uint32_t kSongObjChain[] = {0xB0};          // [root]+0xB0 -> song object
-constexpr uintptr_t kSongClockOffset = 0x3B4;         // float in the song object: THE song clock
-
-// Song data and Dynamic Difficulty (from the disassembly of rva 0x3F1B40 / 0x3F20D0, test 24):
-constexpr uintptr_t kSongData = 0x78;         // song object -> loaded arrangement (same layout as the SNG file)
+// The loaded arrangement ([song + Layout::songData]) has the SNG file's layout (from the disassembly
+// of rva 0x3F1B40 / 0x3F20D0, test 24):
 constexpr uintptr_t kSongDataBeats = 0x34;    //   vector<Beat>, 16 bytes (the SNG beat): +0 float time,
 constexpr uintptr_t kBeatSize = 0x10;         //     +4 int16 measure, +6 int16 beat in the measure,
 constexpr uint32_t kBeatFirstOfMeasure = 0x1; //     +8 int32 phrase iteration, +0xC int32 mask
@@ -108,15 +139,7 @@ constexpr uintptr_t kNoteMask = 0x0, kNoteTime = 0xC, kNoteString = 0x10, kNoteF
 // song file). Checked when read: a value that isn't a sane duration counts as 0.
 constexpr uintptr_t kNoteSustain = 0x3C;
 constexpr uint32_t kMaskChord = 0x2, kMaskIgnore = 0x40000;
-constexpr uintptr_t kSongDd = 0x7C;           // song object -> Dynamic Difficulty state
-constexpr uintptr_t kDdEntries = 0x18;        //   vector of 64-byte entries, one per phrase iteration
-constexpr uintptr_t kDdEntrySize = 64;
-constexpr uintptr_t kDdLevel = 4;             //   entry+4: current level (int, negative = none)
 
-constexpr uintptr_t kProviderPlayingId = 0xCC;  // clock provider: Wwise playing ID the clock follows
-constexpr uintptr_t kProviderStopped = 0xDA;    // byte: !=0 -> clock does not advance
-
-constexpr uintptr_t kSongGameObject = 0x1234;  // Wwise game object of the song (as the game uses it)
 constexpr int kActionPause = 1, kActionResume = 2, kCurveLinear = 4;
 
 using PostEventChar_t = uint32_t(__cdecl*)(const char*, uintptr_t, uint32_t, void*, void*, uint32_t, void*, uint32_t);
@@ -126,6 +149,7 @@ using GetEventIDFromPlayingID_t = uint32_t(__cdecl*)(uint32_t);
 uintptr_t g_base = 0;
 size_t g_imageSize = 0;
 Addresses g_addr;  // the addresses in use (from kBuilds, or found by pattern)
+Layout g_lay = kLayoutLearnAndPlay;  // the offsets in use (the build's row; unknown build: L&P's)
 bool g_ready = false;
 uintptr_t g_provider = 0;
 uint32_t g_frozenPid = 0, g_frozenEvent = 0;
@@ -211,17 +235,17 @@ bool LooksLikeFunction(uintptr_t rva) {
 uintptr_t SongObject() {
     uintptr_t a;
     uint32_t obj;
-    if (!ReadChain(g_base + g_addr.root, kSongObjChain, 1, &a) || !ReadU32(a, &obj)) return 0;
+    if (!ReadChain(g_base + g_addr.root, &g_lay.songObj, 1, &a) || !ReadU32(a, &obj)) return 0;
     return obj;
 }
 
 bool IsProvider(uintptr_t p, uintptr_t song) {
     uint32_t vt, back;
-    return ReadU32(p, &vt) && ReadU32(p + 0x0C, &back) && vt == g_base + g_addr.providerVtable && back == song;
+    return ReadU32(p, &vt) && ReadU32(p + g_lay.providerSong, &back) && vt == g_base + g_addr.providerVtable && back == song;
 }
 
 // The provider isn't referenced from the song object, so scan the heap for an object whose vtable
-// is the provider's and whose +0x0C points back to the song object (<1 ms in practice).
+// is the provider's and whose +providerSong points back to the song object (<1 ms in practice).
 uintptr_t FindProvider() {
     const uintptr_t song = SongObject();
     if (!song) return 0;
@@ -235,10 +259,10 @@ uintptr_t FindProvider() {
             !(mbi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)))
             continue;
         const uint32_t* p = (const uint32_t*)mbi.BaseAddress;
-        const size_t n = mbi.RegionSize / 4;
+        const size_t n = mbi.RegionSize / 4, back = g_lay.providerSong / 4;  // in 4-byte words
         __try {
-            for (size_t i = 0; i + 3 < n; ++i)
-                if (p[i] == vt && p[i + 3] == song) { g_provider = (uintptr_t)&p[i]; break; }
+            for (size_t i = 0; i + back < n; ++i)
+                if (p[i] == vt && p[i + back] == song) { g_provider = (uintptr_t)&p[i]; break; }
         } __except (EXCEPTION_EXECUTE_HANDLER) {}
         if (g_provider) break;
     }
@@ -431,6 +455,15 @@ bool Init(bool allowUnverified, bool patternsOnly) {
                  verified ? " (supported)" : build ? " (not verified yet)" : "");
     Log("build: %s%s", build ? build->name : "unknown", patched ? " (modified on disk)" : "");
 
+    // The offsets inside the game's objects: this build's row (an unknown build tries L&P's). The
+    // report lists them, so a tester's report says which values its checks were made with.
+    g_lay = build ? build->layout : kLayoutLearnAndPlay;
+    report::Line("Layout%s: song +0x%X, clock +0x%X, chart +0x%X, DD +0x%X (+0x%X, %u B, level +0x%X), provider +0x%X/+0x%X/+0x%X, "
+                 "menu +0x%X+0x%X, preview +0x%X",
+                 build ? "" : " (L&P's, unknown build)", g_lay.songObj, g_lay.songClock, g_lay.songData, g_lay.songDd,
+                 g_lay.ddEntries, g_lay.ddEntrySize, g_lay.ddLevel, g_lay.providerSong, g_lay.providerPlayingId,
+                 g_lay.providerStopped, g_lay.menuChain[0], g_lay.menuChain[1], g_lay.previewChain[0]);
+
     // The code is decrypted in memory at startup: wait for it. On a verified build our functions
     // start to look like functions; on another build, wait until the patterns are all found.
     Addresses found;
@@ -496,18 +529,18 @@ void Tick() {
 
 bool GetMenu(std::string* menu) {
     uintptr_t a;
-    return g_ready && ReadChain(g_base + g_addr.root, kMenuChain, 3, &a) && ReadText(a, menu);
+    return g_ready && ReadChain(g_base + g_addr.root, g_lay.menuChain, 3, &a) && ReadText(a, menu);
 }
 
 bool GetPreMenu(std::string* name) {
     uintptr_t a;
-    return g_ready && ReadChain(g_base + g_addr.root, kPreMenuChain, 2, &a) && ReadText(a, name);
+    return g_ready && ReadChain(g_base + g_addr.root, g_lay.preMenuChain, 2, &a) && ReadText(a, name);
 }
 
 bool GetSongKey(std::string* key) {
     uintptr_t a;
     std::string name;
-    if (!g_ready || !ReadChain(g_base + g_addr.previewName, kPreviewChain, 2, &a) || !ReadText(a, &name)) return false;
+    if (!g_ready || !ReadChain(g_base + g_addr.previewName, g_lay.previewChain, 2, &a) || !ReadText(a, &name)) return false;
     if (name.rfind("Play_", 0) != 0) return false;
     size_t end = name.rfind("_Preview");
     if (end == std::string::npos) end = name.rfind("_Invalid");  // song previews disabled in the options
@@ -519,7 +552,7 @@ bool GetSongKey(std::string* key) {
 bool GetSongTime(double* t) {
     const uintptr_t song = SongObject();
     float f;
-    if (!g_ready || !song || !ReadFloat(song + kSongClockOffset, &f)) return false;
+    if (!g_ready || !song || !ReadFloat(song + g_lay.songClock, &f)) return false;
     *t = f;
     return true;
 }
@@ -527,13 +560,14 @@ bool GetSongTime(double* t) {
 bool GetPhraseLevels(std::vector<int>* levels) {
     const uintptr_t song = SongObject();
     uint32_t dd, b, e;
-    if (!g_ready || !song || !ReadU32(song + kSongDd, &dd) || !ReadU32(dd + kDdEntries, &b) || !ReadU32(dd + kDdEntries + 4, &e))
+    const Layout& L = g_lay;
+    if (!g_ready || !song || !ReadU32(song + L.songDd, &dd) || !ReadU32(dd + L.ddEntries, &b) || !ReadU32(dd + L.ddEntries + 4, &e))
         return false;
-    if (e < b || (e - b) % kDdEntrySize || (e - b) / kDdEntrySize > 10000) return false;
+    if (!L.ddEntrySize || e < b || (e - b) % L.ddEntrySize || (e - b) / L.ddEntrySize > 10000) return false;
     levels->clear();
-    for (uint32_t p = b; p < e; p += kDdEntrySize) {
+    for (uint32_t p = b; p < e; p += L.ddEntrySize) {
         uint32_t lv;
-        if (!ReadU32(p + kDdLevel, &lv)) return false;
+        if (!ReadU32(p + L.ddLevel, &lv)) return false;
         levels->push_back((int)lv);
     }
     return true;
@@ -542,7 +576,7 @@ bool GetPhraseLevels(std::vector<int>* levels) {
 bool GetLevelNoteCounts(std::vector<int>* counts) {
     const uintptr_t song = SongObject();
     uint32_t data, b, e;
-    if (!g_ready || !song || !ReadU32(song + kSongData, &data) || !ReadU32(data + kSongDataLevels, &b) ||
+    if (!g_ready || !song || !ReadU32(song + g_lay.songData, &data) || !ReadU32(data + kSongDataLevels, &b) ||
         !ReadU32(data + kSongDataLevels + 4, &e))
         return false;
     if (e < b || (e - b) % kLevelSize || (e - b) / kLevelSize > 100) return false;
@@ -566,7 +600,7 @@ bool GetSongLength(double* len) {
 uintptr_t SongDataAddress() {
     const uintptr_t song = SongObject();
     uint32_t data;
-    return (g_ready && song && ReadU32(song + kSongData, &data)) ? data : 0;
+    return (g_ready && song && ReadU32(song + g_lay.songData, &data)) ? data : 0;
 }
 
 bool ReadSongChart(Chart* chart) {
@@ -679,15 +713,15 @@ bool Freeze() {
     const uintptr_t prov = FindProvider();
     uint32_t pid;
     if (!prov) report::Limited("provider", 1, "  Freeze: the song clock provider was NOT found (vtable 0x%06X)", (unsigned)g_addr.providerVtable);
-    if (!prov || !ReadU32(prov + kProviderPlayingId, &pid)) return false;
+    if (!prov || !ReadU32(prov + g_lay.providerPlayingId, &pid)) return false;
     const uint32_t ev = ((GetEventIDFromPlayingID_t)(g_base + g_addr.getEventIdFromPlayingId))(pid);
     if (!ev) {
         Log("freeze: the clock's playback is not active");
         report::Limited("noevent", 2, "  Freeze: not possible right now, no music playing (playing ID %u; normal around the game's pause screen)", pid);
         return false;
     }
-    const int r = ((ExecuteActionOnEvent_t)(g_base + g_addr.executeActionOnEventId))(ev, kActionPause, kSongGameObject, 0, kCurveLinear, pid);
-    WriteByte(prov + kProviderStopped, 1);
+    const int r = ((ExecuteActionOnEvent_t)(g_base + g_addr.executeActionOnEventId))(ev, kActionPause, g_lay.songGameObject, 0, kCurveLinear, pid);
+    WriteByte(prov + g_lay.providerStopped, 1);
     g_frozenPid = pid;
     g_frozenEvent = ev;
     if (r != 1) Log("freeze: pause returned %d", r);
@@ -701,7 +735,7 @@ bool Freeze() {
 bool Unfreeze() {
     const uintptr_t prov = FindProvider();
     if (g_frozenEvent)
-        ((ExecuteActionOnEvent_t)(g_base + g_addr.executeActionOnEventId))(g_frozenEvent, kActionResume, kSongGameObject, 0,
+        ((ExecuteActionOnEvent_t)(g_base + g_addr.executeActionOnEventId))(g_frozenEvent, kActionResume, g_lay.songGameObject, 0,
                                                                       kCurveLinear, g_frozenPid);
     // Report: while frozen the song clock must not have moved, and it must run again afterwards
     // (checked in Tick). Held less than half a second says too little.
@@ -713,14 +747,14 @@ bool Unfreeze() {
         g_resumeTick = GetTickCount();
     }
     g_freezeTick = 0;
-    if (prov) WriteByte(prov + kProviderStopped, 0);
+    if (prov) WriteByte(prov + g_lay.providerStopped, 0);
     g_frozenPid = g_frozenEvent = 0;
     return true;
 }
 
 void PostUiEvent(const char* name) {
     if (g_ready && g_addr.postEventChar && name && *name)  // optional: not found = no menu sound
-        ((PostEventChar_t)(g_base + g_addr.postEventChar))(name, kSongGameObject, 0, nullptr, nullptr, 0, nullptr, 0);
+        ((PostEventChar_t)(g_base + g_addr.postEventChar))(name, g_lay.songGameObject, 0, nullptr, nullptr, 0, nullptr, 0);
 }
 
 void ResetSongCache() {
