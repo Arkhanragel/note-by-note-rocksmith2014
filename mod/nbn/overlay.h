@@ -46,6 +46,8 @@ struct Settings {
     bool stringsFromThick = false; // strings are named by number ("string 4 (D)", in the string's colour):
                                  // off = the standard numbering, 1 = the thinnest (high e); on = 1 is the
                                  // thickest (low E)
+    bool bannerHand = true;      // fingers and hand position: finger numbers on the fretboard's dots, the
+                                 // hand's zone shaded, and "Hand: move UP to fret 7" when it has to move
     bool bannerNeck = true;      // the banner's picture is a piece of fretboard (the note as a dot in its
                                  // string's colour with the fret number, a red X where a wrong note was
                                  // played); off = the small tab
@@ -144,6 +146,9 @@ struct View {
     technique::Technique tech;   // how to play it (slide, bend...; the banner explains it); chords: all
                                  // strings merged, techFret = the fret it refers to
     int techFret = -1;
+    int anchorFret = 0, anchorWidth = 0;  // where the fretting hand is (0 = unknown)
+    int handFrom = 0;            // the anchor of the note before (0 = unknown): the hand moves from there
+    int fingers[6] = {-1, -1, -1, -1, -1, -1};  // per string: 1 = index .. 4 = little, 0 = thumb, -1 = none
     std::vector<technique::Link> chain;  // the note and the notes linked after it (same string, not picked
                                          // again), for the banner's steps; empty = just `tech`
     bool chord = false;          // waiting for a chord: chordName + frets instead of string/fret

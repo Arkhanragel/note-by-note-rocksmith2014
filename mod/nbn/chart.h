@@ -33,6 +33,12 @@ struct Target {
                                 // game memory
     int techFret = -1;          // chords: the fret `tech` refers to (a slide's start); notes: = fret
     technique::Technique strings[6];  // chords: each string's technique (the tab draws them)
+    // Where the fretting hand is (from game memory): the fret under the index finger and how many
+    // frets the hand covers (Rocksmith's "anchor"; 0 = unknown). Fingers: 1 = index .. 4 = little
+    // finger, 0 = thumb, -1 = none/unknown; per string (chords: the song's; single notes: one finger
+    // per fret from the anchor).
+    int anchorFret = 0, anchorWidth = 0;
+    int fingers[6] = {-1, -1, -1, -1, -1, -1};
 };
 
 // One beat of the song's beat grid (the highway's bar lines). From game memory only.

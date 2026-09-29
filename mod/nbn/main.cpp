@@ -117,6 +117,8 @@ Config LoadConfig() {
                 "; 1 = the banner shows the note on a piece of fretboard (and where a wrong note was played),\n"
                 ";     0 = as a small tab\n"
                 "BannerFretboard=1\n"
+                "; 1 = finger numbers on the fretboard, the hand's zone, and a hint when the hand has to move\n"
+                "BannerHand=1\n"
                 "; 0 = strings are numbered like in guitar books (high e = string 1), 1 = from the thickest\n"
                 ";     (low E = string 1)\n"
                 "StringsFromThickest=0\n"
@@ -217,6 +219,7 @@ Config LoadConfig() {
     c.initial.acceptOctaves = GetPrivateProfileIntW(L"NoteByNote", L"AcceptOctaves", 0, ini.c_str()) != 0;
     c.initial.showBanner = GetPrivateProfileIntW(L"NoteByNote", L"ShowBanner", 1, ini.c_str()) != 0;
     c.initial.bannerNeck = GetPrivateProfileIntW(L"NoteByNote", L"BannerFretboard", 1, ini.c_str()) != 0;
+    c.initial.bannerHand = GetPrivateProfileIntW(L"NoteByNote", L"BannerHand", 1, ini.c_str()) != 0;
     c.initial.stringsFromThick = GetPrivateProfileIntW(L"NoteByNote", L"StringsFromThickest", 0, ini.c_str()) != 0;
     c.initial.waitChords = GetPrivateProfileIntW(L"NoteByNote", L"WaitChords", 1, ini.c_str()) != 0;
     c.initial.showClock = GetPrivateProfileIntW(L"NoteByNote", L"ShowClock", 1, ini.c_str()) != 0;
@@ -277,6 +280,7 @@ void SaveSettings(const overlay::Settings& st) {
     put(L"AcceptOctaves", st.acceptOctaves);
     put(L"ShowBanner", st.showBanner);
     put(L"BannerFretboard", st.bannerNeck);
+    put(L"BannerHand", st.bannerHand);
     put(L"StringsFromThickest", st.stringsFromThick);
     put(L"WaitChords", st.waitChords);
     put(L"SkipGreyedNotes", st.skipGreyed);
@@ -476,6 +480,8 @@ struct MainLoop {
     double cursor = 0;                // song time of the last note that was hit/passed
     double nextWaitT = -1;            // the next note the song would stop at (for the tab's cursor), -1 = none
     Target nextTarget;                // that note (valid while nextWaitT >= 0): the banner shows it early
+    double shownT = -1;               // the note the banner shows, and its hand anchor, and the anchor of
+    int shownAnchor = 0, handFrom = 0;  // the note shown before it (for "Hand: move UP to fret 7")
     double lastT = -1;
     double greyT = -1;                // notes before this are greyed out and not waited for (-1 = none)
     double unplayedT = -1;            // the note the song was waiting at when the pause screen opened: never
@@ -581,6 +587,16 @@ struct MainLoop {
         v.midi = (!note.chord && !note.midi.empty()) ? note.midi[0] : -1;
         v.tech = note.tech;
         v.techFret = note.techFret;
+        v.anchorFret = note.anchorFret;
+        v.anchorWidth = note.anchorWidth;
+        std::copy(std::begin(note.fingers), std::end(note.fingers), v.fingers);
+        // The hand moves from the anchor of the note shown before this one.
+        if (note.time != shownT) {
+            handFrom = shownAnchor;
+            shownT = note.time;
+            shownAnchor = note.anchorFret;
+        }
+        v.handFrom = handFrom;
         if (!note.chord) v.chain = LinkedChain(note);
         if (frozen) {
             v.hint = waitHint;

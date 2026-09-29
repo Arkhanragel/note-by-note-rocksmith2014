@@ -223,6 +223,17 @@ void DrawSegs(ImDrawList* dl, ImFont* f, float size, ImVec2 pos, const std::vect
     }
 }
 
+// "Hand: move UP to fret 7 (index finger there)" when the hand's anchor jumps 2 frets or more from
+// the note before (setting bannerHand). Small moves are just "one finger per fret" and aren't said.
+std::vector<std::vector<Seg>> HandLines(const View& v, const Settings& st) {
+    std::vector<std::vector<Seg>> out;
+    if (!st.bannerHand || v.anchorFret <= 0 || v.handFrom <= 0 || std::abs(v.anchorFret - v.handFrom) < 2) return out;
+    const std::string how = std::string("move ") + (v.anchorFret > v.handFrom ? "UP" : "DOWN") + " to fret " +
+                            std::to_string(v.anchorFret) + " (index finger there)";
+    out.push_back({{"Hand:  ", Col(theme::kChord)}, {how, Col(theme::kText)}});
+    return out;
+}
+
 // The banners' box: top-centre from the settings (S = screen scale), kept on screen.
 ImVec2 BannerPlace(const Settings& st, float S, float w, float h, ImVec2 ds) {
     return Place(ds.x * 0.5f + st.bannerX * S - w * 0.5f, st.bannerY * S, w, h, ds);
@@ -260,10 +271,19 @@ struct NeckPic {
     int slideEnd = -1;         // the fret a slide goes to (-1 = none)
     bool slidePitched = true;  // false = an unpitched slide (it just fades): drawn fainter
     bool vibrato = false;      // the note (or a linked one) has vibrato: a small wave above the dot
+    bool hand = false;         // show fingers and the hand's zone (setting bannerHand)
+    int anchor = 0, anchorW = 0;  // the hand's zone: frets anchor .. anchor + anchorW - 1
+    int fingers[6] = {-1, -1, -1, -1, -1, -1};
     float s = 1, gap = 0, cell = 0, rad = 0, nameW = 0, openW = 0, tailW = 0, top = 0, w = 0, h = 0;
 
-    NeckPic(const View& v, float scale) : s(scale) {
+    NeckPic(const View& v, const Settings& st, float scale) : s(scale) {
         n = v.bass ? 4 : 6;
+        hand = st.bannerHand;
+        if (hand) {
+            anchor = v.anchorFret;
+            anchorW = v.anchorWidth;
+            std::copy(std::begin(v.fingers), std::end(v.fingers), fingers);
+        }
         chord = v.chord;
         if (chord) {
             flats = music::UsesFlats(v.chordName);
@@ -291,6 +311,10 @@ struct NeckPic {
             }
             for (const auto& l : chain) vibrato = vibrato || (l.tech.mask & technique::kVibrato);
             if (slideEnd > 0) { mn = std::min(mn, slideEnd); mx = std::max(mx, slideEnd); }
+        }
+        if (anchor > 0 && mx >= 0) {  // the hand's zone is part of the picture (when it's near the notes)
+            const int a = std::min(mn, anchor), b = std::max(mx, anchor + anchorW - 1);
+            if (b - a <= 9) { mn = a; mx = std::min(24, b); }
         }
         for (const bool likely : {true, false}) {
             for (const auto& m : v.heardAt) {
@@ -337,6 +361,15 @@ struct NeckPic {
         // Wood, inlays, fret wires, the nut (or a faint edge when the window starts higher up).
         const ImVec2 w0(std::min(X(neckL), X(neckR)), yTop - 9 * s), w1(std::max(X(neckL), X(neckR)), yBot + 9 * s);
         dl->AddRectFilled(w0, w1, IM_COL32(0, 0, 0, 90), 4 * s);
+        // The hand's zone: the frets its four fingers cover (index on the anchor fret), lightly shaded.
+        if (anchor > 0 && anchorW > 0) {
+            const int a = std::max(lo, anchor), b = std::min(hi, anchor + anchorW - 1);
+            if (a <= b) {
+                const float xa = X(neckL + (a - lo) * cell), xb = X(neckL + (b - lo + 1) * cell);
+                dl->AddRectFilled(ImVec2(std::min(xa, xb), yTop - 9 * s), ImVec2(std::max(xa, xb), yBot + 9 * s),
+                                  Col(theme::kText, 26), 3 * s);
+            }
+        }
         const float midY = (yTop + yBot) * 0.5f;
         for (int f = lo; f <= hi; ++f) {
             const int k = f % 12;
@@ -500,6 +533,16 @@ struct NeckPic {
             // Dark digits on the light string colours (yellow, green, orange), white on the others.
             const bool light = d.string == 1 || d.string == 3 || d.string == 4;
             dl->AddText(g_fontBold, fs, ImVec2(c.x - ts.x * 0.5f, c.y - ts.y * 0.5f), light ? IM_COL32(20, 20, 24, 255) : IM_COL32(255, 255, 255, 255), t.c_str());
+            // The finger: a small badge at the dot's lower corner (1 = index .. 4 = little, T = thumb).
+            if (hand && fingers[d.string] >= 0) {
+                const std::string fg = fingers[d.string] == 0 ? "T" : std::to_string(fingers[d.string]);
+                const float br = rad * 0.52f, bfs = (chord ? 13 : 15) * s;
+                const ImVec2 bc(c.x - rad * 0.72f, c.y + rad * 0.72f);
+                dl->AddCircleFilled(bc, br, IM_COL32(245, 245, 245, 255));
+                dl->AddCircle(bc, br, IM_COL32(20, 20, 24, 255), 0, 1.5f * s);
+                const ImVec2 fs2 = g_fontBold->CalcTextSizeA(bfs, FLT_MAX, 0, fg.c_str());
+                dl->AddText(g_fontBold, bfs, ImVec2(bc.x - fs2.x * 0.5f, bc.y - fs2.y * 0.5f), IM_COL32(20, 20, 24, 255), fg.c_str());
+            }
             if (!chord && d.midi >= 0) {
                 // Name tag on the right, unless a wrong note sits there on the same string.
                 bool busyRight = false;
@@ -564,7 +607,7 @@ void DrawBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVe
     const std::vector<std::vector<Seg>> linesH = HintLines(v.hint);
     // How to play it (slide, bend, hammer-on...), from the song: "Slide: then slide UP to fret 9 ..."
     // Several steps (a note linked into the next ones: a vibrato that ends in a slide) are numbered.
-    std::vector<std::vector<Seg>> linesT;
+    std::vector<std::vector<Seg>> linesT = HandLines(v, st);
     const auto steps = v.chain.empty() ? technique::Describe(v.tech, v.fret) : technique::Sequence(v.chain);
     for (size_t k = 0; k < steps.size(); ++k) {
         const std::string num = steps.size() > 1 ? std::to_string(k + 1) + ".  " : "";
@@ -579,7 +622,7 @@ void DrawBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVe
     const float gap = 17 * s, tabW = 190 * s, labelW = 22 * s;
     const float tabH = gap * (n - 1);
     const float pad = 24 * s, sep = 34 * s;
-    const NeckPic neck(v, s);
+    const NeckPic neck(v, st, s);
     const float picW = st.bannerNeck ? neck.w : labelW + tabW, picH = st.bannerNeck ? neck.h : tabH + 16 * s;
     const float w = pad + textW + sep + picW + pad;
     const float h = pad + std::max(textH, picH) + pad;
@@ -669,7 +712,7 @@ void DrawChordBanner(ImDrawList* dl, const View& v, const Settings& st, float S,
     const std::vector<Seg> line3 = {{played < n ? "x = don't play that string   " : "", Col(theme::kTextDim)}, {"F9 = skip   F8 = menu", Col(theme::kTextDim)}};
     const std::vector<std::vector<Seg>> linesH = HintLines(v.hint);
     // How to play it (palm mute, accent, a slide of the whole chord...).
-    std::vector<std::vector<Seg>> linesT;
+    std::vector<std::vector<Seg>> linesT = HandLines(v, st);
     const auto steps = technique::Describe(v.tech, v.techFret);
     for (size_t k = 0; k < steps.size(); ++k) {
         const std::string num = steps.size() > 1 ? std::to_string(k + 1) + ".  " : "";
@@ -686,7 +729,7 @@ void DrawChordBanner(ImDrawList* dl, const View& v, const Settings& st, float S,
     const float gap = 34 * s, tabW = 150 * s, labelW = 22 * s;
     const float tabH = gap * (n - 1);
     const float pad = 24 * s, sep = 34 * s;
-    const NeckPic neck(v, s);
+    const NeckPic neck(v, st, s);
     const float picW = st.bannerNeck ? neck.w : labelW + tabW, picH = st.bannerNeck ? neck.h : tabH + 30 * s;
     const float w = pad + textW + sep + picW + pad;
     const float h = pad + std::max(textH, picH) + pad;
@@ -764,6 +807,10 @@ bool DrawCalmBanner(ImDrawList* dl, const View& v, const Settings& st, bool on, 
         s_note.midi = v.midi;
         s_note.tech = v.tech;
         s_note.techFret = v.techFret;
+        s_note.anchorFret = v.anchorFret;
+        s_note.anchorWidth = v.anchorWidth;
+        s_note.handFrom = v.handFrom;
+        std::copy(std::begin(v.fingers), std::end(v.fingers), s_note.fingers);
         s_note.chain = v.chain;
         s_note.chord = v.chord;
         s_note.chordName = v.chordName;
@@ -1762,6 +1809,9 @@ void MenuScreen(Settings& e) {
     Check("Show it on a fretboard", &e.bannerNeck,
           "The banner's picture is a piece of the neck: the note is a dot in its string's colour with the fret "
           "number, and after a wrong note a red X shows where you probably played it. Off = a small tab.");
+    Check("Fingers and hand position", &e.bannerHand,
+          "On the fretboard: which finger for each note (1 = index .. 4 = little finger), and the frets your hand "
+          "covers, shaded. When the hand has to move, the banner says where: \"Hand: move UP to fret 7\".");
     ImGui::Unindent();
     ImGui::EndDisabled();
     Check("Song time", &e.showClock, "A small clock, \"1:23 / 4:28\", top-left by default.");

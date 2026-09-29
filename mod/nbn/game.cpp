@@ -128,7 +128,8 @@ constexpr uintptr_t kSongDataPis = 0x64;      //   vector<PhraseIteration>, 0x18
 constexpr uintptr_t kPiSize = 0x18;
 constexpr uintptr_t kSongDataChords = 0x94;   //   vector<Chord>, 0x48 bytes (the SNG chord template):
 constexpr uintptr_t kChordSize = 0x48;        //     +0x4 frets[6] (int8, -1 = not played), +0x10 MIDI notes[6] (int32)
-constexpr uintptr_t kChordFrets = 0x4;        //     +0xA fingers[6], +0x28 name char[32]
+constexpr uintptr_t kChordFrets = 0x4;        //     +0xA fingers[6] (1 = index .. 4 = little, 0 = thumb, -1), +0x28 name
+constexpr uintptr_t kChordFingers = 0xA;
 constexpr uintptr_t kChordMidi = 0x10;
 constexpr uintptr_t kChordName = 0x28;
 constexpr size_t kChordNameSize = 32;
@@ -136,6 +137,9 @@ constexpr uintptr_t kSongDataTuning = 0x110;  //   vector<int16>: semitones per 
 constexpr uintptr_t kSongDataCapo = 0x11C;    //   int8, -1 = no capo
 constexpr uintptr_t kSongDataLength = 0x148;  //   float SongLength, seconds
 // Note (0x1C8 bytes, same field order as the SNG note). Levels are stored in difficulty order.
+// +0x12/+0x13: the hand's anchor (the fret under the index finger, and how many frets the hand
+// covers), checked 2026-09-29 against Ode to Joy rhythm (notes on frets 2-5: anchor 2, width 4).
+constexpr uintptr_t kNoteAnchorFret = 0x12, kNoteAnchorWidth = 0x13;
 constexpr uintptr_t kNoteMask = 0x0, kNoteTime = 0xC, kNoteString = 0x10, kNoteFret = 0x11, kNoteChordId = 0x14,
                     kNotePi = 0x20;
 // Sustain (float seconds, 0 = short note). In the file it follows vibrato (0x37, packed); in memory
@@ -688,12 +692,19 @@ struct NoteDecoder {
         t.pi = At<int32_t>(notes, n + kNotePi);
         t.ignore = (mask & kMaskIgnore) != 0;
         const float sus = At<float>(notes, n + kNoteSustain);
+        const int anchor = At<int8_t>(notes, n + kNoteAnchorFret), width = At<int8_t>(notes, n + kNoteAnchorWidth);
+        if (anchor >= 1 && anchor <= 24 && width >= 1 && width <= 8) {
+            t.anchorFret = anchor;
+            t.anchorWidth = width;
+        }
         t.sustain = (sus > 0 && sus < 60) ? sus : 0;
         if (chordId >= 0 && (mask & kMaskChord) && (size_t)chordId * kChordSize < chords.size()) {
             t.chord = true;
             const size_t ch = (size_t)chordId * kChordSize;
             for (int s = 0; s < 6; ++s) {
                 t.frets[s] = At<int8_t>(chords, ch + kChordFrets + s);
+                const int finger = At<int8_t>(chords, ch + kChordFingers + s);
+                t.fingers[s] = (t.frets[s] > 0 && finger >= 0 && finger <= 4) ? finger : -1;
                 if (t.frets[s] < 0) continue;
                 t.notes[s] = At<int32_t>(chords, ch + kChordMidi + s * 4);
                 t.midi.push_back(t.notes[s]);
@@ -725,6 +736,11 @@ struct NoteDecoder {
             t.midi.push_back(open[t.string] + SoundingFret(t.fret, capo));
             t.tech.mask = mask;
             t.techFret = t.fret;
+            // One finger per fret inside the hand's box (index on the anchor fret).
+            if (t.fret > 0 && t.anchorFret > 0) {
+                const int f = t.fret - t.anchorFret + 1;
+                if (f >= 1 && f <= 4) t.fingers[t.string] = f;
+            }
             const int slideTo = At<int8_t>(notes, n + kNoteSlideTo), unpitch = At<int8_t>(notes, n + kNoteSlideUnpitchTo);
             const float bend = At<float>(notes, n + kNoteMaxBend);
             t.tech.slideTo = (slideTo >= 0 && slideTo <= 24) ? slideTo : -1;
