@@ -722,8 +722,8 @@ DWORD WINAPI MainThread(LPVOID) {
         // ---- 5. our menu holds the song while it is open (so settings can be changed calmly)
         if (overlay::MenuOpen()) {
             if (!frozen && !menuHold && now >= nextFreezeTry) {
-                nextFreezeTry = now + 500;
                 if (game::Freeze()) { menuHold = true; Log("menu: song held"); }
+                else nextFreezeTry = now + 500;  // failed (no music playing yet): retry in 0.5 s
             }
         } else if (menuHold) {
             game::Unfreeze();
@@ -836,8 +836,12 @@ DWORD WINAPI MainThread(LPVOID) {
 
         // ---- 8. reached the next note without it being played -> wait for it
         if (t >= next->time - leadS && now >= nextFreezeTry) {
-            nextFreezeTry = now + 500;  // if freezing fails (e.g. the song is still loading), retry in 0.5 s
-            if (game::Freeze()) {
+            // Only a FAILED freeze waits 0.5 s before the next try (e.g. the song is still loading).
+            // (It used to wait after every freeze: with fast notes, or right after F9, the next stop
+            // then came up to ~0.35 s late and the song ran past the note.)
+            if (!game::Freeze()) {
+                nextFreezeTry = now + 500;
+            } else {
                 frozen = true;
                 waitFor = *next;
                 waitHint.clear();

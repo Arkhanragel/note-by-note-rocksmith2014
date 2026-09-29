@@ -613,13 +613,16 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
         staffY = top;
     };
     bool nextFound = false;  // the next note to play is highlighted once (on the cursor's row first)
+    float highlight = 1.0f;  // strength of that highlight (the dimmed copy on a coming row: fainter)
     double dimBefore = -1e9; // rows still to come: notes before this (the recap) are drawn dimmed
     const float pulse = 0.6f + 0.4f * std::sin((float)ImGui::GetTime() * 5.0f);
     dl->PushClipRect(ImVec2(x0, y0), ImVec2(x0 + w, y0 + h), true);
 
     // One staff: the strings, the beat grid, the cursor ("now" line, only on the row it's on), the
     // rhythm lane and the notes, as set up by layout().
-    auto drawStaff = [&](bool withCursor) {
+    // cursor: 2 = the cursor ("now" line), 1 = its dimmed copy (a row still to come whose repeated
+    // part is where the cursor is right now), 0 = none.
+    auto drawStaff = [&](int cursor) {
         for (int str = 0; str < n; ++str) {
             const float y = rowY(str);
             const ImU32 c = (kStringColor[str] & 0x00FFFFFF) | (150u << 24);
@@ -662,8 +665,10 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
         }
 
         // The "now" line: where the highway's notes reach the fretboard.
-        if (withCursor)
+        if (cursor == 2)
             dl->AddLine(ImVec2(cursorX, staffTopY() - 16 * s), ImVec2(cursorX, staffBotY() + 12 * s), Col(theme::kHighlight, 200), 2.5f * s);
+        else if (cursor == 1)
+            dl->AddLine(ImVec2(cursorX, staffTopY() - 16 * s), ImVec2(cursorX, staffBotY() + 12 * s), Col(theme::kHighlight, 80), 2 * s);
 
         // Played/passed notes fade out over half a second after they end (held notes stay while they
         // ring); ignored ones are always faint.
@@ -788,7 +793,7 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
                 const ImU32 col = (kStringColor[str] & 0x00FFFFFF) | ((ImU32)(255 * a) << 24);
                 dl->AddRectFilled(ImVec2(x - bw, y - bh), ImVec2(x + bw, y + bh), Col(theme::kPanel, (int)(255 * a)), 5 * s);
                 if (next) dl->AddRect(ImVec2(x - bw - 2 * s, y - bh - 2 * s), ImVec2(x + bw + 2 * s, y + bh + 2 * s),
-                                      Col(theme::kHighlight, (int)(255 * pulse)), 6 * s, 0, 2.5f * s);
+                                      Col(theme::kHighlight, (int)(255 * pulse * highlight)), 6 * s, 0, 2.5f * s);
                 else dl->AddRect(ImVec2(x - bw, y - bh), ImVec2(x + bw, y + bh), col, 5 * s, 0, 2 * s);
                 if (run.empty()) {
                     dl->AddText(g_fontBold, fs, ImVec2(x - ls.x * 0.5f, y - ls.y * 0.5f), Col(theme::kText, (int)(255 * a)),
@@ -812,13 +817,25 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
         for (int k = 0; k < rows; ++k) {
             layout(pageNeedK[k], pageT[k], y0 + pageRow[k] * rowH);
             dimBefore = recapEnd[k];
-            drawStaff(k == 0);
+            // A row still to come whose repeated start covers where the cursor is: a dimmed copy of the
+            // cursor there too, so the eye can already move down before the cursor jumps.
+            const bool ghost = k > 0 && cursorT >= pageT[k] && cursorT < recapEnd[k];
+            if (ghost) {  // the next note gets a faint highlight there too
+                const bool found = nextFound;
+                nextFound = false;
+                highlight = 0.35f;
+                drawStaff(1);
+                nextFound = found;
+                highlight = 1.0f;
+            } else {
+                drawStaff(k == 0 ? 2 : 0);
+            }
         }
         for (int r = 1; r < rows; ++r)
             dl->AddLine(ImVec2(x0 + pad, y0 + r * rowH), ImVec2(x0 + w - pad, y0 + r * rowH), Col(theme::kGrid, 40), 1 * s);
     } else {
         layout(s_zoom, originT, y0);
-        drawStaff(true);
+        drawStaff(2);
     }
     dl->PopClipRect();
 }
