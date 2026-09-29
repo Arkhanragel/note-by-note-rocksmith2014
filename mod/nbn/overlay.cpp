@@ -483,12 +483,9 @@ void DrawBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVe
     if (v.fret == 0) line1 = {{"Play ", Col(theme::kText)}, {StringLabel(st, i, n), col}, {" open", Col(theme::kText)}};
     else line1 = {{"Play ", Col(theme::kText)}, {fret, Col(theme::kText)}, {" on ", Col(theme::kText)}, {StringLabel(st, i, n), col}};
 
-    // How the strings are counted, and which one this is in words.
-    std::string which = st.stringsFromThick ? "counting from the thickest string" : "counting from the thinnest string";
-    if (i == 0) which += " - it's the thickest one";
-    else if (i == n - 1) which += " - it's the thinnest one";
-    std::vector<Seg> line2 = {{which, Col(theme::kText)}};
-    if (v.midi >= 0) line2.push_back({"   \xC2\xB7   note " + music::NoteName(v.midi), Col(theme::kTextDim)});
+    // The note's name (the string's number already says which string it is).
+    std::vector<Seg> line2;
+    if (v.midi >= 0) line2.push_back({"note " + music::NoteName(v.midi), Col(theme::kTextDim)});
     const std::vector<Seg> line3 = {{v.fret == 0 ? "(no finger on the neck)   " : "", Col(theme::kTextDim)}, {"F9 = skip   F8 = menu", Col(theme::kTextDim)}};
     const std::vector<std::vector<Seg>> linesH = HintLines(v.hint);
 
