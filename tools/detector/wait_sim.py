@@ -224,6 +224,35 @@ def mini_tab(targets, i: int, labels: list[str], count: int = 6) -> str:
     return "\n".join("      " + rows[s] for s in reversed(range(len(labels))))
 
 
+def show_target(targets, i, names, labels):
+    """Prints what to play next: string, fret, technique and a small tab."""
+    n = targets[i]["Notes"][0]
+    fret = "open string (don't press any fret)" if n["Fret"] == 0 else f"fret {n['Fret']}"
+    print(f"\n----- Note {i + 1} of {len(targets)} " + "-" * 40)
+    print(f"  PLAY:  {names[n['String']]}, {fret}")
+    if n["Techniques"]:
+        print(f"  Technique: {', '.join(n['Techniques'])}")
+    print(mini_tab(targets, i, labels))
+    print("  (waiting for you...)", flush=True)
+
+
+def explain_miss(ev, n, names, opens):
+    """What the wrong note ev was, compared with the target note n."""
+    pos = where_played(ev.midi, n["String"], opens)
+    diff = ev.midi - n["Midi"]
+    if pos is None:
+        return "  X  Not that one: that sound is outside the neck range. Try again."
+    s, f = pos
+    what = f"{names[s]}, " + ("open" if f == 0 else f"fret {f}")
+    if abs(diff) % 12 == 0:
+        hint = "right note but in a different octave (same name, higher or lower)"
+    elif s == n["String"]:
+        hint = f"{abs(diff)} fret{'s' if abs(diff) > 1 else ''} too {'high' if diff > 0 else 'low'}"
+    else:
+        hint = "wrong string or fret"
+    return f"  X  Not that one: sounded like {what} ({hint}). Try again."
+
+
 def cmd_play(args):
     """
     The wait-mode loop: the current target is hit when the tracker reports an event with
@@ -239,34 +268,9 @@ def cmd_play(args):
     tracker = NoteTracker(make_config(args, bass))
     idx = args.start
 
-    def show(i):
-        n = targets[i]["Notes"][0]
-        fret = "open string (don't press any fret)" if n["Fret"] == 0 else f"fret {n['Fret']}"
-        print(f"\n----- Note {i + 1} of {len(targets)} " + "-" * 40)
-        print(f"  PLAY:  {names[n['String']]}, {fret}")
-        if n["Techniques"]:
-            print(f"  Technique: {', '.join(n['Techniques'])}")
-        print(mini_tab(targets, i, labels))
-        print("  (waiting for you...)", flush=True)
-
-    def explain_miss(ev, n):
-        pos = where_played(ev.midi, n["String"], opens)
-        diff = ev.midi - n["Midi"]
-        if pos is None:
-            return "  X  Not that one: that sound is outside the neck range. Try again."
-        s, f = pos
-        what = f"{names[s]}, " + ("open" if f == 0 else f"fret {f}")
-        if abs(diff) % 12 == 0:
-            hint = "right note but in a different octave (same name, higher or lower)"
-        elif s == n["String"]:
-            hint = f"{abs(diff)} fret{'s' if abs(diff) > 1 else ''} too {'high' if diff > 0 else 'low'}"
-        else:
-            hint = "wrong string or fret"
-        return f"  X  Not that one: sounded like {what} ({hint}). Try again."
-
     print(f"Song: {chart['SngName']}  ({len(targets)} single notes). Press Ctrl+C to stop.")
     print("How to read the tab: each line is a string (thinnest on top), the number is the fret.")
-    show(idx)
+    show_target(targets, idx, names, labels)
     armed_at = 0.0
     waits: list[float] = []
     for block in live_blocks(args.device, args.channel):
@@ -275,7 +279,7 @@ def cmd_play(args):
             continue
         n = targets[idx]["Notes"][0]
         if ev.midi != n["Midi"]:
-            print(explain_miss(ev, n), flush=True)
+            print(explain_miss(ev, n, names, opens), flush=True)
             continue
         waits.append(ev.time - armed_at)
         tuning = ""
@@ -286,7 +290,7 @@ def cmd_play(args):
         if idx >= len(targets):
             break
         armed_at = ev.time
-        show(idx)
+        show_target(targets, idx, names, labels)
     print(f"\nFinished! You played {len(waits)} notes. Typical time per note: {np.median(waits):.1f} s")
 
 

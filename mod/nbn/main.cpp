@@ -939,6 +939,7 @@ struct MainLoop {
             hit = hit || cr.match;
             if (!cr.match && !cr.quiet && !cr.heard.empty() && adviseNow) {
                 std::vector<int> heardMidi;
+                heardMidi.reserve(cr.heard.size());
                 for (const auto& h : cr.heard) heardMidi.push_back(h.first);
                 hint::Line l = hint::ForChord(neck, waitFor.frets, waitFor.notes, heardMidi, cr.extra, cr.hits, cr.needed);
                 if (!l.empty()) {

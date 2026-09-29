@@ -64,6 +64,7 @@ std::string FromNotes(const std::vector<int>& notes, bool flats) {
     if (pcs.size() < 2) return "";
     for (int root : pcs) {
         std::vector<int> iv;
+        iv.reserve(pcs.size());
         for (int pc : pcs) iv.push_back((pc - root + 12) % 12);
         std::sort(iv.begin(), iv.end());
         for (const auto& sh : kShapes) {
