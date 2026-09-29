@@ -579,7 +579,8 @@ struct MainLoop {
         std::copy(std::begin(note.frets), std::end(note.frets), v.frets);
         std::copy(std::begin(note.notes), std::end(note.notes), v.notes);
         v.midi = (!note.chord && !note.midi.empty()) ? note.midi[0] : -1;
-        v.tech = note.chord ? technique::Technique{} : note.tech;
+        v.tech = note.tech;
+        v.techFret = note.techFret;
         if (!note.chord) v.chain = LinkedChain(note);
         if (frozen) {
             v.hint = waitHint;
@@ -627,8 +628,18 @@ struct MainLoop {
             tn.time = t->time;
             tn.chord = t->chord;
             tn.ignore = t->ignore;
-            if (t->chord) std::copy(std::begin(t->frets), std::end(t->frets), tn.frets);
-            else if (t->string >= 0 && t->string < 6) tn.frets[t->string] = t->fret;
+            if (t->chord) {
+                std::copy(std::begin(t->frets), std::end(t->frets), tn.frets);
+                for (int s = 0; s < 6; ++s) {  // each string's technique, plus the chord's own palm mute / mute / accent
+                    tn.tech[s] = t->strings[s];
+                    tn.tech[s].mask |= t->tech.mask & (technique::kPalmMute | technique::kAccent);
+                    if (t->tech.mask & technique::kChordMute) tn.tech[s].mask |= technique::kMute;
+                }
+            }
+            else if (t->string >= 0 && t->string < 6) {
+                tn.frets[t->string] = t->fret;
+                tn.tech[t->string] = t->tech;
+            }
             tn.name = t->chordName;
             tn.sustain = t->sustain;
             tabNotes.push_back(tn);

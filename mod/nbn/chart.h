@@ -28,7 +28,11 @@ struct Target {
     int frets[6] = {-1, -1, -1, -1, -1, -1};
     int notes[6] = {-1, -1, -1, -1, -1, -1};  // MIDI note per string (chords; -1 = not played)
     double sustain = 0;       // seconds the note is held (0 = short note); only from game memory
-    technique::Technique tech;  // single notes: how to play it (slide, bend...); only from game memory
+    technique::Technique tech;  // how to play it (slide, bend...); chords: the chord's own flags and
+                                // all its strings' techniques merged (technique::ForChord); only from
+                                // game memory
+    int techFret = -1;          // chords: the fret `tech` refers to (a slide's start); notes: = fret
+    technique::Technique strings[6];  // chords: each string's technique (the tab draws them)
 };
 
 // One beat of the song's beat grid (the highway's bar lines). From game memory only.

@@ -114,6 +114,8 @@ struct TabNote {
     int frets[6] = {-1, -1, -1, -1, -1, -1};  // per string (0 = thickest): -1 = not played
     std::string name;            // chord name ("A5"), empty for single notes / double stops
     double sustain = 0;          // seconds held: drawn as a tail after the fret number
+    technique::Technique tech[6];  // per string: how it's played (slide, bend, hammer-on...), drawn in tab
+                                   // notation around the fret number ("7/", "12 ^1", "h", "PM", "~")
 };
 
 // One beat line of the scrolling tab.
@@ -139,7 +141,9 @@ struct View {
     int string = 0;              // 0 = thickest string (low E), like the charts
     int fret = 0;                // 0 = open string
     int midi = -1;               // the note (single notes), for its name ("C", "F#")
-    technique::Technique tech;   // single notes: how to play it (slide, bend...; the banner explains it)
+    technique::Technique tech;   // how to play it (slide, bend...; the banner explains it); chords: all
+                                 // strings merged, techFret = the fret it refers to
+    int techFret = -1;
     std::vector<technique::Link> chain;  // the note and the notes linked after it (same string, not picked
                                          // again), for the banner's steps; empty = just `tech`
     bool chord = false;          // waiting for a chord: chordName + frets instead of string/fret

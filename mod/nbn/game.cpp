@@ -148,6 +148,14 @@ constexpr uint32_t kMaskChord = 0x2, kMaskIgnore = 0x40000;
 // (int8, -1 = none), unpitched-slide-to fret, and the largest bend (float, steps; the bend's curve
 // follows from +0x44 as (time, steps) pairs). Checked when read, like the sustain.
 constexpr uintptr_t kNoteSlideTo = 0x34, kNoteSlideUnpitchTo = 0x35, kNoteMaxBend = 0x40;
+// A chord's techniques per string: the chord-notes table, found 2026-09-29 (Ode to Joy rhythm: 16
+// entries = 16 x 0x948 bytes, the song file's layout): +0x0 mask[6] uint32, +0x18 bend curves[6]
+// (32 x (float time, float steps, 4 bytes) + int32 count, 0x184 bytes each), +0x930 slide-to[6] int8,
+// +0x936 unpitched-slide-to[6] int8, +0x93C vibrato[6] int16. The chord note points into it (+0x18,
+// -1 = none).
+constexpr uintptr_t kSongDataChordNotes = 0xAC, kChordNotesSize = 0x948, kNoteChordNotesId = 0x18;
+constexpr uintptr_t kCnMask = 0x0, kCnBends = 0x18, kCnBendSize = 0x184, kCnBendCount = 0x180, kCnSlideTo = 0x930,
+                    kCnSlideUnpitchTo = 0x936;
 
 constexpr int kActionPause = 1, kActionResume = 2, kCurveLinear = 4;
 
@@ -666,6 +674,7 @@ std::vector<Beat> ReadBeats(uintptr_t data) {
 // Turns the in-memory notes of one difficulty level into Targets.
 struct NoteDecoder {
     const std::vector<uint8_t>& chords;  // the chord templates
+    const std::vector<uint8_t>& chordNotes;  // each chord note's per-string techniques (may be empty)
     int open[6];                         // MIDI of each open string (bass: an octave down), no capo
     int capo;
 
@@ -691,12 +700,31 @@ struct NoteDecoder {
             }
             const char* name = (const char*)&chords[ch + kChordName];
             t.chordName.assign(name, strnlen(name, kChordNameSize));
+            const int cn = At<int32_t>(notes, n + kNoteChordNotesId);
+            if (cn >= 0 && (size_t)(cn + 1) * kChordNotesSize <= chordNotes.size()) {
+                const size_t e = (size_t)cn * kChordNotesSize;
+                for (int s = 0; s < 6; ++s) {
+                    technique::Technique& st = t.strings[s];
+                    st.mask = At<uint32_t>(chordNotes, e + kCnMask + s * 4);
+                    const int to = At<int8_t>(chordNotes, e + kCnSlideTo + s), un = At<int8_t>(chordNotes, e + kCnSlideUnpitchTo + s);
+                    st.slideTo = (to >= 0 && to <= 24) ? to : -1;
+                    st.slideUnpitchTo = (un >= 0 && un <= 24) ? un : -1;
+                    const size_t b = e + kCnBends + s * kCnBendSize;
+                    const int used = std::min(32, std::max(0, At<int32_t>(chordNotes, b + kCnBendCount)));
+                    for (int k = 0; k < used; ++k) {
+                        const float step = At<float>(chordNotes, b + k * 12 + 4);
+                        if (step > st.bend && step <= 3) st.bend = step;
+                    }
+                }
+            }
+            t.tech = technique::ForChord(mask, t.strings, t.frets, &t.techFret);
         } else {
             t.string = At<int8_t>(notes, n + kNoteString);
             t.fret = At<int8_t>(notes, n + kNoteFret);
             if (t.string < 0 || t.string > 5) return false;
             t.midi.push_back(open[t.string] + SoundingFret(t.fret, capo));
             t.tech.mask = mask;
+            t.techFret = t.fret;
             const int slideTo = At<int8_t>(notes, n + kNoteSlideTo), unpitch = At<int8_t>(notes, n + kNoteSlideUnpitchTo);
             const float bend = At<float>(notes, n + kNoteMaxBend);
             t.tech.slideTo = (slideTo >= 0 && slideTo <= 24) ? slideTo : -1;
@@ -729,7 +757,7 @@ void LogChart(const Chart& chart, const int tuning[6], size_t chordShapes, const
 bool ReadSongChart(Chart* chart) {
     const uintptr_t data = SongDataAddress();
     if (!data) return false;
-    std::vector<uint8_t> tuningRaw, chords, levels, pis, notes;
+    std::vector<uint8_t> tuningRaw, chords, chordNotes, levels, pis, notes;
     uint32_t levelsBegin = 0;
     int8_t capoRaw;
     if (!ReadVector(data + kSongDataTuning, 2, 8, &tuningRaw) || !ReadBytes(data + kSongDataCapo, &capoRaw, 1) ||
@@ -738,6 +766,8 @@ bool ReadSongChart(Chart* chart) {
         !ReadVector(data + kSongDataPis, kPiSize, 10000, &pis))
         return false;
     if (levels.empty() || pis.empty()) return false;  // still loading
+    // Optional: without it chords just have no per-string techniques.
+    if (!ReadVector(data + kSongDataChordNotes, kChordNotesSize, 10000, &chordNotes)) chordNotes.clear();
     int tuning[6] = {0, 0, 0, 0, 0, 0};
     for (size_t i = 0; i < tuningRaw.size() / 2 && i < 6; ++i) tuning[i] = At<int16_t>(tuningRaw, i * 2);
     const int capo = capoRaw > 0 ? capoRaw : 0;
@@ -745,7 +775,7 @@ bool ReadSongChart(Chart* chart) {
     Chart c;
     const std::set<int> offsets = ChordOctaveOffsets(chords, tuning, capo);
     c.bass = offsets.size() == 1 && *offsets.begin() == -12;
-    NoteDecoder dec{chords, {}, capo};
+    NoteDecoder dec{chords, chordNotes, {}, capo};
     for (int s = 0; s < 6; ++s) {
         c.open[s] = kGuitarOpen[s] + tuning[s] - (c.bass ? 12 : 0);
         dec.open[s] = c.open[s];

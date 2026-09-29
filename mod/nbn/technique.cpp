@@ -7,7 +7,7 @@
 namespace nbn::technique {
 
 bool Technique::Any() const {
-    constexpr uint32_t kTold = kTremolo | kHarmonic | kPalmMute | kSlap | kPluck | kHammerOn | kPullOff | kSlide |
+    constexpr uint32_t kTold = kChordMute | kTremolo | kHarmonic | kPalmMute | kSlap | kPluck | kHammerOn | kPullOff | kSlide |
                                kBend | kTap | kPinchHarmonic | kVibrato | kMute | kUnpitchedSlide | kAccent | kParent;
     return (mask & kTold) != 0;
 }
@@ -45,6 +45,7 @@ std::vector<Words> Sequence(const std::vector<Link>& chain, size_t max) {
             if (m & kSlap) add("Slap", "hit the string with the side of your thumb");
             if (m & kPluck) add("Pop", "hook the string with a finger and let it snap back");
             if (m & kMute) add("Muted", "touch the string without pressing it down: just a dull click");
+            if (m & kChordMute) add("Muted chord", "keep your fingers on the strings without pressing them: a dull \"chk\"");
             if (m & kPalmMute) add("Palm mute", "rest the side of your picking hand on the strings, near the bridge");
             if (m & kHarmonic) add("Harmonic", "touch the string right over the fret wire, don't press it down");
             if (m & kPinchHarmonic) add("Pinch harmonic", "let your thumb graze the string as you pick it");
@@ -79,5 +80,27 @@ std::vector<Words> Sequence(const std::vector<Link>& chain, size_t max) {
 }
 
 std::vector<Words> Describe(const Technique& t, int fret, size_t max) { return Sequence({{t, fret}}, max); }
+
+Technique ForChord(uint32_t chordMask, const Technique strings[6], const int frets[6], int* fret) {
+    Technique out;
+    out.mask = chordMask & (kChordMute | kPalmMute | kAccent | kTremolo);
+    *fret = 0;
+    bool haveFret = false;
+    for (int s = 0; s < 6; ++s) {
+        if (frets[s] < 0) continue;
+        const Technique& t = strings[s];
+        out.mask |= t.mask;
+        if (!haveFret) { *fret = frets[s]; haveFret = true; }
+        // The slide / bend of the lowest string that has one (all of a chord's strings usually move
+        // together); its fret is the one the words refer to.
+        if (out.slideTo < 0 && out.slideUnpitchTo < 0 && (t.slideTo >= 0 || t.slideUnpitchTo >= 0)) {
+            out.slideTo = t.slideTo;
+            out.slideUnpitchTo = t.slideUnpitchTo;
+            *fret = frets[s];
+        }
+        out.bend = std::max(out.bend, t.bend);
+    }
+    return out;
+}
 
 }  // namespace nbn::technique

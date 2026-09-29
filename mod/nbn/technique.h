@@ -20,6 +20,7 @@ namespace nbn::technique {
 
 // SNG note mask bits (Rocksmith2014.NET NoteMask).
 enum : uint32_t {
+    kChordMute = 0x8,         // a chord's fret-hand mute (the chord drawn with x's on the highway)
     kTremolo = 0x10,
     kHarmonic = 0x20,
     kPalmMute = 0x40,
@@ -64,6 +65,11 @@ std::vector<Words> Sequence(const std::vector<Link>& chain, size_t max = 3);
 
 // The same for one note alone.
 std::vector<Words> Describe(const Technique& t, int fret, size_t max = 3);
+
+// A chord: its own flags (palm mute, mute, accent) and each string's technique (frets: -1 = not
+// played). The strings' techniques are merged (a palm mute on every string is said once); a slide
+// is described from the lowest string that slides. `fret` gets that string's fret.
+Technique ForChord(uint32_t chordMask, const Technique strings[6], const int frets[6], int* fret);
 
 // A bend in words: 0.5 -> "half a step", 1 -> "1 step", 1.5 -> "1 and a half steps".
 std::string BendSteps(float steps);

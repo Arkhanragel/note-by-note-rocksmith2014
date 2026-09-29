@@ -68,6 +68,18 @@ int main() {
         "Vibrato: shake the note a little while it rings | Slide: at the end, slide down towards fret 7 as the note fades");
     seq("slide->pull-off", {{{tq::kSlide | tq::kParent, 9, -1, 0}, 7}, {{tq::kPullOff | tq::kChild, -1, -1, 0}, 5}},
         "Slide: then slide UP to fret 9, keep the string pressed | Pull-off: then, without picking, pull your finger off so fret 5 sounds");
+    // A chord: palm mute on its strings, said once; a slide of the whole chord from its lowest string.
+    {
+        tq::Technique str[6];
+        const int frets[6] = {3, 5, -1, -1, -1, -1};
+        str[0].mask = str[1].mask = tq::kPalmMute;
+        int f = 0;
+        words("palm-muted chord", tq::ForChord(0x2, str, frets, &f), f, "Palm mute: rest the side of your picking hand on the strings, near the bridge");
+        str[0] = {tq::kUnpitchedSlide, -1, 1, 0};
+        str[1] = {tq::kUnpitchedSlide, -1, 3, 0};
+        words("sliding chord", tq::ForChord(0x4000002, str, frets, &f), f,
+              "Accent: play it louder than the others | Slide: at the end, slide down towards fret 1 as the note fades");
+    }
     std::printf("bend labels: %s, %s, %s\n", tq::BendLabel(0.5f).c_str(), tq::BendLabel(1).c_str(), tq::BendLabel(1.5f).c_str());
 
     std::printf("%s\n", fails ? "FAILED" : "all passed");

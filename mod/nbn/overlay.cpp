@@ -668,10 +668,18 @@ void DrawChordBanner(ImDrawList* dl, const View& v, const Settings& st, float S,
     }
     const std::vector<Seg> line3 = {{played < n ? "x = don't play that string   " : "", Col(theme::kTextDim)}, {"F9 = skip   F8 = menu", Col(theme::kTextDim)}};
     const std::vector<std::vector<Seg>> linesH = HintLines(v.hint);
+    // How to play it (palm mute, accent, a slide of the whole chord...).
+    std::vector<std::vector<Seg>> linesT;
+    const auto steps = technique::Describe(v.tech, v.techFret);
+    for (size_t k = 0; k < steps.size(); ++k) {
+        const std::string num = steps.size() > 1 ? std::to_string(k + 1) + ".  " : "";
+        linesT.push_back({{num + steps[k].name + ":  ", gold}, {steps[k].how, Col(theme::kText)}});
+    }
 
     const float textW = std::max({SegsWidth(g_fontBold, big, line1), SegsWidth(g_fontUi, mid, lineM), SegsWidth(g_fontUi, mid, line2),
+                                  LinesWidth(g_fontUi, mid, linesT),
                                   LinesWidth(g_fontUi, mid, linesH), SegsWidth(g_fontUi, tiny, line3)});
-    const float textH = big + 8 * s + (lineM.empty() ? 0 : mid + 8 * s) + mid + 10 * s + linesH.size() * (mid + 10 * s) + tiny;
+    const float textH = big + 8 * s + (lineM.empty() ? 0 : mid + 8 * s) + mid + 10 * s + (linesT.size() + linesH.size()) * (mid + 10 * s) + tiny;
 
     // Tab picture, thinnest string on top; wider string spacing than the single-note tab so a
     // bubble fits on every string.
@@ -699,6 +707,10 @@ void DrawChordBanner(ImDrawList* dl, const View& v, const Settings& st, float S,
     }
     DrawSegs(dl, g_fontUi, mid, t, line2);
     t.y += mid + 10 * s;
+    for (const auto& lt : linesT) {
+        DrawSegs(dl, g_fontUi, mid, t, lt);
+        t.y += mid + 10 * s;
+    }
     for (const auto& lh : linesH) {
         DrawSegs(dl, g_fontUi, mid, t, lh);
         t.y += mid + 10 * s;
@@ -751,6 +763,7 @@ bool DrawCalmBanner(ImDrawList* dl, const View& v, const Settings& st, bool on, 
         s_note.fret = v.fret;
         s_note.midi = v.midi;
         s_note.tech = v.tech;
+        s_note.techFret = v.techFret;
         s_note.chain = v.chain;
         s_note.chord = v.chord;
         s_note.chordName = v.chordName;
@@ -1214,6 +1227,80 @@ void DrawFretBox(const TabStaff& tab, const TabShow& sh, const TabItem& it, int 
     }
 }
 
+// A fret box's technique in the usual tab notation (x = the box's centre, `half` = its half width):
+//  - after the box: a slide "/" or "\" (dimmer for an unpitched slide), a bend "^" with its steps ("1", "1/2")
+//  - small marks above: h (hammer-on), p (pull-off), T (tap), PM (palm mute), x (muted), > (accent),
+//    ~ (vibrato), tr (tremolo), and < > around the number for a harmonic
+// The small marks written above a note for these technique bits: "h", "PM", "~"... ("" = none).
+std::string TabMarks(uint32_t m) {
+    namespace T = technique;
+    std::string above;
+    auto add = [&](const char* t) { above += (above.empty() ? "" : " ") + std::string(t); };
+    if (m & T::kHammerOn) add("h");
+    if (m & T::kPullOff) add("p");
+    if (m & T::kTap) add("T");
+    if (m & T::kPalmMute) add("PM");
+    if (m & T::kMute) add("x");
+    if (m & T::kAccent) add(">");
+    if (m & T::kVibrato) add("~");
+    if (m & T::kTremolo) add("tr");
+    if (m & T::kPinchHarmonic) add("PH");
+    return above;
+}
+
+// Draws such marks centred at x, their bottom at y (on a small dark background).
+void DrawTabMarks(const TabStaff& tab, const std::string& text, float x, float y, float a) {
+    if (text.empty()) return;
+    const float s = tab.s, mark = tab.tiny * 0.9f * std::max(0.8f, tab.nsz);
+    const ImVec2 ts = g_fontBold->CalcTextSizeA(mark, FLT_MAX, 0, text.c_str());
+    const ImVec2 p(x - ts.x * 0.5f, y - ts.y * 0.85f);
+    tab.dl->AddRectFilled(ImVec2(p.x - 2 * s, p.y + 1 * s), ImVec2(p.x + ts.x + 2 * s, p.y + ts.y - 1 * s), Col(theme::kPanel, (int)(200 * a)), 3 * s);
+    tab.dl->AddText(g_fontBold, mark, p, Col(theme::kText, (int)(235 * a)), text.c_str());
+}
+
+// `aboveMask`: the bits whose marks go above this box (a chord draws the ones all its strings share
+// once, above the chord).
+void DrawTabTechnique(const TabStaff& tab, const technique::Technique& tq, int fret, int str, float x, float half, float a,
+                      uint32_t aboveMask = ~0u) {
+    namespace T = technique;
+    const uint32_t m = tq.mask;
+    if (!m) return;
+    const float s = tab.s, y = tab.RowY(str), bh = tab.gap * 0.46f * std::max(0.7f, std::min(1.1f, tab.nsz));
+    const float after = x + tab.dir * (half + 2 * s);  // just past the box, in the direction of time
+    const ImU32 ink = Col(theme::kText, (int)(235 * a)), dim = Col(theme::kTextDim, (int)(200 * a));
+    const float mark = tab.tiny * 0.9f * std::max(0.8f, tab.nsz);
+
+    // After the box: slide / bend.
+    const bool slide = (m & T::kSlide) && tq.slideTo >= 0 && tq.slideTo != fret;
+    const bool uslide = (m & T::kUnpitchedSlide) && tq.slideUnpitchTo >= 0 && tq.slideUnpitchTo != fret;
+    if (slide || uslide) {
+        const bool up = (slide ? tq.slideTo : tq.slideUnpitchTo) > fret;
+        const float w = 9 * s * std::max(0.8f, tab.nsz), h = bh * 0.8f;
+        const float x0 = after, x1 = after + tab.dir * w;
+        tab.dl->AddLine(ImVec2(x0, up ? y + h : y - h), ImVec2(x1, up ? y - h : y + h), slide ? ink : dim, 2.4f * s);
+    }
+    if ((m & T::kBend) && tq.bend > 0.1f) {
+        const float ax = after + tab.dir * 5 * s, top = y - bh - 4 * s;
+        tab.dl->AddLine(ImVec2(ax, y - 2 * s), ImVec2(ax, top + 4 * s), ink, 2 * s);
+        tab.dl->AddTriangleFilled(ImVec2(ax, top - 2 * s), ImVec2(ax - 4 * s, top + 5 * s), ImVec2(ax + 4 * s, top + 5 * s), ink);
+        const std::string t = T::BendLabel(tq.bend);
+        const ImVec2 ts = g_fontBold->CalcTextSizeA(mark, FLT_MAX, 0, t.c_str());
+        const float tx = tab.dir > 0 ? ax + 3 * s : ax - 3 * s - ts.x;
+        tab.dl->AddText(g_fontBold, mark, ImVec2(tx, top - ts.y * 0.6f), ink, t.c_str());
+    }
+    // Harmonic: < > around the number.
+    if (m & (T::kHarmonic | T::kPinchHarmonic)) {
+        const float hx = half + 3 * s, hh = bh * 0.7f, hw = 5 * s;
+        for (float side : {-1.0f, 1.0f}) {
+            const float ex = x + side * hx;
+            tab.dl->AddLine(ImVec2(ex + side * hw, y - hh), ImVec2(ex, y), ink, 2 * s);
+            tab.dl->AddLine(ImVec2(ex, y), ImVec2(ex + side * hw, y + hh), ink, 2 * s);
+        }
+    }
+    // Small marks above the box.
+    DrawTabMarks(tab, TabMarks(m & aboveMask), x, y - bh, a);
+}
+
 // One item: the chord's bracket and name, tails on held notes, and its fret boxes.
 void DrawTabItem(const TabStaff& tab, TabShow& sh, const TabItem& it) {
     const float s = tab.s;
@@ -1244,6 +1331,21 @@ void DrawTabItem(const TabStaff& tab, TabShow& sh, const TabItem& it) {
                                     (kStringColor[str] & 0x00FFFFFF) | ((ImU32)(150 * a) << 24), 3 * s);
     for (int str = 0; str < tab.n; ++str)
         if (t.frets[str] >= 0) DrawFretBox(tab, sh, it, str, x, a, next);
+    // Techniques: what every string of a chord shares (palm mute, mute, accent...) is marked once above
+    // the chord's top box; the rest next to each string's box.
+    uint32_t shared = ~0u;
+    int topStr = -1;
+    for (int str = 0; str < tab.n; ++str) {
+        if (t.frets[str] < 0) continue;
+        shared &= t.tech[str].mask;
+        if (topStr < 0 || tab.RowY(str) < tab.RowY(topStr)) topStr = str;
+    }
+    if (!t.chord) shared = 0;
+    for (int str = 0; str < tab.n; ++str)
+        if (t.frets[str] >= 0 && t.tech[str].mask)
+            DrawTabTechnique(tab, t.tech[str], t.frets[str], str, x, tab.BoxHalf(std::to_string(t.frets[str]), RunText(it)), a, ~shared);
+    if (shared && topStr >= 0)
+        DrawTabMarks(tab, TabMarks(shared), x, tab.RowY(topStr) - tab.gap * 0.46f * std::max(0.7f, std::min(1.1f, tab.nsz)), a);
 }
 
 // One staff: the strings, the beat grid, the cursor, the rhythm lane and the notes, as set up by
