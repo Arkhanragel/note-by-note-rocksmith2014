@@ -123,6 +123,8 @@ struct View {
                                  // waited for (after resuming from the pause screen); -1 = none
     double nextWaitTime = -1;    // while playing: the next note the song will stop at if it isn't
                                  // played (-1 = none). The tab's cursor never passes it
+    bool upcoming = false;       // not waiting: the note fields below are the NEXT note the song will stop
+                                 // at (the banner shows it early, so it doesn't vanish between fast notes)
     bool bass = false;           // 4-string layout
     int string = 0;              // 0 = thickest string (low E), like the charts
     int fret = 0;                // 0 = open string

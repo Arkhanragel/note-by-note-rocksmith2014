@@ -41,7 +41,7 @@ struct Shared {
     View view;
     Settings settings;
     std::string toast;
-    DWORD toastStart = 0, toastUntil = 0;
+    DWORD toastUntil = 0;
     bool skipRequest = false;
 } g;
 std::atomic<bool> g_menuOpen{false};
@@ -141,6 +141,28 @@ void LoadPalette(const Settings& st) {
     for (int i = 0; i < theme::kSlots; ++i) {
         const uint32_t rgb = Color(st, (theme::Slot)i);
         g_pal[i] = IM_COL32((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255, 255);
+    }
+}
+
+// ------------------------------------------------------------------ calm fades (no flashing)
+// Parts that come and go (the banner, messages) never pop in or out: their opacity moves towards
+// shown/hidden at a limited speed. A bright panel appearing and disappearing several times a second
+// is a flash, and repeated flashes (more than 3 a second, WCAG 2.3) can trigger seizures in people with
+// photosensitive epilepsy; in a fast passage the banner used to do exactly that at every note.
+struct Fade {
+    float alpha = 0;  // 0 = hidden .. 1 = fully shown
+    void Step(bool show, float dt, float inSeconds, float outSeconds) {
+        alpha = show ? std::min(1.0f, alpha + dt / inSeconds) : std::max(0.0f, alpha - dt / outSeconds);
+    }
+};
+
+// Multiplies the opacity of everything drawn into dl since vertex vtx0 by a (0..1).
+void FadeFrom(ImDrawList* dl, int vtx0, float a) {
+    if (a >= 1.0f) return;
+    for (int i = vtx0; i < dl->VtxBuffer.Size; ++i) {
+        ImU32& c = dl->VtxBuffer[i].col;
+        const ImU32 alpha = (ImU32)(((c >> IM_COL32_A_SHIFT) & 0xFF) * a + 0.5f);
+        c = (c & ~IM_COL32_A_MASK) | (alpha << IM_COL32_A_SHIFT);
     }
 }
 
@@ -351,6 +373,43 @@ void DrawChordBanner(ImDrawList* dl, const View& v, const Settings& st, float S,
         }
         dl->AddText(g_fontBold, fs, ImVec2(bx - lsz.x * 0.5f, y - lsz.y * 0.5f), on ? Col(theme::kText) : Col(theme::kTextDim), label.c_str());
     }
+}
+
+// The banner, calm (no flashing): shown while the song waits, and while it plays towards the next stop
+// when that is close (it then already names that note), so between fast notes only its text changes.
+// It goes away only after kBridgeMs with nothing to show (a real pause in the notes), fading out, and
+// fades in when it comes back. Returns true if it drew something.
+bool DrawCalmBanner(ImDrawList* dl, const View& v, const Settings& st, bool on, float S, ImVec2 ds) {
+    constexpr double kSoonS = 1.5;    // the next stop's note shows this long (song time) before it
+    constexpr DWORD kBridgeMs = 700;  // a gap shorter than this never hides the banner
+    static Fade s_fade;
+    static View s_note;  // the note fields it shows (kept while it fades out)
+    static bool s_have = false;
+    static DWORD s_lastWanted = 0;
+    const DWORD now = GetTickCount();
+    const bool soon = v.upcoming && v.songTime >= 0 && v.nextWaitTime >= 0 && v.nextWaitTime - v.songTime < kSoonS;
+    const bool want = on && v.inSong && (v.waiting || soon);
+    if (want) {  // only the banner's fields (not the tab's note lists)
+        s_note.bass = v.bass;
+        s_note.string = v.string;
+        s_note.fret = v.fret;
+        s_note.midi = v.midi;
+        s_note.chord = v.chord;
+        s_note.chordName = v.chordName;
+        std::copy(std::begin(v.frets), std::end(v.frets), s_note.frets);
+        std::copy(std::begin(v.notes), std::end(v.notes), s_note.notes);
+        s_note.hint = v.hint;
+        s_have = true;
+        s_lastWanted = now;
+    }
+    const bool keep = on && v.inSong && s_have && now - s_lastWanted < kBridgeMs;
+    s_fade.Step(want || keep, ImGui::GetIO().DeltaTime, 0.2f, 0.4f);
+    if (!s_have || s_fade.alpha <= 0) return false;
+    const int vtx0 = dl->VtxBuffer.Size;
+    if (s_note.chord) DrawChordBanner(dl, s_note, st, S, ds);
+    else DrawBanner(dl, s_note, st, S, ds);
+    FadeFrom(dl, vtx0, s_fade.alpha);
+    return true;
 }
 
 // The song clock, top-left by default: "1:23 / 4:28". Small and quiet, the game's HUD stays readable.
@@ -961,12 +1020,10 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
     dl->PopClipRect();
 }
 
-void DrawToast(ImDrawList* dl, const std::string& text, DWORD start, DWORD until, float s, ImVec2 ds) {
-    const DWORD now = GetTickCount();
-    if (text.empty() || now >= until) return;
-    float a = 1.0f;
-    if (until - now < 400) a = (until - now) / 400.0f;  // fade out
-    if (now - start < 150) a = std::min(a, (now - start) / 150.0f);  // fade in
+// A short message in the middle of the screen, with opacity a (the caller fades it: a message repeated
+// quickly, like "Skipped" at every F9 in a fast passage, just stays up instead of blinking).
+void DrawToast(ImDrawList* dl, const std::string& text, float a, float s, ImVec2 ds) {
+    if (text.empty() || a <= 0) return;
     const float size = 30 * s, pad = 16 * s;
     const ImVec2 ts = g_fontBold->CalcTextSizeA(size, FLT_MAX, 0, text.c_str());
     const ImVec2 p0(std::floor((ds.x - ts.x) * 0.5f - pad), std::floor(ds.y * 0.34f));
@@ -1496,13 +1553,12 @@ void Frame(IDirect3DDevice9* dev) {
     View v;
     Settings st;
     std::string toast;
-    DWORD toastStart, toastUntil;
+    DWORD toastUntil;
     {
         std::lock_guard<std::mutex> lk2(g.m);
         v = g.view;
         st = g.settings;
         toast = g.toast;
-        toastStart = g.toastStart;
         toastUntil = g.toastUntil;
     }
     const bool menu = g_menuOpen;
@@ -1529,10 +1585,8 @@ void Frame(IDirect3DDevice9* dev) {
     // example content when it has nothing to show right now.
     ImDrawList* dl = ImGui::GetBackgroundDrawList();  // under the menu window
     const bool bannerOn = st.enabled && st.showBanner;
-    if (bannerOn && v.inSong && v.waiting) {
-        if (v.chord) DrawChordBanner(dl, v, lay, s, ds);
-        else DrawBanner(dl, v, lay, s, ds);
-    } else if (bannerOn && menu) {
+    const bool bannerShown = DrawCalmBanner(dl, v, lay, bannerOn, s, ds);
+    if (!bannerShown && bannerOn && menu) {
         View ex;  // "Play fret 5 on the BLUE string" (D string, note G)
         ex.bass = v.bass;
         ex.string = 2;
@@ -1558,7 +1612,14 @@ void Frame(IDirect3DDevice9* dev) {
         DrawTab(dl, ex, lay, s, ds);
     }
     if (menu) DrawArrangeHints(dl, s);
-    DrawToast(dl, toast, toastStart, toastUntil, s, ds);
+    // The message fades in (0.15 s) and out (0.4 s); the same or a new one arriving while it's up just
+    // keeps it up (only the text changes).
+    static Fade s_toastFade;
+    static std::string s_toastText;
+    const bool toastUp = !toast.empty() && GetTickCount() < toastUntil;
+    if (toastUp) s_toastText = toast;  // (while fading out: the last text)
+    s_toastFade.Step(toastUp, io.DeltaTime, 0.15f, 0.4f);
+    DrawToast(dl, s_toastText, s_toastFade.alpha, s, ds);
     if (menu) DrawMenu(v, st, s, ds);
     g_menuWasOpen = menu;
 
@@ -1741,8 +1802,7 @@ void SetView(const View& v) {
 void Toast(const std::string& text, DWORD ms) {
     std::lock_guard<std::mutex> lk(g.m);
     g.toast = text;
-    g.toastStart = GetTickCount();
-    g.toastUntil = g.toastStart + ms;
+    g.toastUntil = GetTickCount() + ms;
 }
 
 void ToggleMenu() { g_menuOpen = !g_menuOpen; }

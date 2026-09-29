@@ -464,6 +464,7 @@ struct MainLoop {
     std::vector<int> levels;
     double cursor = 0;                // song time of the last note that was hit/passed
     double nextWaitT = -1;            // the next note the song would stop at (for the tab's cursor), -1 = none
+    Target nextTarget;                // that note (valid while nextWaitT >= 0): the banner shows it early
     double lastT = -1;
     double greyT = -1;                // notes before this are greyed out and not waited for (-1 = none)
     Target waitFor;                   // the note we're frozen on
@@ -530,13 +531,17 @@ struct MainLoop {
             if (st.skipGreyed && inSong && game::GetGreyTime(&g) && game::GetSongTime(&ts) && g > ts && g < ts + 20) v.greyTime = g;
         }
         v.bass = chart.bass;
-        v.string = waitFor.string;
-        v.fret = waitFor.fret;
-        v.chord = waitFor.chord;
-        v.chordName = waitFor.chordName;
-        std::copy(std::begin(waitFor.frets), std::end(waitFor.frets), v.frets);
-        std::copy(std::begin(waitFor.notes), std::end(waitFor.notes), v.notes);
-        v.midi = (!waitFor.chord && !waitFor.midi.empty()) ? waitFor.midi[0] : -1;
+        // The banner's note: the one waited for, or while the song plays towards the next stop, that
+        // one (so between fast notes the banner changes its text instead of disappearing).
+        v.upcoming = !frozen && nextWaitT >= 0;
+        const Target& note = v.upcoming ? nextTarget : waitFor;
+        v.string = note.string;
+        v.fret = note.fret;
+        v.chord = note.chord;
+        v.chordName = note.chordName;
+        std::copy(std::begin(note.frets), std::end(note.frets), v.frets);
+        std::copy(std::begin(note.notes), std::end(note.notes), v.notes);
+        v.midi = (!note.chord && !note.midi.empty()) ? note.midi[0] : -1;
         if (frozen) v.hint = waitHint;
         // The clock works even with the mode off or without a chart (it's just the song time).
         if (!inSong || !game::GetSongTime(&v.songTime)) v.songTime = -1;
@@ -834,6 +839,7 @@ struct MainLoop {
         upcomingChord = (next && next->chord && CanWait(*next)) ? next->midi : kNoChord;
         if (!next || !CanWait(*next)) return;
         nextWaitT = next->time;  // the song stops here unless it's played (the tab's cursor won't pass it)
+        if (nextTarget.time != next->time || nextTarget.level != next->level) nextTarget = *next;  // (copy once)
         // A strum is checked 90 and 180 ms after its attack: while one is being checked, give it a
         // moment before stopping the song (so a chord played right on time doesn't stop it).
         if (next->chord && chordDet.Pending() && t < next->time + 0.2) return;
