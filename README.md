@@ -2,9 +2,9 @@
 
 A free, fan-made mod for **Rocksmith 2014 Edition - Remastered** (PC, Steam): the song **waits at each note and chord until you play it**, so you can learn a part at your own pace instead of chasing the highway.
 
-> **Status: early preview.** It works on the current Steam version of the game, and it's being tested by one player. Expect rough edges, and please report what you find.
+> **Status: early preview.** It works on the current Steam version of the game (the "Learn & Play" update, see [Game versions](#game-versions)), and it's being tested by one player. Expect rough edges, and please report what you find.
 >
-> **Help wanted:** do you play the **older** Remastered version (September 2022)? You can help make Note-by-Note work on it, even without a guitar. See [Help test the older game version](#help-test-the-older-game-version).
+> **🙋 Help wanted:** do you play the **older** Remastered version (September 2022)? Note-by-Note doesn't work on it yet, and you can help make it work, even without a guitar. See [Help test the older game version](#help-test-the-older-game-version).
 >
 > Not affiliated with or endorsed by Ubisoft. Rocksmith is a trademark of Ubisoft Entertainment. This project contains no game files or song data.
 
@@ -17,9 +17,21 @@ A free, fan-made mod for **Rocksmith 2014 Edition - Remastered** (PC, Steam): th
 - **In-game menu (F8):** switch the mode on/off, wait for chords too or only single notes, timing, and tab and display options. You can drag and resize everything with the mouse while the menu is open. Colour themes (Default, High contrast, Midnight, Vintage, Paper), and any colour can be changed with a colour wheel or a hex code; the string colours stay the game's. F9 skips the note it's waiting for.
 - Extras: optionally closes the Ubisoft login popups at start-up, plays the start-up logos faster, and works around one of the game's own random crashes.
 
+## Game versions
+
+Note-by-Note checks which version of the game you have and **stays switched off on any version it doesn't know**, so it can't misbehave there.
+
+| Game version | Who has it | Note-by-Note |
+|---|---|---|
+| **Rocksmith 2014 Edition - Remastered, "Learn & Play" update** (December 2024 onwards; Steam build 16576867) | players who got the game from Steam after the December 2024 relaunch | ✅ **Supported** |
+| **Rocksmith 2014 Edition - Remastered, September 2022** (the older version) | many players who bought the game before the relaunch (the version most of the modding community uses) | 🧪 **Not yet: testers needed.** The mod can already look for what it needs in this version by itself; it needs someone with it to try it. [How to help](#help-test-the-older-game-version) (no guitar needed, about 10 minutes) |
+| Any other version (Mac, consoles, older than Remastered) | | ❌ Not supported |
+
+Not sure which one you have? The setup tells you when it finds your game folder.
+
 ## Requirements
 
-- Rocksmith 2014 Edition - Remastered, current Steam version (the mod checks the game version and stays off on others). The older Remastered version (September 2022) is being tested: [you can help](#help-test-the-older-game-version).
+- Rocksmith 2014 Edition - Remastered on PC (Steam), the version marked as supported in [Game versions](#game-versions).
 - An audio interface with an **ASIO** driver (or ASIO4ALL). Note-by-Note hears your guitar through [RS_ASIO](https://github.com/mdias/rs_asio); the setup installs a build of it that includes Note-by-Note's guitar input.
 
 ## Install / uninstall
