@@ -455,6 +455,7 @@ DWORD WINAPI MainThread(LPVOID) {
     bool inSong = false, announced = false;
     std::vector<int> levels;
     double cursor = 0;                // song time of the last note that was hit/passed
+    double nextWaitT = -1;            // the next note the song would stop at (for the tab's cursor), -1 = none
     double lastT = -1;
     Target waitFor;                   // the note we're frozen on
     hint::Line waitHint;              // how to fix the last wrong note played during this wait
@@ -492,6 +493,7 @@ DWORD WINAPI MainThread(LPVOID) {
             v.inSong = inSong;
             v.waiting = frozen;
             v.waitTime = frozen ? waitFor.time : -1;
+            v.nextWaitTime = frozen ? -1 : nextWaitT;
             v.bass = chart.bass;
             v.string = waitFor.string;
             v.fret = waitFor.fret;
@@ -547,6 +549,7 @@ DWORD WINAPI MainThread(LPVOID) {
             else v.chartInfo = "Start a song to use Note-by-Note";
             overlay::SetView(v);
         }
+        nextWaitT = -1;  // set again below (step 7) while the mode can stop the song at a next note
 
         // ---- 1. guitar -> note events
         if (!tap.IsOpen() && now - lastTapTry > 1000) {
@@ -826,6 +829,7 @@ DWORD WINAPI MainThread(LPVOID) {
         }
         upcomingChord = (next && next->chord && Waitable(st, *next)) ? next->midi : kNoChord;
         if (!next || !Waitable(st, *next)) continue;
+        nextWaitT = next->time;  // the song stops here unless it's played (the tab's cursor won't pass it)
         // A strum is checked 90 and 180 ms after its attack: while one is being checked, give it a
         // moment before stopping the song (so a chord played right on time doesn't stop it).
         if (next->chord && chordDet.Pending() && t < next->time + 0.2) continue;

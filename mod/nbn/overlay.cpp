@@ -440,11 +440,21 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
     // The next note to play (highlighted, and where a run's "x8" counts from): while the song waits,
     // exactly the note it waits for (the clock stops a few ms past it, sometimes more than 20 ms, which
     // made the note AFTER it look "next"); while playing, the first one not yet past.
-    const double nextFrom = v.waiting && v.waitTime >= 0 ? v.waitTime - 0.002 : now - 0.02;
-    // Where the cursor ("now" line) is drawn: while waiting, ON the waited note. The song stops a
-    // little past it (chords: up to 200 ms while the chord detector decides), which put the line
-    // visibly to the right of the note it was waiting for.
-    const double cursorT = v.waiting && v.waitTime >= 0 ? v.waitTime : now;
+    // holdT: the note the song waits for, or will stop at next if it isn't played (-1 = none).
+    const double holdT = v.waiting && v.waitTime >= 0 ? v.waitTime : v.nextWaitTime;
+    const double nextFrom = holdT >= 0 && now > holdT - 0.02 ? holdT - 0.002 : now - 0.02;
+    // Where the cursor ("now" line) is drawn. It never passes holdT: the song stops a little past that
+    // note (chords: up to 200 ms while the chord detector decides), and a cursor following the song
+    // there had to jump back onto the note. So it stops ON the note as the song reaches it, and once
+    // the note is played or skipped it catches up with the song at 2.5x speed (a 0.2 s gap closes in
+    // ~0.13 s) instead of jumping forward. A seek or a new song moves it at once.
+    const double cursorWant = holdT >= 0 ? std::min(now, holdT) : now;
+    static double s_cursorT = -1e9;
+    const double frameDt = std::min(0.1, (double)ImGui::GetIO().DeltaTime);
+    if (cursorWant > s_cursorT + 1.0 || cursorWant < s_cursorT - 0.25) s_cursorT = cursorWant;  // seek / new song
+    else if (cursorWant < s_cursorT) s_cursorT = cursorWant;  // a small step back: follow it
+    else s_cursorT = std::min(cursorWant, s_cursorT + frameDt * 2.5);
+    const double cursorT = s_cursorT;
 
     // What gets drawn: one item per note or chord. With "spread" on, a fast repeat of the same fret
     // on the same string (4+ notes, each within kRunGap of the previous one) becomes ONE item drawn

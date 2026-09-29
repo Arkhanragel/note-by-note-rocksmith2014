@@ -117,6 +117,8 @@ struct View {
     bool waiting = false;        // the song is frozen, waiting for a note
     double waitTime = -1;        // while waiting: the song time of that note (the tab highlights it;
                                  // the song clock stops a few ms after it, so "now" can't tell)
+    double nextWaitTime = -1;    // while playing: the next note the song will stop at if it isn't
+                                 // played (-1 = none). The tab's cursor never passes it
     bool bass = false;           // 4-string layout
     int string = 0;              // 0 = thickest string (low E), like the charts
     int fret = 0;                // 0 = open string
