@@ -809,7 +809,11 @@ struct MainLoop {
 
         // ---- 6. keep the cursor in sync with the song position
         // (song start, Riff Repeater loops, the rewind after the game's pause, the mode switched on...)
-        if (!frozen && !menuHold && (lastT < 0 || t < lastT - 0.25 || t > lastT + 1.0)) {
+        // lastT < 0 (a new song, the mode switched on) re-syncs even while our menu holds the song: the
+        // mode is switched on IN the menu, so the song is always held then. (Skipping it there left the
+        // cursor where the mode was switched off, and the song then stopped at a note seconds behind.)
+        const bool jumped = lastT >= 0 && (t < lastT - 0.25 || t > lastT + 1.0);
+        if (!frozen && (lastT < 0 || (jumped && !menuHold))) {
             if (lastT >= 0) Log("song position jumped %.2f -> %.2f s", lastT, t);
             else Log("song position %.3f s: following from here", t);
             cursor = t - 0.05;
