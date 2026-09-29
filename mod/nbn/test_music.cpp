@@ -54,6 +54,20 @@ int main() {
     words("hammer + vibrato", {tq::kHammerOn | tq::kVibrato, -1, -1, 0}, 7,
           "Hammer-on: don't pick: hit the fret hard with a finger of your fretting hand | Vibrato: shake the note a little while it rings");
     words("nothing", {0x800000, -1, -1, 0}, 5, "");  // the "single note" bit alone tells nothing
+    // A linked chain: vibrato that ends in an unpitched slide (the note after it, not picked again),
+    // and a slide into a pull-off.
+    auto seq = [&](const char* what, const std::vector<tq::Link>& chain, const char* want) {
+        std::string got;
+        for (const auto& w : tq::Sequence(chain)) got += (got.empty() ? "" : " | ") + w.name + ": " + w.how;
+        const bool ok = got == want;
+        fails += !ok;
+        std::printf("%s  %-16s -> \"%s\"\n", ok ? "ok  " : "FAIL", what, got.c_str());
+        if (!ok) std::printf("      wanted \"%s\"\n", want);
+    };
+    seq("vibrato->slide", {{{tq::kVibrato | tq::kParent, -1, -1, 0}, 12}, {{tq::kUnpitchedSlide | tq::kChild, -1, 7, 0}, 12}},
+        "Vibrato: shake the note a little while it rings | Slide: at the end, slide down towards fret 7 as the note fades");
+    seq("slide->pull-off", {{{tq::kSlide | tq::kParent, 9, -1, 0}, 7}, {{tq::kPullOff | tq::kChild, -1, -1, 0}, 5}},
+        "Slide: then slide UP to fret 9, keep the string pressed | Pull-off: then, without picking, pull your finger off so fret 5 sounds");
     std::printf("bend labels: %s, %s, %s\n", tq::BendLabel(0.5f).c_str(), tq::BendLabel(1).c_str(), tq::BendLabel(1.5f).c_str());
 
     std::printf("%s\n", fails ? "FAILED" : "all passed");

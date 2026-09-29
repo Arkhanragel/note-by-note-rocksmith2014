@@ -535,6 +535,27 @@ struct MainLoop {
     // The guitar audio from 2 s before the current wait until now (setting SaveWaitAudio).
     void SaveWaitAudio() { debugAudio.Save(debugDir, waitFor.time, waitAudioStart, 48000); }
 
+    // A single note and the notes linked after it: while one is marked "parent", the next note on the
+    // same string (within a few seconds) follows without picking again. At most 4 notes.
+    std::vector<technique::Link> LinkedChain(const Target& first) const {
+        std::vector<technique::Link> out{{first.tech, first.fret}};
+        const Target* cur = &first;
+        while ((cur->tech.mask & technique::kParent) && out.size() < 4) {
+            const Target* next = nullptr;
+            double after = cur->time;
+            for (int i = 0; i < 8 && !next; ++i) {  // skip notes on other strings in between
+                const Target* c = chart.NextTarget(after, levels);
+                if (!c || c->time > cur->time + 4) break;
+                if (!c->chord && c->string == cur->string) next = c;
+                after = c->time;
+            }
+            if (!next) break;
+            out.push_back({next->tech, next->fret});
+            cur = next;
+        }
+        return out;
+    }
+
     // ---- 0. what the overlay shows
     void PublishView(DWORD now) {
         overlay::View v;
@@ -559,6 +580,7 @@ struct MainLoop {
         std::copy(std::begin(note.notes), std::end(note.notes), v.notes);
         v.midi = (!note.chord && !note.midi.empty()) ? note.midi[0] : -1;
         v.tech = note.chord ? technique::Technique{} : note.tech;
+        if (!note.chord) v.chain = LinkedChain(note);
         if (frozen) {
             v.hint = waitHint;
             v.heardAt = waitMarks;

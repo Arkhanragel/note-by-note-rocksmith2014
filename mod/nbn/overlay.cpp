@@ -258,6 +258,8 @@ struct NeckPic {
     int lo = 1, hi = 5;        // fret cells shown (1 = the first fret, with the nut on its left)
     technique::Technique tech; // single notes: the technique (a slide's end, a bend)
     int slideEnd = -1;         // the fret a slide goes to (-1 = none)
+    bool slidePitched = true;  // false = an unpitched slide (it just fades): drawn fainter
+    bool vibrato = false;      // the note (or a linked one) has vibrato: a small wave above the dot
     float s = 1, gap = 0, cell = 0, rad = 0, nameW = 0, openW = 0, tailW = 0, top = 0, w = 0, h = 0;
 
     NeckPic(const View& v, float scale) : s(scale) {
@@ -275,10 +277,19 @@ struct NeckPic {
         // the same note's other spots too, up to a wider window (the frets get narrower).
         int mn = 99, mx = -1;
         for (const auto& d : dots) if (d.fret > 0) { mn = std::min(mn, d.fret); mx = std::max(mx, d.fret); }
-        if (!chord) {  // a slide: where it ends is part of the picture
+        if (!chord) {  // a slide (of the note, or of a note linked after it): where it ends is in the picture
             tech = v.tech;
-            slideEnd = (tech.mask & technique::kSlide) ? tech.slideTo
-                     : (tech.mask & technique::kUnpitchedSlide) ? tech.slideUnpitchTo : -1;
+            std::vector<technique::Link> chain = v.chain;
+            if (chain.empty()) chain.push_back({v.tech, v.fret});
+            for (const auto& l : chain) {
+                const int end = (l.tech.mask & technique::kSlide) ? l.tech.slideTo
+                              : (l.tech.mask & technique::kUnpitchedSlide) ? l.tech.slideUnpitchTo : -1;
+                if (end < 0) continue;
+                slideEnd = end;
+                slidePitched = (l.tech.mask & technique::kSlide) != 0;
+                break;
+            }
+            for (const auto& l : chain) vibrato = vibrato || (l.tech.mask & technique::kVibrato);
             if (slideEnd > 0) { mn = std::min(mn, slideEnd); mx = std::max(mx, slideEnd); }
         }
         for (const bool likely : {true, false}) {
@@ -431,20 +442,37 @@ struct NeckPic {
             const ImVec2 c(X(FretX(p0.x, d.fret)), Y(d.string));
             const ImU32 sc = kStringColor[d.string];
             if (slideEnd >= 0 && slideEnd != d.fret) {
-                const bool pitched = (tech.mask & technique::kSlide) != 0;
+                const bool pitched = slidePitched;
                 const ImVec2 e(X(FretX(p0.x, slideEnd)), c.y);
                 const float dir = e.x > c.x ? 1.0f : -1.0f;
-                const ImU32 lc = pitched ? Col(theme::kText, 230) : Col(theme::kText, 140);
-                for (float x = c.x + dir * (rad + 4 * s); dir * (e.x - dir * (rad * 0.8f + 10 * s) - x) > 0; x += dir * 10 * s)
-                    dl->AddLine(ImVec2(x, c.y - 0), ImVec2(x + dir * 6 * s, c.y), lc, 3 * s);
-                const float hx = e.x - dir * (rad * 0.8f + 3 * s), hl = 8 * s;
-                dl->AddTriangleFilled(ImVec2(hx, c.y), ImVec2(hx - dir * hl, c.y - hl * 0.6f), ImVec2(hx - dir * hl, c.y + hl * 0.6f), lc);
+                // Light dashes with a dark outline, so the arrow stands out on any string colour (a light
+                // arrow alone vanished on the yellow string).
+                const ImU32 lc = pitched ? Col(theme::kText, 240) : Col(theme::kText, 190);
+                const ImU32 dark = Col(theme::kPanel, 235);
+                const float hx = e.x - dir * (rad * 0.8f + 3 * s), hl = 9 * s;
+                // A solid dark band first, under the whole arrow (the string doesn't show between the dashes).
+                dl->AddLine(ImVec2(c.x + dir * (rad + 2 * s), c.y), ImVec2(hx - dir * hl * 0.5f, c.y), dark, 3 * s + 3.2f * s);
+                for (int pass = 0; pass < 2; ++pass) {
+                    const ImU32 col = pass ? lc : dark;
+                    const float grow = pass ? 0 : 1.6f * s;
+                    for (float x = c.x + dir * (rad + 4 * s); dir * (e.x - dir * (rad * 0.8f + 10 * s) - x) > 0; x += dir * 10 * s)
+                        dl->AddLine(ImVec2(x - dir * grow, c.y), ImVec2(x + dir * (6 * s + grow), c.y), col, 3 * s + 2 * grow);
+                    dl->AddTriangleFilled(ImVec2(hx + dir * grow, c.y), ImVec2(hx - dir * (hl + grow), c.y - hl * 0.6f - grow),
+                                          ImVec2(hx - dir * (hl + grow), c.y + hl * 0.6f + grow), col);
+                }
                 dl->AddCircleFilled(e, rad * 0.8f, Col(theme::kPanel, 235));
                 dl->AddCircle(e, rad * 0.8f, pitched ? sc : ((sc & 0x00FFFFFF) | (140u << 24)), 0, 2.5f * s);
                 const std::string t = std::to_string(slideEnd);
                 const float efs = 18 * s;
                 const ImVec2 ts = g_fontBold->CalcTextSizeA(efs, FLT_MAX, 0, t.c_str());
                 dl->AddText(g_fontBold, efs, ImVec2(e.x - ts.x * 0.5f, e.y - ts.y * 0.5f), pitched ? Col(theme::kText) : Col(theme::kTextDim), t.c_str());
+            }
+            if (vibrato) {  // "~~" above the dot, like tab (left of a bend's arrow)
+                const float wy = c.y - rad - 9 * s, w0 = c.x - 13 * s, amp = 3 * s;
+                ImVec2 pts[13];
+                for (int i = 0; i < 13; ++i)
+                    pts[i] = ImVec2(w0 + i * (18 * s / 12), wy + amp * std::sin(i * 3.14159f / 3));
+                dl->AddPolyline(pts, 13, Col(theme::kText, 235), 0, 2.2f * s);
             }
             if ((tech.mask & technique::kBend) && tech.bend > 0.1f) {
                 const float top = c.y - rad - 4 * s, len = 16 * s;
@@ -535,9 +563,13 @@ void DrawBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVe
     const std::vector<Seg> line3 = {{v.fret == 0 ? "(no finger on the neck)   " : "", Col(theme::kTextDim)}, {"F9 = skip   F8 = menu", Col(theme::kTextDim)}};
     const std::vector<std::vector<Seg>> linesH = HintLines(v.hint);
     // How to play it (slide, bend, hammer-on...), from the song: "Slide: then slide UP to fret 9 ..."
+    // Several steps (a note linked into the next ones: a vibrato that ends in a slide) are numbered.
     std::vector<std::vector<Seg>> linesT;
-    for (const auto& w : technique::Describe(v.tech, v.fret))
-        linesT.push_back({{w.name + ":  ", Col(theme::kChord)}, {w.how, Col(theme::kText)}});
+    const auto steps = v.chain.empty() ? technique::Describe(v.tech, v.fret) : technique::Sequence(v.chain);
+    for (size_t k = 0; k < steps.size(); ++k) {
+        const std::string num = steps.size() > 1 ? std::to_string(k + 1) + ".  " : "";
+        linesT.push_back({{num + steps[k].name + ":  ", Col(theme::kChord)}, {steps[k].how, Col(theme::kText)}});
+    }
 
     const float textW = std::max({SegsWidth(g_fontBold, big, line1), SegsWidth(g_fontUi, mid, line2), LinesWidth(g_fontUi, mid, linesT),
                                   LinesWidth(g_fontUi, mid, linesH), SegsWidth(g_fontUi, tiny, line3)});
@@ -719,6 +751,7 @@ bool DrawCalmBanner(ImDrawList* dl, const View& v, const Settings& st, bool on, 
         s_note.fret = v.fret;
         s_note.midi = v.midi;
         s_note.tech = v.tech;
+        s_note.chain = v.chain;
         s_note.chord = v.chord;
         s_note.chordName = v.chordName;
         std::copy(std::begin(v.frets), std::end(v.frets), s_note.frets);

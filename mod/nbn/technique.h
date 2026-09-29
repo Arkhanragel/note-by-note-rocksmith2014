@@ -6,6 +6,10 @@
 // memory (Dec 2024 build) those are at: +0x0 mask, +0x34 slide-to fret (int8, -1 = none), +0x35
 // unpitched-slide-to fret, +0x40 the largest bend (float, in steps: 0.5 = a half step, 1 = a whole
 // step), found 2026-09-29 by dumping the slide/bend notes of Ode to Joy (tools, BITACORA).
+//
+// Sequences: a note marked "parent" flows into the next note on the same string ("child") without
+// picking again (a vibrato that ends in a slide, a slide into a pull-off...). Sequence() puts the
+// techniques of such a chain in the order they happen, as steps.
 // Pure functions, no game state (tested by nbn_music_test).
 #pragma once
 #include <cstdint>
@@ -31,6 +35,8 @@ enum : uint32_t {
     kMute = 0x20000,          // fret-hand mute of a single note (the "x" on the highway)
     kUnpitchedSlide = 0x400000,
     kAccent = 0x4000000,
+    kParent = 0x8000000,      // linked to the next note on the same string (not picked again)
+    kChild = 0x10000000,      // linked from the previous one
 };
 
 struct Technique {
@@ -41,13 +47,23 @@ struct Technique {
     bool Any() const;          // anything to tell the player
 };
 
-// One technique in words: its name ("Slide") and how to do it.
+// One note of a linked sequence: its technique and fret.
+struct Link {
+    Technique tech;
+    int fret = 0;
+};
+
+// One step in words: its name ("Slide") and how to do it.
 struct Words {
     std::string name, how;
 };
 
-// What to tell the player for a note at `fret`, most important first (at most `max`).
-std::vector<Words> Describe(const Technique& t, int fret, size_t max = 2);
+// The steps to play a note and the notes linked after it (chain[0] = the note itself, then its
+// children, same string), in the order they happen; at most `max`.
+std::vector<Words> Sequence(const std::vector<Link>& chain, size_t max = 3);
+
+// The same for one note alone.
+std::vector<Words> Describe(const Technique& t, int fret, size_t max = 3);
 
 // A bend in words: 0.5 -> "half a step", 1 -> "1 step", 1.5 -> "1 and a half steps".
 std::string BendSteps(float steps);
