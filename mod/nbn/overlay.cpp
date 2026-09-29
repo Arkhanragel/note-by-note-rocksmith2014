@@ -483,15 +483,15 @@ void DrawBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVe
     if (v.fret == 0) line1 = {{"Play ", Col(theme::kText)}, {StringLabel(st, i, n), col}, {" open", Col(theme::kText)}};
     else line1 = {{"Play ", Col(theme::kText)}, {fret, Col(theme::kText)}, {" on ", Col(theme::kText)}, {StringLabel(st, i, n), col}};
 
-    // The note's name (the string's number already says which string it is).
+    // The note's name, only with the small tab (the fretboard's dot has it in a tag).
     std::vector<Seg> line2;
-    if (v.midi >= 0) line2.push_back({"note " + music::NoteName(v.midi), Col(theme::kTextDim)});
+    if (v.midi >= 0 && !st.bannerNeck) line2.push_back({"note " + music::NoteName(v.midi), Col(theme::kTextDim)});
     const std::vector<Seg> line3 = {{v.fret == 0 ? "(no finger on the neck)   " : "", Col(theme::kTextDim)}, {"F9 = skip   F8 = menu", Col(theme::kTextDim)}};
     const std::vector<std::vector<Seg>> linesH = HintLines(v.hint);
 
     const float textW = std::max({SegsWidth(g_fontBold, big, line1), SegsWidth(g_fontUi, mid, line2),
                                   LinesWidth(g_fontUi, mid, linesH), SegsWidth(g_fontUi, tiny, line3)});
-    const float textH = big + 8 * s + mid + 10 * s + linesH.size() * (mid + 10 * s) + tiny;
+    const float textH = big + 8 * s + (line2.empty() ? 0 : mid + 10 * s) + linesH.size() * (mid + 10 * s) + tiny;
 
     // Picture: a piece of fretboard, or a small tab (thinnest string on top, like tab and sheet music).
     const float gap = 17 * s, tabW = 190 * s, labelW = 22 * s;
@@ -512,8 +512,10 @@ void DrawBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVe
     ImVec2 t(p0.x + pad, p0.y + (h - textH) * 0.5f);
     DrawSegs(dl, g_fontBold, big, t, line1);
     t.y += big + 8 * s;
-    DrawSegs(dl, g_fontUi, mid, t, line2);
-    t.y += mid + 10 * s;
+    if (!line2.empty()) {
+        DrawSegs(dl, g_fontUi, mid, t, line2);
+        t.y += mid + 10 * s;
+    }
     for (const auto& lh : linesH) {
         DrawSegs(dl, g_fontUi, mid, t, lh);
         t.y += mid + 10 * s;
