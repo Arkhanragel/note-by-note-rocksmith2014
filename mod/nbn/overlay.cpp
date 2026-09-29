@@ -187,6 +187,30 @@ std::vector<Seg> HintSegs(const hint::Line& line) {
     return out;
 }
 
+// The same, one line per piece of advice (hint.cpp joins them with a grey " · "), so two pieces of
+// advice make the banner taller instead of twice as wide. Later lines are indented under the first.
+std::vector<std::vector<Seg>> HintLines(const hint::Line& line) {
+    std::vector<std::vector<Seg>> out;
+    const std::vector<Seg> all = HintSegs(line);
+    for (size_t i = 0; i < all.size(); ++i) {
+        if (i == 0 || all[i].text == "   \xC2\xB7   ") {
+            out.push_back({});
+            if (i > 0) {
+                out.back().push_back({"      ", all[i].col});
+                continue;
+            }
+        }
+        out.back().push_back(all[i]);
+    }
+    return out;
+}
+
+float LinesWidth(ImFont* f, float size, const std::vector<std::vector<Seg>>& lines) {
+    float w = 0;
+    for (const auto& l : lines) w = std::max(w, SegsWidth(f, size, l));
+    return w;
+}
+
 void DrawSegs(ImDrawList* dl, ImFont* f, float size, ImVec2 pos, const std::vector<Seg>& segs) {
     for (const auto& s : segs) {
         dl->AddText(f, size, pos, s.col, s.text.c_str());
@@ -461,11 +485,11 @@ void DrawBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVe
     std::vector<Seg> line2 = {{which, Col(theme::kText)}};
     if (v.midi >= 0) line2.push_back({"   \xC2\xB7   note " + music::NoteName(v.midi), Col(theme::kTextDim)});
     const std::vector<Seg> line3 = {{v.fret == 0 ? "(no finger on the neck)   " : "", Col(theme::kTextDim)}, {"F9 = skip   F8 = menu", Col(theme::kTextDim)}};
-    const std::vector<Seg> lineH = HintSegs(v.hint);
+    const std::vector<std::vector<Seg>> linesH = HintLines(v.hint);
 
     const float textW = std::max({SegsWidth(g_fontBold, big, line1), SegsWidth(g_fontUi, mid, line2),
-                                  SegsWidth(g_fontUi, mid, lineH), SegsWidth(g_fontUi, tiny, line3)});
-    const float textH = big + 8 * s + mid + 10 * s + (lineH.empty() ? 0 : mid + 10 * s) + tiny;
+                                  LinesWidth(g_fontUi, mid, linesH), SegsWidth(g_fontUi, tiny, line3)});
+    const float textH = big + 8 * s + mid + 10 * s + linesH.size() * (mid + 10 * s) + tiny;
 
     // Picture: a piece of fretboard, or a small tab (thinnest string on top, like tab and sheet music).
     const float gap = 17 * s, tabW = 190 * s, labelW = 22 * s;
@@ -488,8 +512,8 @@ void DrawBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVe
     t.y += big + 8 * s;
     DrawSegs(dl, g_fontUi, mid, t, line2);
     t.y += mid + 10 * s;
-    if (!lineH.empty()) {
-        DrawSegs(dl, g_fontUi, mid, t, lineH);
+    for (const auto& lh : linesH) {
+        DrawSegs(dl, g_fontUi, mid, t, lh);
         t.y += mid + 10 * s;
     }
     DrawSegs(dl, g_fontUi, tiny, t, line3);
@@ -552,11 +576,11 @@ void DrawChordBanner(ImDrawList* dl, const View& v, const Settings& st, float S,
         if (v.notes[i] >= 0) line2.push_back({" = " + music::NoteName(v.notes[i], flats), Col(theme::kTextDim)});
     }
     const std::vector<Seg> line3 = {{played < n ? "x = don't play that string   " : "", Col(theme::kTextDim)}, {"F9 = skip   F8 = menu", Col(theme::kTextDim)}};
-    const std::vector<Seg> lineH = HintSegs(v.hint);
+    const std::vector<std::vector<Seg>> linesH = HintLines(v.hint);
 
     const float textW = std::max({SegsWidth(g_fontBold, big, line1), SegsWidth(g_fontUi, mid, lineM), SegsWidth(g_fontUi, mid, line2),
-                                  SegsWidth(g_fontUi, mid, lineH), SegsWidth(g_fontUi, tiny, line3)});
-    const float textH = big + 8 * s + (lineM.empty() ? 0 : mid + 8 * s) + mid + 10 * s + (lineH.empty() ? 0 : mid + 10 * s) + tiny;
+                                  LinesWidth(g_fontUi, mid, linesH), SegsWidth(g_fontUi, tiny, line3)});
+    const float textH = big + 8 * s + (lineM.empty() ? 0 : mid + 8 * s) + mid + 10 * s + linesH.size() * (mid + 10 * s) + tiny;
 
     // Tab picture, thinnest string on top; wider string spacing than the single-note tab so a
     // bubble fits on every string.
@@ -584,8 +608,8 @@ void DrawChordBanner(ImDrawList* dl, const View& v, const Settings& st, float S,
     }
     DrawSegs(dl, g_fontUi, mid, t, line2);
     t.y += mid + 10 * s;
-    if (!lineH.empty()) {
-        DrawSegs(dl, g_fontUi, mid, t, lineH);
+    for (const auto& lh : linesH) {
+        DrawSegs(dl, g_fontUi, mid, t, lh);
         t.y += mid + 10 * s;
     }
     DrawSegs(dl, g_fontUi, tiny, t, line3);
