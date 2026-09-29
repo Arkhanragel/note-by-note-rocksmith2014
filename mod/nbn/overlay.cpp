@@ -127,8 +127,22 @@ const char* kColorName[6] = {"RED", "YELLOW", "BLUE", "ORANGE", "GREEN", "PURPLE
 const char* kStringName[6] = {"E", "A", "D", "G", "B", "e"};  // bass uses the first four
 const char* kOrdinal[6] = {"1st", "2nd", "3rd", "4th", "5th", "6th"};
 
-const ImU32 kWhite = IM_COL32(255, 255, 255, 255);
-const ImU32 kGrey = IM_COL32(175, 175, 185, 255);
+// ------------------------------------------------------------------ colours (theme.h)
+// This frame's theme colours (render thread only; Frame() fills them from the settings). The string
+// colours above are not part of a theme.
+ImU32 g_pal[theme::kSlots];
+
+// A theme colour with alpha a (0..255): how see-through each thing is stays with the drawing code.
+ImU32 Col(theme::Slot slot, int a = 255) {
+    return (g_pal[slot] & 0x00FFFFFF) | ((ImU32)std::max(0, std::min(255, a)) << 24);
+}
+
+void LoadPalette(const Settings& st) {
+    for (int i = 0; i < theme::kSlots; ++i) {
+        const uint32_t rgb = Color(st, (theme::Slot)i);
+        g_pal[i] = IM_COL32((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255, 255);
+    }
+}
 
 struct Seg {  // a piece of text in one colour
     std::string text;
@@ -145,9 +159,9 @@ float SegsWidth(ImFont* f, float size, const std::vector<Seg>& segs) {
 std::vector<Seg> HintSegs(const hint::Line& line) {
     std::vector<Seg> out;
     if (line.empty()) return out;
-    out.push_back({"!  ", IM_COL32(255, 110, 90, 255)});
+    out.push_back({"!  ", Col(theme::kWarning)});
     for (const auto& h : line)
-        out.push_back({h.text, h.color >= 0 && h.color < 6 ? kStringColor[h.color] : (h.color == hint::kGrey ? kGrey : kWhite)});
+        out.push_back({h.text, h.color >= 0 && h.color < 6 ? kStringColor[h.color] : (h.color == hint::kGrey ? Col(theme::kTextDim) : Col(theme::kText))});
     return out;
 }
 
@@ -163,6 +177,17 @@ ImVec2 BannerPlace(const Settings& st, float S, float w, float h, ImVec2 ds) {
     return Place(ds.x * 0.5f + st.bannerX * S - w * 0.5f, st.bannerY * S, w, h, ds);
 }
 
+// The banners' small tabs follow the tab's settings: which string is on top (tabThickTop) and, when
+// left-handed (tabMirror), the string names on the right of the lines instead of the left.
+// MiniTabRow: the row of a string, 0 = top. MiniTab: x of the names and of the lines' left end, for a
+// small tab whose box starts at tx and is labelW + tabW wide.
+int MiniTabRow(const Settings& st, int str, int n) { return st.tabThickTop ? str : n - 1 - str; }
+struct MiniTab {
+    float labelX, lineL;
+    MiniTab(const Settings& st, float tx, float labelW, float tabW, float s)
+        : labelX(st.tabMirror ? tx + tabW + 8 * s : tx), lineL(st.tabMirror ? tx : tx + labelW) {}
+};
+
 // The "waiting" banner: what to play in words (+ colour) and as a tiny tab.
 // S = screen scale (height / 1080); sizes also follow the player's banner size.
 void DrawBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 ds) {
@@ -175,16 +200,16 @@ void DrawBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVe
     char fret[32];
     std::snprintf(fret, sizeof(fret), "fret %d", v.fret);
     std::vector<Seg> line1;
-    if (v.fret == 0) line1 = {{"Play the ", kWhite}, {std::string(kColorName[i]) + " string", col}, {" open", kWhite}};
-    else line1 = {{"Play ", kWhite}, {fret, kWhite}, {" on the ", kWhite}, {std::string(kColorName[i]) + " string", col}};
+    if (v.fret == 0) line1 = {{"Play the ", Col(theme::kText)}, {std::string(kColorName[i]) + " string", col}, {" open", Col(theme::kText)}};
+    else line1 = {{"Play ", Col(theme::kText)}, {fret, Col(theme::kText)}, {" on the ", Col(theme::kText)}, {std::string(kColorName[i]) + " string", col}};
 
     char which[96];
     if (i == 0) std::snprintf(which, sizeof(which), "%s string - the thickest one", kStringName[i]);
     else if (i == n - 1) std::snprintf(which, sizeof(which), "%s string - the thinnest one", kStringName[i]);
     else std::snprintf(which, sizeof(which), "%s string - the %s counting from the thickest", kStringName[i], kOrdinal[i]);
-    std::vector<Seg> line2 = {{which, kWhite}};
-    if (v.midi >= 0) line2.push_back({"   \xC2\xB7   note " + music::NoteName(v.midi), kGrey});
-    const std::vector<Seg> line3 = {{v.fret == 0 ? "(no finger on the neck)   " : "", kGrey}, {"F9 = skip   F8 = menu", kGrey}};
+    std::vector<Seg> line2 = {{which, Col(theme::kText)}};
+    if (v.midi >= 0) line2.push_back({"   \xC2\xB7   note " + music::NoteName(v.midi), Col(theme::kTextDim)});
+    const std::vector<Seg> line3 = {{v.fret == 0 ? "(no finger on the neck)   " : "", Col(theme::kTextDim)}, {"F9 = skip   F8 = menu", Col(theme::kTextDim)}};
     const std::vector<Seg> lineH = HintSegs(v.hint);
 
     const float textW = std::max({SegsWidth(g_fontBold, big, line1), SegsWidth(g_fontUi, mid, line2),
@@ -202,7 +227,7 @@ void DrawBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVe
     g_box[kBanner] = {p0, p1, true};
 
     const float pulse = 0.65f + 0.35f * std::sin((float)ImGui::GetTime() * 4.0f);
-    dl->AddRectFilled(p0, p1, IM_COL32(14, 14, 20, 222), 14 * s);
+    dl->AddRectFilled(p0, p1, Col(theme::kPanel, 222), 14 * s);
     dl->AddRect(p0, p1, (col & 0x00FFFFFF) | ((ImU32)(255 * pulse) << 24), 14 * s, 0, 3.5f * s);
 
     ImVec2 t(p0.x + pad, p0.y + (h - textH) * 0.5f);
@@ -217,25 +242,25 @@ void DrawBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVe
     DrawSegs(dl, g_fontUi, tiny, t, line3);
 
     const float tx = p0.x + pad + textW + sep, ty = p0.y + (h - tabH) * 0.5f;
-    for (int r = 0; r < n; ++r) {
-        const int str = n - 1 - r;
-        const float y = ty + r * gap;
+    const MiniTab mt(st, tx, labelW, tabW, s);
+    for (int str = 0; str < n; ++str) {
+        const float y = ty + MiniTabRow(st, str, n) * gap;
         const bool target = str == i;
         const ImU32 c = target ? kStringColor[str] : ((kStringColor[str] & 0x00FFFFFF) | (110u << 24));
         const char* name = kStringName[str];
         const ImVec2 ns = g_fontUi->CalcTextSizeA(tiny, FLT_MAX, 0, name);
-        dl->AddText(g_fontUi, tiny, ImVec2(tx, y - ns.y * 0.5f), c, name);
-        dl->AddLine(ImVec2(tx + labelW, y), ImVec2(tx + labelW + tabW, y), c, target ? 4 * s : 2 * s);
+        dl->AddText(g_fontUi, tiny, ImVec2(mt.labelX, y - ns.y * 0.5f), c, name);
+        dl->AddLine(ImVec2(mt.lineL, y), ImVec2(mt.lineL + tabW, y), c, target ? 4 * s : 2 * s);
     }
     char num[8];
     std::snprintf(num, sizeof(num), "%d", v.fret);
-    const ImVec2 bc(tx + labelW + tabW * 0.5f, ty + (n - 1 - i) * gap);
+    const ImVec2 bc(mt.lineL + tabW * 0.5f, ty + MiniTabRow(st, i, n) * gap);
     const float fs = 24 * s;
     const ImVec2 nsz = g_fontBold->CalcTextSizeA(fs, FLT_MAX, 0, num);
     const float rad = std::max(nsz.x, nsz.y) * 0.5f + 7 * s;
-    dl->AddCircleFilled(bc, rad, IM_COL32(14, 14, 20, 255));
+    dl->AddCircleFilled(bc, rad, Col(theme::kPanel, 255));
     dl->AddCircle(bc, rad, col, 0, 3 * s);
-    dl->AddText(g_fontBold, fs, ImVec2(bc.x - nsz.x * 0.5f, bc.y - nsz.y * 0.5f), kWhite, num);
+    dl->AddText(g_fontBold, fs, ImVec2(bc.x - nsz.x * 0.5f, bc.y - nsz.y * 0.5f), Col(theme::kText), num);
 }
 
 // The "waiting" banner for a chord: its name, each string to play in its colour with its fret, and
@@ -243,7 +268,7 @@ void DrawBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVe
 void DrawChordBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 ds) {
     const float s = S * st.bannerSize / 100.0f;
     const int n = v.bass ? 4 : 6;
-    const ImU32 gold = IM_COL32(255, 206, 84, 255);
+    const ImU32 gold = Col(theme::kChord);
     const float big = 46 * s, mid = 26 * s, tiny = 20 * s;
 
     std::vector<int> notes;  // lowest string first
@@ -251,25 +276,25 @@ void DrawChordBanner(ImDrawList* dl, const View& v, const Settings& st, float S,
     const bool flats = music::UsesFlats(v.chordName);
 
     std::vector<Seg> line1;
-    if (!v.chordName.empty()) line1 = {{"Play the chord  ", kWhite}, {v.chordName, gold}};
-    else line1 = {{"Play these strings together", kWhite}};
+    if (!v.chordName.empty()) line1 = {{"Play the chord  ", Col(theme::kText)}, {v.chordName, gold}};
+    else line1 = {{"Play these strings together", Col(theme::kText)}};
 
     // What the chord is, in words: "B power chord  -  notes B and F#".
     const std::string meaning = music::ChordMeaning(v.chordName, notes);
     std::vector<Seg> lineM;
     if (!meaning.empty()) lineM.push_back({meaning, gold});
-    if (!notes.empty()) lineM.push_back({(meaning.empty() ? "notes " : "   \xC2\xB7   notes ") + music::NoteList(notes, flats), kGrey});
+    if (!notes.empty()) lineM.push_back({(meaning.empty() ? "notes " : "   \xC2\xB7   notes ") + music::NoteList(notes, flats), Col(theme::kTextDim)});
 
     std::vector<Seg> line2;  // "RED open = E    YELLOW 2 = B ..." from the thickest string
     int played = 0;
     for (int i = 0; i < n; ++i) {
         if (v.frets[i] < 0) continue;
-        if (played++) line2.push_back({"     ", kWhite});
+        if (played++) line2.push_back({"     ", Col(theme::kText)});
         line2.push_back({kColorName[i], kStringColor[i]});
-        line2.push_back({v.frets[i] == 0 ? " open" : " " + std::to_string(v.frets[i]), kWhite});
-        if (v.notes[i] >= 0) line2.push_back({" = " + music::NoteName(v.notes[i], flats), kGrey});
+        line2.push_back({v.frets[i] == 0 ? " open" : " " + std::to_string(v.frets[i]), Col(theme::kText)});
+        if (v.notes[i] >= 0) line2.push_back({" = " + music::NoteName(v.notes[i], flats), Col(theme::kTextDim)});
     }
-    const std::vector<Seg> line3 = {{played < n ? "x = don't play that string   " : "", kGrey}, {"F9 = skip   F8 = menu", kGrey}};
+    const std::vector<Seg> line3 = {{played < n ? "x = don't play that string   " : "", Col(theme::kTextDim)}, {"F9 = skip   F8 = menu", Col(theme::kTextDim)}};
     const std::vector<Seg> lineH = HintSegs(v.hint);
 
     const float textW = std::max({SegsWidth(g_fontBold, big, line1), SegsWidth(g_fontUi, mid, lineM), SegsWidth(g_fontUi, mid, line2),
@@ -288,7 +313,7 @@ void DrawChordBanner(ImDrawList* dl, const View& v, const Settings& st, float S,
     g_box[kBanner] = {p0, p1, true};
 
     const float pulse = 0.65f + 0.35f * std::sin((float)ImGui::GetTime() * 4.0f);
-    dl->AddRectFilled(p0, p1, IM_COL32(14, 14, 20, 222), 14 * s);
+    dl->AddRectFilled(p0, p1, Col(theme::kPanel, 222), 14 * s);
     dl->AddRect(p0, p1, (gold & 0x00FFFFFF) | ((ImU32)(255 * pulse) << 24), 14 * s, 0, 3.5f * s);
 
     ImVec2 t(p0.x + pad, p0.y + (h - textH) * 0.5f);
@@ -307,24 +332,24 @@ void DrawChordBanner(ImDrawList* dl, const View& v, const Settings& st, float S,
     DrawSegs(dl, g_fontUi, tiny, t, line3);
 
     const float tx = p0.x + pad + textW + sep, ty = p0.y + (h - tabH) * 0.5f;
-    const float bx = tx + labelW + tabW * 0.5f, fs = 20 * s;
-    for (int r = 0; r < n; ++r) {
-        const int str = n - 1 - r;
-        const float y = ty + r * gap;
+    const MiniTab mt(st, tx, labelW, tabW, s);
+    const float bx = mt.lineL + tabW * 0.5f, fs = 20 * s;
+    for (int str = 0; str < n; ++str) {
+        const float y = ty + MiniTabRow(st, str, n) * gap;
         const bool on = v.frets[str] >= 0;
         const ImU32 c = on ? kStringColor[str] : ((kStringColor[str] & 0x00FFFFFF) | (90u << 24));
         const char* name = kStringName[str];
         const ImVec2 ns = g_fontUi->CalcTextSizeA(tiny, FLT_MAX, 0, name);
-        dl->AddText(g_fontUi, tiny, ImVec2(tx, y - ns.y * 0.5f), c, name);
-        dl->AddLine(ImVec2(tx + labelW, y), ImVec2(tx + labelW + tabW, y), c, on ? 4 * s : 2 * s);
+        dl->AddText(g_fontUi, tiny, ImVec2(mt.labelX, y - ns.y * 0.5f), c, name);
+        dl->AddLine(ImVec2(mt.lineL, y), ImVec2(mt.lineL + tabW, y), c, on ? 4 * s : 2 * s);
         const std::string label = on ? std::to_string(v.frets[str]) : "x";
         const ImVec2 lsz = g_fontBold->CalcTextSizeA(fs, FLT_MAX, 0, label.c_str());
         if (on) {
             const float rad = std::min(gap * 0.48f, std::max(lsz.x, lsz.y) * 0.5f + 4 * s);
-            dl->AddCircleFilled(ImVec2(bx, y), rad, IM_COL32(14, 14, 20, 255));
+            dl->AddCircleFilled(ImVec2(bx, y), rad, Col(theme::kPanel, 255));
             dl->AddCircle(ImVec2(bx, y), rad, kStringColor[str], 0, 3 * s);
         }
-        dl->AddText(g_fontBold, fs, ImVec2(bx - lsz.x * 0.5f, y - lsz.y * 0.5f), on ? kWhite : kGrey, label.c_str());
+        dl->AddText(g_fontBold, fs, ImVec2(bx - lsz.x * 0.5f, y - lsz.y * 0.5f), on ? Col(theme::kText) : Col(theme::kTextDim), label.c_str());
     }
 }
 
@@ -344,8 +369,8 @@ void DrawClock(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec
     const ImVec2 p0 = Place(st.clockX * S, st.clockY * S, w, h, ds);
     const ImVec2 p1(p0.x + w, p0.y + h);
     g_box[kClock] = {p0, p1, true};
-    dl->AddRectFilled(p0, p1, IM_COL32(14, 14, 20, 170), 8 * s);
-    dl->AddText(g_fontBold, size, ImVec2(p0.x + padX, p0.y + padY), IM_COL32(235, 235, 240, 230), text.c_str());
+    dl->AddRectFilled(p0, p1, Col(theme::kPanel, 170), 8 * s);
+    dl->AddText(g_fontBold, size, ImVec2(p0.x + padX, p0.y + padY), Col(theme::kText, 230), text.c_str());
 }
 
 // The scrolling tab: guitar tab of the next few seconds, thinnest string on top. Notes move right to
@@ -355,10 +380,12 @@ void DrawClock(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec
 // shaded; held notes get a tail. With these, the gaps between notes can be read as rhythm.
 // Fast passages (setting tabSpread): the whole tab zooms in smoothly so the notes coming up are far
 // enough apart to read, and a fast repeat of one fret is drawn once, "12 x8".
+// Left-handed (tabMirror) everything runs the other way (notes move left to right, pages turn to the
+// left); tabThickTop puts the thickest string on top.
 void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 ds) {
     const float s = S * st.tabSize / 100.0f;  // the tab's own size: string gap, text
     const int n = v.bass ? 4 : 6;
-    const ImU32 gold = IM_COL32(255, 206, 84, 255);
+    const ImU32 gold = Col(theme::kChord);
     // top: a lane for chord names (y0 + 6), then the bar numbers right above the strings.
     // bottom: room under the low string, plus the rhythm lane (stems, beams, triplet "3") when shown.
     const bool rhythm = st.tabRhythm && !v.tabBeats.empty();
@@ -375,9 +402,15 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
     g_box[kTab] = {p0, ImVec2(x0 + w, y0 + h), true};
     // Background: how solid is the player's choice (100 % hides the game's own text behind the tab).
     const int bgA = std::max(0, std::min(100, st.tabOpacity)) * 255 / 100;
-    dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x0 + w, y0 + h), IM_COL32(14, 14, 20, bgA), 10 * s);
+    dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x0 + w, y0 + h), Col(theme::kPanel, bgA), 10 * s);
 
-    const float lineL = x0 + pad + labelW, lineR = x0 + w - pad;
+    // Left-handed (tabMirror): the string names go on the right and time runs right to left. All the
+    // timing below (cursor start, pages, zoom) is worked out as usual, left to right; only timeX()
+    // flips the result, so the drawing code must not assume "later = further right" (it uses dir).
+    const bool mirror = st.tabMirror;
+    const float dir = mirror ? -1.0f : 1.0f;  // +1: later notes are to the right; -1: to the left
+    const float lineL = x0 + pad + (mirror ? 0 : labelW), lineR = x0 + w - pad - (mirror ? labelW : 0);
+    const float labelX = mirror ? lineR + 10 * s : x0 + pad;  // where the string names start
     // Where "now" sits: scrolling = the fixed line; pages = where the cursor starts on a new page (the
     // same place, so both modes look alike). A little of the past stays visible on its left.
     constexpr float kCursorStart = 0.08f;  // of the width, from the left edge (+ a small margin)
@@ -393,7 +426,11 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
     const float tiny = 19 * s;
     float fs = 21 * s * nsz;
     float staffY = y0;  // top of the staff being drawn (the lower row: y0 + rowH)
-    auto rowY = [&](int str) { return staffY + top + (n - 1 - str) * gap; };  // thinnest on top
+    // String -> y: thinnest on top (printed tab), or thickest on top (tabThickTop). Code that needs the
+    // staff's top or bottom line uses staffTopY()/staffBotY(), not a particular string.
+    auto rowY = [&](int str) { return staffY + top + (st.tabThickTop ? str : n - 1 - str) * gap; };
+    auto staffTopY = [&] { return staffY + top; };
+    auto staffBotY = [&] { return staffY + top + (n - 1) * gap; };
 
     const double now = v.songTime;
 
@@ -531,7 +568,10 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
         originT = s_shownT;
     }
     double zoom = 1.0;
-    auto timeX = [&](double t) { return originX + (float)((t - originT) * pxPerS * zoom); };
+    auto timeX = [&](double t) {
+        const float x = originX + (float)((t - originT) * pxPerS * zoom);
+        return mirror ? lineL + lineR - x : x;  // left-handed: the same layout, flipped
+    };
     // Sets up one staff: its zoom need (note size + zoom), the song time at originX, its top.
     auto layout = [&](double need, double t, float top) {
         nsz = baseNote * (float)shrinkFor(need);
@@ -551,11 +591,11 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
             const float y = rowY(str);
             const ImU32 c = (kStringColor[str] & 0x00FFFFFF) | (150u << 24);
             const ImVec2 ns = g_fontUi->CalcTextSizeA(tiny, FLT_MAX, 0, kStringName[str]);
-            dl->AddText(g_fontUi, tiny, ImVec2(x0 + pad, y - ns.y * 0.5f), c, kStringName[str]);
+            dl->AddText(g_fontUi, tiny, ImVec2(labelX, y - ns.y * 0.5f), c, kStringName[str]);
             dl->AddLine(ImVec2(lineL, y), ImVec2(lineR, y), c, 1.5f * s);
         }
         const float cursorX = timeX(now);  // the "now" line (fixed while scrolling, moving on pages)
-        const float staffTop = rowY(n - 1) - 8 * s, staffBottom = rowY(0) + 8 * s;
+        const float staffTop = staffTopY() - 8 * s, staffBottom = staffBotY() + 8 * s;
         dl->PushClipRect(ImVec2(lineL - 4 * s, staffY), ImVec2(lineR + 4 * s, staffY + rowH), true);
 
         // Rhythm grid, under everything else (like the bar lines of printed tab): every other bar gets a
@@ -570,26 +610,27 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
             double end = b.time + 3600;  // until the next bar line (or off the right edge)
             for (size_t j = i + 1; j < grid.size(); ++j)
                 if (grid[j].downbeat) { end = grid[j].time; break; }
-            const float xa = std::max(lineL, timeX(b.time)), xb = std::min(lineR, timeX(end));
-            if (xb > xa) dl->AddRectFilled(ImVec2(xa, staffTop), ImVec2(xb, staffBottom), IM_COL32(255, 255, 255, 14));
+            const float xs = timeX(b.time), xe = timeX(end);  // (xe < xs when left-handed)
+            const float xa = std::max(lineL, std::min(xs, xe)), xb = std::min(lineR, std::max(xs, xe));
+            if (xb > xa) dl->AddRectFilled(ImVec2(xa, staffTop), ImVec2(xb, staffBottom), Col(theme::kGrid, 14));
         }
         for (const TabBeat& b : grid) {
             const float x = timeX(b.time);
             if (x < lineL - 4 * s || x > lineR + 4 * s) continue;
             if (b.downbeat) {
-                dl->AddLine(ImVec2(x, staffTop), ImVec2(x, staffBottom), IM_COL32(255, 255, 255, 150), 2 * s);
+                dl->AddLine(ImVec2(x, staffTop), ImVec2(x, staffBottom), Col(theme::kGrid, 150), 2 * s);
                 const std::string num = std::to_string(b.measure);
                 const ImVec2 ns = g_fontUi->CalcTextSizeA(15 * s, FLT_MAX, 0, num.c_str());  // centred on the line
-                const float numY = rowY(n - 1) - gap * 0.46f - 2 * s - ns.y;  // just above the top string's fret boxes
-                dl->AddText(g_fontUi, 15 * s, ImVec2(std::floor(x - ns.x * 0.5f), std::floor(numY)), IM_COL32(200, 200, 210, 170), num.c_str());
+                const float numY = staffTopY() - gap * 0.46f - 2 * s - ns.y;  // just above the top string's fret boxes
+                dl->AddText(g_fontUi, 15 * s, ImVec2(std::floor(x - ns.x * 0.5f), std::floor(numY)), Col(theme::kRhythm, 170), num.c_str());
             } else {
-                dl->AddLine(ImVec2(x, staffTop + 6 * s), ImVec2(x, staffBottom - 6 * s), IM_COL32(255, 255, 255, 45), 1 * s);
+                dl->AddLine(ImVec2(x, staffTop + 6 * s), ImVec2(x, staffBottom - 6 * s), Col(theme::kGrid, 45), 1 * s);
             }
         }
 
         // The "now" line: where the highway's notes reach the fretboard.
         if (withCursor)
-            dl->AddLine(ImVec2(cursorX, staffY + top - 16 * s), ImVec2(cursorX, rowY(0) + 12 * s), IM_COL32(255, 255, 255, 200), 2.5f * s);
+            dl->AddLine(ImVec2(cursorX, staffTopY() - 16 * s), ImVec2(cursorX, staffBotY() + 12 * s), Col(theme::kHighlight, 200), 2.5f * s);
 
         // Played/passed notes fade out over half a second after they end (held notes stay while they
         // ring); ignored ones are always faint.
@@ -643,7 +684,7 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
                        stems[i].beat == stems[i + 1].beat && stems[i].val->beams > k && stems[i + 1].val->beams > k;
             };
             const float yTop = staffBottom + 6 * s, yBot = yTop + stemLen, beamH = 3 * s, beamStep = 5 * s, stub = 8 * s;
-            auto ink = [](float a) { return IM_COL32(220, 220, 230, (int)(230 * a)); };
+            auto ink = [](float a) { return Col(theme::kRhythm, (int)(230 * a)); };
             for (size_t i = 0; i < stems.size(); ++i) {
                 const Stem& m = stems[i];
                 if (m.a <= 0 || m.x < lineL - 40 * s || m.x > lineR + 40 * s) continue;
@@ -651,16 +692,18 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
                 if (val.beats >= 4 && !val.dot) continue;  // whole note: no stem
                 const float end = val.beats >= 2 ? yTop + stemLen * 0.5f : yBot;  // half notes: a short stem
                 dl->AddLine(ImVec2(m.x, yTop), ImVec2(m.x, end), ink(m.a), 1.5f * s);
-                if (val.dot) dl->AddCircleFilled(ImVec2(m.x + 5 * s, end - 4 * s), 1.8f * s, ink(m.a));
+                if (val.dot) dl->AddCircleFilled(ImVec2(m.x + 5 * s * dir, end - 4 * s), 1.8f * s, ink(m.a));
                 for (int k = 0; k < val.beams; ++k) {
                     const float y = yBot - k * beamStep;
                     if (joined(i, k)) {  // a beam to the next note
-                        dl->AddRectFilled(ImVec2(m.x, y - beamH), ImVec2(stems[i + 1].x, y), ink(std::min(m.a, stems[i + 1].a)));
+                        const float xn = stems[i + 1].x;
+                        dl->AddRectFilled(ImVec2(std::min(m.x, xn), y - beamH), ImVec2(std::max(m.x, xn), y),
+                                          ink(std::min(m.a, stems[i + 1].a)));
                     } else if (!(i > 0 && joined(i - 1, k))) {
                         // Not beamed at this level on either side: a short stub, pointing to the note it
-                        // shares a beam with (or right when it's alone: a flag).
-                        const bool left = i > 0 && joined(i - 1, 0);
-                        const float x2 = left ? m.x - stub : m.x + stub;
+                        // shares a beam with (or forward in time when it's alone: a flag).
+                        const bool back = i > 0 && joined(i - 1, 0);
+                        const float x2 = back ? m.x - stub * dir : m.x + stub * dir;
                         dl->AddRectFilled(ImVec2(std::min(m.x, x2), y - beamH), ImVec2(std::max(m.x, x2), y), ink(m.a));
                     }
                 }
@@ -677,8 +720,8 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
 
         for (const Item& it : items) {
             const TabNote& t = *it.note;
-            const float x = timeX(it.time), xEnd = timeX(it.end);
-            if (xEnd < lineL - 30 * s || x > lineR + 30 * s) continue;
+            const float x = timeX(it.time), xEnd = timeX(it.end);  // (xEnd < x when left-handed)
+            if (std::max(x, xEnd) < lineL - 30 * s || std::min(x, xEnd) > lineR + 30 * s) continue;
             const float a = alphaOf(it);
             if (a <= 0) continue;
             const bool next = !nextFound && !t.ignore && it.last >= now - 0.02;  // a run stays "next" until its last note
@@ -690,7 +733,7 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
                 if (t.frets[str] >= 0) { if (lo < 0) lo = str; hi = str; }
             if (lo < 0) continue;
             if (t.chord && hi > lo)
-                dl->AddLine(ImVec2(x, rowY(hi)), ImVec2(x, rowY(lo)), IM_COL32(255, 206, 84, (int)(170 * a)), 2 * s);
+                dl->AddLine(ImVec2(x, rowY(hi)), ImVec2(x, rowY(lo)), Col(theme::kChord, (int)(170 * a)), 2 * s);
             if (t.chord && !t.name.empty()) {
                 const ImVec2 ts = g_fontBold->CalcTextSizeA(tiny, FLT_MAX, 0, t.name.c_str());
                 dl->AddText(g_fontBold, tiny, ImVec2(x - ts.x * 0.5f, staffY + 6 * s), (gold & 0x00FFFFFF) | ((ImU32)(255 * a) << 24),
@@ -698,10 +741,10 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
             }
             // Held notes (and runs): a tail in the string's colour until the note ends (like the highway's
             // tails).
-            if (xEnd > x + it.half * nsz + 4 * s)
+            if (std::abs(xEnd - x) > it.half * nsz + 4 * s)
                 for (int str = 0; str < n; ++str)
                     if (t.frets[str] >= 0)
-                        dl->AddRectFilled(ImVec2(x, rowY(str) - 3 * s), ImVec2(xEnd, rowY(str) + 3 * s),
+                        dl->AddRectFilled(ImVec2(std::min(x, xEnd), rowY(str) - 3 * s), ImVec2(std::max(x, xEnd), rowY(str) + 3 * s),
                                           (kStringColor[str] & 0x00FFFFFF) | ((ImU32)(150 * a) << 24), 3 * s);
             for (int str = 0; str < n; ++str) {
                 if (t.frets[str] < 0) continue;
@@ -709,19 +752,19 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
                 const ImVec2 ls = g_fontBold->CalcTextSizeA(fs, FLT_MAX, 0, label.c_str());
                 const float y = rowY(str), bw = boxHalf(label, run), bh = gap * 0.46f * std::max(0.7f, std::min(1.1f, nsz));
                 const ImU32 col = (kStringColor[str] & 0x00FFFFFF) | ((ImU32)(255 * a) << 24);
-                dl->AddRectFilled(ImVec2(x - bw, y - bh), ImVec2(x + bw, y + bh), IM_COL32(14, 14, 20, (int)(255 * a)), 5 * s);
+                dl->AddRectFilled(ImVec2(x - bw, y - bh), ImVec2(x + bw, y + bh), Col(theme::kPanel, (int)(255 * a)), 5 * s);
                 if (next) dl->AddRect(ImVec2(x - bw - 2 * s, y - bh - 2 * s), ImVec2(x + bw + 2 * s, y + bh + 2 * s),
-                                      IM_COL32(255, 255, 255, (int)(255 * pulse)), 6 * s, 0, 2.5f * s);
+                                      Col(theme::kHighlight, (int)(255 * pulse)), 6 * s, 0, 2.5f * s);
                 else dl->AddRect(ImVec2(x - bw, y - bh), ImVec2(x + bw, y + bh), col, 5 * s, 0, 2 * s);
                 if (run.empty()) {
-                    dl->AddText(g_fontBold, fs, ImVec2(x - ls.x * 0.5f, y - ls.y * 0.5f), IM_COL32(255, 255, 255, (int)(255 * a)),
+                    dl->AddText(g_fontBold, fs, ImVec2(x - ls.x * 0.5f, y - ls.y * 0.5f), Col(theme::kText, (int)(255 * a)),
                                 label.c_str());
                 } else {  // "12" then a small, dimmer "x8"
                     const float rs = tiny * 0.85f * nsz;
                     const ImVec2 es = g_fontUi->CalcTextSizeA(rs, FLT_MAX, 0, run.c_str());
                     const float lx = x - (ls.x + 3 * s * nsz + es.x) * 0.5f;
-                    dl->AddText(g_fontBold, fs, ImVec2(lx, y - ls.y * 0.5f), IM_COL32(255, 255, 255, (int)(255 * a)), label.c_str());
-                    dl->AddText(g_fontUi, rs, ImVec2(lx + ls.x + 3 * s * nsz, y - es.y * 0.5f + 1 * s), IM_COL32(210, 210, 220, (int)(230 * a)),
+                    dl->AddText(g_fontBold, fs, ImVec2(lx, y - ls.y * 0.5f), Col(theme::kText, (int)(255 * a)), label.c_str());
+                    dl->AddText(g_fontUi, rs, ImVec2(lx + ls.x + 3 * s * nsz, y - es.y * 0.5f + 1 * s), Col(theme::kTextDim, (int)(230 * a)),
                                 run.c_str());
                 }
             }
@@ -737,7 +780,7 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
         drawStaff(true);
         layout(nextNeed, nextT, nextY);
         drawStaff(false);
-        dl->AddLine(ImVec2(x0 + pad, y0 + rowH), ImVec2(x0 + w - pad, y0 + rowH), IM_COL32(255, 255, 255, 40), 1 * s);
+        dl->AddLine(ImVec2(x0 + pad, y0 + rowH), ImVec2(x0 + w - pad, y0 + rowH), Col(theme::kGrid, 40), 1 * s);
     } else {
         layout(s_zoom, originT, y0);
         drawStaff(true);
@@ -755,8 +798,8 @@ void DrawToast(ImDrawList* dl, const std::string& text, DWORD start, DWORD until
     const ImVec2 ts = g_fontBold->CalcTextSizeA(size, FLT_MAX, 0, text.c_str());
     const ImVec2 p0(std::floor((ds.x - ts.x) * 0.5f - pad), std::floor(ds.y * 0.34f));
     const ImVec2 p1(p0.x + ts.x + 2 * pad, p0.y + ts.y + pad);
-    dl->AddRectFilled(p0, p1, IM_COL32(14, 14, 20, (int)(215 * a)), 10 * s);
-    dl->AddText(g_fontBold, size, ImVec2(p0.x + pad, p0.y + pad * 0.5f), IM_COL32(255, 255, 255, (int)(255 * a)), text.c_str());
+    dl->AddRectFilled(p0, p1, Col(theme::kPanel, (int)(215 * a)), 10 * s);
+    dl->AddText(g_fontBold, size, ImVec2(p0.x + pad, p0.y + pad * 0.5f), Col(theme::kText, (int)(255 * a)), text.c_str());
 }
 
 // The part under the mouse (last frame's boxes, the one drawn on top first), -1 = none. *grip =
@@ -856,85 +899,280 @@ void DrawArrangeHints(ImDrawList* dl, float S) {
         // The name on a small tag above the top-left corner (below the part at the top of the screen).
         const ImVec2 ts = g_fontBold->CalcTextSizeA(17 * S, FLT_MAX, 0, kPartName[p]);
         const float ty = q0.y - ts.y - 6 * S >= 0 ? q0.y - ts.y - 6 * S : q1.y + 6 * S;
-        dl->AddRectFilled(ImVec2(q0.x, ty - 2 * S), ImVec2(q0.x + ts.x + 12 * S, ty + ts.y + 2 * S), IM_COL32(14, 14, 20, 210), 4 * S);
+        dl->AddRectFilled(ImVec2(q0.x, ty - 2 * S), ImVec2(q0.x + ts.x + 12 * S, ty + ts.y + 2 * S), Col(theme::kPanel, 210), 4 * S);
         dl->AddText(g_fontBold, 17 * S, ImVec2(q0.x + 6 * S, ty), c, kPartName[p]);
     }
 }
 
+// ------------------------------------------------------------------ the menu
+// Layout: a header that is always there (the mode on/off, which chart is used, Skip), then tabs, one
+// per topic, each with short titled sections; the longer explanations are in "(?)" tooltips so the
+// options stay easy to scan. Every page has the same height (the window doesn't jump when switching
+// tabs). Footer: saved automatically + Close.
+
+// A "(?)" after the previous item, showing text in a tooltip.
+void Help(const char* text) {
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::BeginItemTooltip()) {
+        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 26);
+        ImGui::TextUnformatted(text);
+        ImGui::PopTextWrapPos();
+        ImGui::EndTooltip();
+    }
+}
+
+// Checkbox + optional "(?)".
+bool Check(const char* label, bool* v, const char* help = nullptr) {
+    const bool changed = ImGui::Checkbox(label, v);
+    if (help) Help(help);
+    return changed;
+}
+
+// A slider with its label in a left column (labels and sliders line up), and a "(?)" at the end.
+void SliderRow(const char* label, const char* id, int* v, int lo, int hi, const char* fmt, const char* help) {
+    const float labelW = ImGui::GetFontSize() * 9.5f;
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(label);
+    ImGui::SameLine(labelW);
+    ImGui::SetNextItemWidth(-ImGui::GetFontSize() * 1.8f);  // room for the "(?)"
+    ImGui::SliderInt(id, v, lo, hi, fmt, ImGuiSliderFlags_AlwaysClamp);
+    Help(help);
+}
+
+// The menu's own colours, from the theme's Menu colour (the accent: title bar, tabs, checkmarks,
+// sliders, buttons); the rest stays a neutral dark so every theme keeps the menu readable.
+void ApplyMenuStyle() {
+    ImVec4* c = ImGui::GetStyle().Colors;
+    const ImVec4 a = ImGui::ColorConvertU32ToFloat4(Col(theme::kMenu));
+    auto mix = [&](float k, float alpha) {  // k < 1: darker; k > 1: towards white
+        const float t = k > 1 ? k - 1 : 0, d = k > 1 ? 1 : k;
+        return ImVec4(a.x * d + (1 - a.x) * t, a.y * d + (1 - a.y) * t, a.z * d + (1 - a.z) * t, alpha);
+    };
+    c[ImGuiCol_TitleBgActive] = mix(1.0f, 1.0f);
+    c[ImGuiCol_TitleBg] = mix(0.6f, 1.0f);
+    c[ImGuiCol_Tab] = mix(0.55f, 0.85f);
+    c[ImGuiCol_TabHovered] = mix(1.35f, 1.0f);
+    c[ImGuiCol_TabSelected] = mix(1.0f, 1.0f);
+    c[ImGuiCol_TabSelectedOverline] = mix(1.5f, 1.0f);
+    c[ImGuiCol_TabDimmed] = mix(0.45f, 0.85f);
+    c[ImGuiCol_TabDimmedSelected] = mix(0.8f, 1.0f);
+    c[ImGuiCol_CheckMark] = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);   // white tick on the accent colour
+    c[ImGuiCol_CheckboxSelectedBg] = mix(0.9f, 1.0f);
+    c[ImGuiCol_WindowBg] = ImVec4(0.06f, 0.06f, 0.08f, 0.985f);  // (almost) solid: the game's menus don't show through
+    c[ImGuiCol_SliderGrab] = mix(1.35f, 1.0f);
+    c[ImGuiCol_SliderGrabActive] = mix(1.6f, 1.0f);
+    c[ImGuiCol_Button] = mix(0.85f, 0.75f);
+    c[ImGuiCol_ButtonHovered] = mix(1.15f, 1.0f);
+    c[ImGuiCol_ButtonActive] = mix(1.4f, 1.0f);
+    c[ImGuiCol_Header] = mix(0.9f, 0.55f);
+    c[ImGuiCol_HeaderHovered] = mix(1.1f, 0.8f);
+    c[ImGuiCol_HeaderActive] = mix(1.25f, 1.0f);
+    c[ImGuiCol_TextSelectedBg] = mix(1.0f, 0.5f);
+    c[ImGuiCol_NavCursor] = mix(1.6f, 1.0f);
+    c[ImGuiCol_Separator] = ImVec4(0.32f, 0.32f, 0.38f, 1.0f);
+    c[ImGuiCol_FrameBg] = ImVec4(0.14f, 0.14f, 0.17f, 1.0f);
+    c[ImGuiCol_FrameBgHovered] = ImVec4(0.20f, 0.20f, 0.24f, 1.0f);
+    c[ImGuiCol_FrameBgActive] = ImVec4(0.25f, 0.25f, 0.30f, 1.0f);
+    c[ImGuiCol_PopupBg] = ImVec4(0.08f, 0.08f, 0.10f, 0.98f);
+}
+
+// Page "Playing": when the song waits, and how strict the listening is.
+void MenuPlaying(Settings& e) {
+    ImGui::SeparatorText("Waiting");
+    ImGui::BeginDisabled(!e.enabled);
+    Check("Wait for chords too", &e.waitChords, "Off: the song only waits for single notes; chords pass by themselves.");
+    ImGui::EndDisabled();
+    Check("Accept the same note an octave higher or lower", &e.acceptOctaves,
+          "Useful if you play a riff in another position. Off is stricter: string and fret must match.");
+    ImGui::SeparatorText("Timing");
+    SliderRow("Stop before the note", "##lead", &e.leadMs, 0, 500, "%d ms",
+              "The song stops this long before the note reaches the line, to give you time to see it.");
+    SliderRow("Early notes count", "##early", &e.earlyMs, 0, 1000, "up to %d ms",
+              "A right note played up to this early counts, and the song doesn't stop for it.");
+}
+
+// Page "Tab": everything about the scrolling tab.
+void MenuTab(Settings& e) {
+    Check("Show the notes coming up as tab", &e.showTab);
+    ImGui::BeginDisabled(!e.showTab);
+    ImGui::SeparatorText("Movement");
+    if (ImGui::RadioButton("Pages", e.tabPage)) e.tabPage = true;
+    Help("The notes stand still and a cursor moves over them; the page turns near the right edge. Easy to read fast parts.");
+    ImGui::SameLine(0, ImGui::GetFontSize() * 2);
+    if (ImGui::RadioButton("Scrolling", !e.tabPage)) e.tabPage = false;
+    Help("The notes move to a fixed line, like the game's highway.");
+    ImGui::SameLine(0, ImGui::GetFontSize() * 2);
+    ImGui::BeginDisabled(!e.tabPage);
+    Check("Two rows", &e.tabTwoRows, "Pages only: the next page already waits in the other row, so there's no page turn to wait for.");
+    ImGui::EndDisabled();
+    SliderRow("Seconds ahead", "##tabsec", &e.tabSeconds, 2, 8, "%d s", "How much music the tab shows ahead of the cursor.");
+
+    ImGui::SeparatorText("Reading");
+    Check("Bar and beat lines", &e.tabBeats, "Bar lines with bar numbers, and faint lines on the beats.");
+    ImGui::SameLine(0, ImGui::GetFontSize() * 2);
+    Check("Rhythm under the tab", &e.tabRhythm,
+          "A stem per note; beams say how many notes fit in one beat: none = 1, one beam = 2, two = 4, three = 8. A small 3 = triplets.");
+    Check("Spread out fast notes", &e.tabSpread,
+          "Fast passages get more room so every fret can be read, and a fast repeat of one fret shows once as \"12 x8\". "
+          "Off: spacing exactly by time.");
+
+    ImGui::SeparatorText("Strings");
+    Check("Thickest string on top", &e.tabThickTop,
+          "Off: thinnest string on top, like printed tab. On: thickest on top (for example if you play a flipped guitar). "
+          "The banner's small tab follows.");
+    ImGui::SameLine(0, ImGui::GetFontSize() * 2);
+    Check("Left-handed (right to left)", &e.tabMirror,
+          "Time runs from right to left and the string names move to the right. The banner's small tab follows.");
+
+    ImGui::SeparatorText("Look");
+    SliderRow("Note size", "##tabnote", &e.tabNoteSize, 60, 130, "%d %%",
+              "Size of the fret numbers. Fast passages make them a little smaller by themselves.");
+    SliderRow("Background", "##tabbg", &e.tabOpacity, 0, 100, "%d %%",
+              "0 = see-through, 100 = solid (hides the game's own text behind the tab).");
+    ImGui::EndDisabled();
+}
+
+// Page "Screen": what else is shown, and where.
+void MenuScreen(Settings& e) {
+    ImGui::SeparatorText("Show");
+    Check("What to play while the song waits", &e.showBanner,
+          "The banner: string, fret and a small tab (for chords: name and shape), and how to fix a wrong note.");
+    Check("Song time", &e.showClock, "A small clock, \"1:23 / 4:28\", top-left by default.");
+    ImGui::SeparatorText("Arrange");
+    ImGui::TextWrapped("While this menu is open, drag the banner, the clock or the tab to move it, and drag its "
+                       "bottom-right corner to resize it. The menu itself moves by its title bar.");
+    ImGui::Spacing();
+    if (ImGui::Button("Reset positions and sizes")) e = WithDefaultLayout(e);
+}
+
+// Page "Colours": a ready-made theme, and any of its colours changed by the player. Picking a theme
+// shows it as it is (the player's own colours are dropped). The string colours are the game's and
+// never change (the banner names them: "the ORANGE string").
+void MenuColours(Settings& e, float s) {
+    const int cur = e.theme >= 0 && e.theme < theme::kThemeCount ? e.theme : 0;
+    ImGui::SeparatorText("Theme");
+    ImGui::SetNextItemWidth(320 * s);
+    if (ImGui::BeginCombo("##theme", theme::kThemes[cur].name)) {
+        for (int t = 0; t < theme::kThemeCount; ++t) {
+            if (ImGui::Selectable(theme::kThemes[t].name, t == cur)) {
+                e.theme = t;
+                for (int& c : e.colors) c = -1;
+            }
+            if (t == cur) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    Help("Colours of the banner, clock, tab and this menu. The string colours are always the game's.");
+    ImGui::SeparatorText("Your colours");
+    ImGui::TextDisabled("Click a square for the colour wheel, or type a hex code.");
+    bool own = false;
+    for (int i = 0; i < theme::kSlots; ++i) {
+        const theme::Slot slot = (theme::Slot)i;
+        ImGui::PushID(i);
+        const uint32_t rgb = Color(e, slot);
+        float c[3] = {((rgb >> 16) & 255) / 255.0f, ((rgb >> 8) & 255) / 255.0f, (rgb & 255) / 255.0f};
+        ImGui::SetNextItemWidth(170 * s);
+        // Hex box + swatch; the swatch opens a picker with the round hue wheel.
+        if (ImGui::ColorEdit3("##c", c, ImGuiColorEditFlags_DisplayHex | ImGuiColorEditFlags_PickerHueWheel)) {
+            auto byte = [](float f) { return (int)std::lround(std::max(0.0f, std::min(1.0f, f)) * 255); };
+            const int v = (byte(c[0]) << 16) | (byte(c[1]) << 8) | byte(c[2]);
+            e.colors[i] = v == (int)theme::kThemes[cur].color[i] ? -1 : v;  // back to the theme's = not "own"
+        }
+        ImGui::SameLine();
+        ImGui::TextUnformatted(theme::kSlotInfo[i].label);
+        if (e.colors[i] >= 0) {
+            own = true;
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Reset")) e.colors[i] = -1;
+            ImGui::SetItemTooltip("Put back the theme's colour");
+        }
+        ImGui::PopID();
+    }
+    ImGui::Spacing();
+    ImGui::BeginDisabled(!own);
+    if (ImGui::Button("Reset all colours to the theme"))
+        for (int& c : e.colors) c = -1;
+    ImGui::EndDisabled();
+}
+
+// Page "Game": things the mod does for the game itself (they apply from the next start).
+void MenuGame(Settings& e) {
+    ImGui::SeparatorText("When the game starts");
+    ImGui::TextDisabled("These apply from the next time you start the game.");
+    Check("Close the Ubisoft login and server popups", &e.skipPopups,
+          "Answers the Ubisoft login and \"servers not available\" dialogs by itself. Press Enter and the profile choice stay yours.");
+    bool fast = e.fastIntro > 1;
+    if (Check("Play the start-up logos 4x faster", &fast)) e.fastIntro = fast ? 4 : 1;
+    ImGui::SeparatorText("Stability");
+    Check("Avoid the game's own random crash / freeze", &e.fixCrash,
+          "Puts back a Windows function that the game's copy protection redirects (in memory only). "
+          "Fixes a crash that happens mostly at start-up.");
+}
+
 void DrawMenu(const View& v, const Settings& st, float s, ImVec2 ds) {
-    ImGui::PushFont(g_fontUi, 24 * s);
+    ImGui::PushFont(g_fontUi, 22 * s);
     // The first time: against the right edge of the screen, so the banner (top centre) and the tab
     // (left) stay visible to be dragged. After that it stays where the player dragged it (by its
     // title bar).
     ImGui::SetNextWindowPos(ImVec2(ds.x - 40 * s, ds.y * 0.5f), ImGuiCond_Once, ImVec2(1.0f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(700 * s, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(680 * s, 0), ImGuiCond_Always);
     if (!g_menuWasOpen) ImGui::SetNextWindowFocus();
     bool open = true, skip = false;
     Settings e = st;
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings;
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10 * s, 7 * s));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10 * s, 5 * s));
     if (ImGui::Begin("Note-by-Note", &open, flags)) {
+        // Header: the mode (bold), the chart in use, Skip on the right.
+        ImGui::PushFont(g_fontBold, 26 * s);
         ImGui::Checkbox("Wait for each note", &e.enabled);
-        ImGui::TextDisabled("The song stops at every note until you play it.");
-        ImGui::BeginDisabled(!e.enabled);
-        ImGui::Checkbox("Wait for chords too", &e.waitChords);
-        ImGui::EndDisabled();
-        ImGui::TextColored(v.chartOk ? ImVec4(0.45f, 0.85f, 0.45f, 1) : ImVec4(1.0f, 0.65f, 0.25f, 1), "%s", v.chartInfo.c_str());
-        ImGui::Spacing();
+        ImGui::PopFont();
+        Help("The song stops at every note until you play it. Off: the game plays as usual (the tab and clock still show).");
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(v.chartOk ? ImVec4(0.45f, 0.85f, 0.45f, 1) : ImVec4(1.0f, 0.65f, 0.25f, 1), "%s",
+                           v.chartInfo.empty() ? "No song playing" : v.chartInfo.c_str());
+        const char* skipText = v.chord ? "Skip this chord (F9)" : "Skip this note (F9)";
+        const float skipW = ImGui::CalcTextSize(skipText).x + ImGui::GetStyle().FramePadding.x * 2;
+        ImGui::SameLine(ImGui::GetContentRegionMax().x - skipW);
         ImGui::BeginDisabled(!v.waiting);
-        if (ImGui::Button(v.chord ? "Skip this chord  (F9)" : "Skip this note  (F9)")) skip = true;
+        if (ImGui::Button(skipText)) skip = true;
         ImGui::EndDisabled();
+        ImGui::Spacing();
 
-        ImGui::Separator();
-        ImGui::TextUnformatted("Stop the song this long before the note reaches the line");
-        ImGui::SetNextItemWidth(-1);
-        ImGui::SliderInt("##lead", &e.leadMs, 0, 500, "%d ms");
-        ImGui::TextUnformatted("A right note played this early still counts");
-        ImGui::SetNextItemWidth(-1);
-        ImGui::SliderInt("##early", &e.earlyMs, 0, 1000, "%d ms");
-        ImGui::Checkbox("Also accept the same note one octave higher or lower", &e.acceptOctaves);
-        ImGui::Checkbox("Show what to play while the song waits", &e.showBanner);
-        ImGui::Checkbox("Show the song time (top-left corner)", &e.showClock);
-        ImGui::Checkbox("Show the notes coming up as a scrolling tab", &e.showTab);
-        if (e.showTab) {
-            ImGui::Checkbox("Bar lines and beats in the tab (to read the rhythm)", &e.tabBeats);
-            ImGui::Checkbox("Rhythm under the tab (beams: 1 = 2 notes per beat, 2 = 4, 3 = 8)", &e.tabRhythm);
-            ImGui::SetNextItemWidth(-1);
-            ImGui::SliderInt("##tabbg", &e.tabOpacity, 0, 100, "Tab background %d %% (100 = solid)");
-            ImGui::SetNextItemWidth(-1);
-            ImGui::SliderInt("##tabnote", &e.tabNoteSize, 60, 130, "Tab note size %d %%");
-            // How the tab moves: the two modes side by side (same setting, tabPage).
-            ImGui::TextUnformatted("Tab movement:");
-            ImGui::SameLine();
-            if (ImGui::RadioButton("Pages (notes still, a cursor moves)", e.tabPage)) e.tabPage = true;
-            ImGui::SameLine();
-            if (ImGui::RadioButton("Scrolling (notes move to the line)", !e.tabPage)) e.tabPage = false;
-            if (e.tabPage)
-                ImGui::Checkbox("Two rows: the next page waits in the other row (no page turns)", &e.tabTwoRows);
-            ImGui::Checkbox("Spread out fast notes in the tab so every fret can be read", &e.tabSpread);
-            ImGui::SetNextItemWidth(-1);
-            ImGui::SliderInt("##tabsec", &e.tabSeconds, 2, 8, "Tab shows %d seconds ahead");
+        // One tab per topic; every page gets the same height.
+        if (ImGui::BeginTabBar("pages")) {
+            static const char* const kPages[] = {"Playing", "Tab", "Screen", "Colours", "Game"};
+            for (int p = 0; p < 5; ++p) {
+                if (!ImGui::BeginTabItem(kPages[p])) continue;
+                ImGui::BeginChild("page", ImVec2(0, 540 * s), ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
+                switch (p) {
+                    case 0: MenuPlaying(e); break;
+                    case 1: MenuTab(e); break;
+                    case 2: MenuScreen(e); break;
+                    case 3: MenuColours(e, s); break;
+                    default: MenuGame(e); break;
+                }
+                ImGui::EndChild();
+                ImGui::EndTabItem();
+            }
+            ImGui::EndTabBar();
         }
 
+        // Footer.
         ImGui::Separator();
-        ImGui::TextWrapped("Arrange the screen with the mouse: drag the banner, the clock or the tab to move it, "
-                           "and drag its bottom-right corner to make it bigger or smaller. This menu moves by its title bar.");
-        if (ImGui::Button("Reset positions and sizes")) e = WithDefaultLayout(e);
-
-        ImGui::Separator();
-        ImGui::TextUnformatted("Game start (from the next time you start the game)");
-        ImGui::Checkbox("Close the Ubisoft login / server popups", &e.skipPopups);
-        bool fast = e.fastIntro > 1;
-        if (ImGui::Checkbox("Play the start-up logos 4x faster", &fast)) e.fastIntro = fast ? 4 : 1;
-        ImGui::Checkbox("Avoid the game's own random crash / freeze", &e.fixCrash);
-
-        ImGui::Separator();
-        ImGui::TextDisabled("Changes are saved automatically. The song is held while this menu is open.");
-        if (ImGui::Button("Close  (F8 / Esc)")) open = false;
-        ImGui::PushFont(nullptr, 17 * s);
-        ImGui::TextDisabled("Thanks to RS_ASIO, Rocksmith2014.NET, MinHook and Dear ImGui.");
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("Saved automatically. The song is held while this menu is open.");
+        const char* closeText = "Close (F8)";
+        const float closeW = ImGui::CalcTextSize(closeText).x + ImGui::GetStyle().FramePadding.x * 2;
+        ImGui::SameLine(ImGui::GetContentRegionMax().x - closeW);
+        if (ImGui::Button(closeText)) open = false;
+        ImGui::PushFont(nullptr, 16 * s);
+        ImGui::TextDisabled("Thanks to RS_ASIO, Rocksmith2014.NET, MinHook and Dear ImGui. Not affiliated with Ubisoft.");
         ImGui::PopFont();
     }
     ImGui::End();
+    ImGui::PopStyleVar(2);
     ImGui::PopFont();
     if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) open = false;
 
@@ -1088,6 +1326,8 @@ void Frame(IDirect3DDevice9* dev) {
     if (menu != g_menuWasOpen) io.ClearInputKeys();  // no keys "stuck down" from before
     const float s = desc.Height / 1080.0f;
     ApplyScale(s);
+    LoadPalette(st);  // this frame's theme colours; the menu's accent colours follow it too
+    ApplyMenuStyle();
     ImGui::NewFrame();
 
     // Mouse arranging (menu open) uses last frame's boxes; then this frame's drawing records new ones.
@@ -1262,6 +1502,12 @@ DWORD WINAPI InstallThread(LPVOID) {
 Settings WithDefaultLayout(Settings st) {
     CopyLayout(Settings{}, &st);
     return st;
+}
+
+uint32_t Color(const Settings& st, theme::Slot slot) {
+    if (st.colors[slot] >= 0) return (uint32_t)st.colors[slot] & 0xFFFFFF;
+    const int t = st.theme >= 0 && st.theme < theme::kThemeCount ? st.theme : 0;
+    return theme::kThemes[t].color[slot];
 }
 
 void Start(const Settings& initial) {

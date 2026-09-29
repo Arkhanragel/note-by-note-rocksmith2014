@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "hint.h"
+#include "theme.h"
 
 namespace nbn::overlay {
 
@@ -51,12 +52,21 @@ struct Settings {
     bool tabTwoRows = false;     // pages only: two rows, one under the other. The cursor plays one row
                                  // while the other already shows the next page; when the cursor jumps
                                  // to it, the row it left gets the page after (no page turn to wait for)
-    int tabOpacity = 69;        // tab background, percent: 0 = none, 100 = solid (hides the game behind)
+    bool tabMirror = false;      // left-handed: the tab runs right to left (string names on the right);
+                                 // the banner's small tabs follow. Numbers and text are never mirrored
+    bool tabThickTop = false;    // thickest string on top (off = thinnest on top, like printed tab);
+                                 // the tab and the banner's small tabs follow
+    int tabOpacity = 69;       // tab background, percent: 0 = none, 100 = solid (hides the game behind)
     int tabNoteSize = 100;       // size of the tab's fret numbers, percent (60..130); fast passages
                                  // shrink them a little below this by themselves
     bool skipPopups = true;      // at game start, answer the Ubisoft login/server dialogs (startup.h)
     int fastIntro = 4;           // start-up logos this many times faster, 1 = normal (fastintro.h)
     bool fixCrash = true;        // remove the protector's NtProtectVirtualMemory redirect (crashfix.h)
+
+    // Colours (theme.h): a ready-made theme, and the player's own colour for any of its slots
+    // (0xRRGGBB, -1 = the theme's). The string colours are always the game's.
+    int theme = 0;               // index into theme::kThemes
+    int colors[theme::kSlots] = {-1, -1, -1, -1, -1, -1, -1, -1, -1};
 
     // Layout: where each part is and how big (the player drags them while the menu is open). All
     // positions and widths are in 1080p pixels, scaled with the screen height like the game's own
@@ -72,8 +82,13 @@ struct Settings {
     bool operator==(const Settings&) const = default;
 };
 
+static_assert(theme::kSlots == 9, "Settings::colors needs one -1 per theme slot");
+
 // The settings with the layout fields (positions and sizes) back to their defaults.
 Settings WithDefaultLayout(Settings st);
+
+// The colour in use for a theme slot: the player's own, or else the theme's (0xRRGGBB).
+uint32_t Color(const Settings& st, theme::Slot slot);
 
 // One note or chord of the scrolling tab.
 struct TabNote {

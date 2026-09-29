@@ -130,8 +130,18 @@ Config LoadConfig() {
                 "; Pages only: 1 = two rows; the cursor plays one while the other already shows the\n"
                 ";     next page (swapped in as soon as the cursor leaves it), 0 = one row\n"
                 "TabTwoRows=0\n"
+                "; 1 = left-handed tab: the notes run right to left, string names on the right\n"
+                "TabMirror=0\n"
+                "; 1 = thickest string on top of the tab, 0 = thinnest on top (like printed tab)\n"
+                "TabThickOnTop=0\n"
                 "; Tab background, percent: 0 = see-through, 100 = solid (hides the game's text behind it)\n"
                 "TabBackground=69\n"
+                "; Colours of the banner, clock, tab and menu: Default, High contrast, Midnight, Vintage or\n"
+                ";     Paper. Any single colour can be changed in the F8 menu (Colours), or here as a hex\n"
+                ";     code, e.g. ColorChord=#FFCE54 (keys: ColorPanel, ColorText, ColorTextDim, ColorChord,\n"
+                ";     ColorWarning, ColorHighlight, ColorGrid, ColorRhythm, ColorMenu; missing = the theme's).\n"
+                ";     The string colours are the game's and don't change.\n"
+                "Theme=Default\n"
                 "; 1 = at game start, close the Ubisoft login and \"servers not available\" popups by\n"
                 ";     themselves (the title's Press Enter and the profile choice stay yours)\n"
                 "SkipUbisoftPopups=1\n"
@@ -192,8 +202,17 @@ Config LoadConfig() {
     c.initial.tabSpread = GetPrivateProfileIntW(L"NoteByNote", L"TabSpread", 1, ini.c_str()) != 0;
     c.initial.tabPage = GetPrivateProfileIntW(L"NoteByNote", L"TabPages", 1, ini.c_str()) != 0;
     c.initial.tabTwoRows = GetPrivateProfileIntW(L"NoteByNote", L"TabTwoRows", 0, ini.c_str()) != 0;
+    c.initial.tabMirror = GetPrivateProfileIntW(L"NoteByNote", L"TabMirror", 0, ini.c_str()) != 0;
+    c.initial.tabThickTop = GetPrivateProfileIntW(L"NoteByNote", L"TabThickOnTop", 0, ini.c_str()) != 0;
     c.initial.tabOpacity =std::max(0, std::min(100, (int)GetPrivateProfileIntW(L"NoteByNote", L"TabBackground", 69, ini.c_str())));
     c.initial.tabNoteSize =std::max(60, std::min(130, (int)GetPrivateProfileIntW(L"NoteByNote", L"TabNoteSize", 100, ini.c_str())));
+    auto narrow = [](const std::wstring& w) { return std::string(w.begin(), w.end()); };  // ASCII only
+    // Colours: the theme by name, then the player's own colours ("#RRGGBB"; missing or not a colour = the theme's).
+    c.initial.theme = theme::FindTheme(narrow(str(L"Theme", L"Default")));
+    for (int i = 0; i < theme::kSlots; ++i) {
+        const std::string key = theme::kSlotInfo[i].key;
+        c.initial.colors[i] = theme::ParseHex(narrow(str(std::wstring(key.begin(), key.end()).c_str(), L"")));
+    }
     c.initial.skipPopups = GetPrivateProfileIntW(L"NoteByNote", L"SkipUbisoftPopups", 1, ini.c_str()) != 0;
     c.initial.fastIntro = std::max(1, std::min(8, (int)GetPrivateProfileIntW(L"NoteByNote", L"FastIntro", 4, ini.c_str())));
     c.initial.fixCrash = GetPrivateProfileIntW(L"NoteByNote", L"FixGameCrash", 1, ini.c_str()) != 0;
@@ -239,7 +258,16 @@ void SaveSettings(const overlay::Settings& st) {
     put(L"TabBackground", st.tabOpacity);
     put(L"TabPages", st.tabPage);
     put(L"TabTwoRows", st.tabTwoRows);
+    put(L"TabMirror", st.tabMirror);
+    put(L"TabThickOnTop", st.tabThickTop);
     put(L"TabRhythm", st.tabRhythm);
+    const std::string themeName = theme::kThemes[st.theme >= 0 && st.theme < theme::kThemeCount ? st.theme : 0].name;
+    WritePrivateProfileStringW(L"NoteByNote", L"Theme", std::wstring(themeName.begin(), themeName.end()).c_str(), ini.c_str());
+    for (int i = 0; i < theme::kSlots; ++i) {  // own colours as "#RRGGBB"; the theme's = no key
+        const std::string key = theme::kSlotInfo[i].key, hex = st.colors[i] >= 0 ? theme::ToHex((uint32_t)st.colors[i]) : "";
+        WritePrivateProfileStringW(L"NoteByNote", std::wstring(key.begin(), key.end()).c_str(),
+                                   st.colors[i] >= 0 ? std::wstring(hex.begin(), hex.end()).c_str() : nullptr, ini.c_str());
+    }
     put(L"SkipUbisoftPopups", st.skipPopups);
     put(L"FastIntro", st.fastIntro);
     put(L"FixGameCrash", st.fixCrash);
