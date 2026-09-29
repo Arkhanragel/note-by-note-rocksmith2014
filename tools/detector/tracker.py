@@ -91,7 +91,11 @@ class NoteTracker:
         p = yin(self.buf, c.sr, fmin=c.fmin, fmax=c.fmax, threshold=c.threshold) if voiced else None
         m = round(p.midi) if p else None
 
-        self.stable = self.stable + 1 if (m is not None and m == self.cur) else (1 if m is not None else 0)
+        # How many windows in a row heard this same note (0 = none heard).
+        if m is None:
+            self.stable = 0
+        else:
+            self.stable = self.stable + 1 if m == self.cur else 1
         self.cur = m
         if m is None:
             self.reported = None  # a gap lets the same note be reported again

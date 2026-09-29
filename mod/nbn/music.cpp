@@ -33,7 +33,7 @@ const Suffix kSuffixes[] = {
 // Chord shapes recognised from notes alone (intervals above the root, as a pitch-class set).
 struct Shape {
     std::vector<int> iv;
-    const char* words;
+    const char* words = "";
 };
 const Shape kShapes[] = {
     {{0, 4, 7}, "%s major"},          {{0, 3, 7}, "%s minor"},          {{0, 7}, "%s power chord"},
@@ -80,7 +80,9 @@ std::string FromNotes(const std::vector<int>& notes, bool flats) {
 
 std::string NoteName(int midi, bool flats) { return (flats ? kFlat : kSharp)[Pc(midi)]; }
 
-bool UsesFlats(const std::string& n) { return n.size() >= 2 && std::isupper((unsigned char)n[0]) && n[1] == 'b'; }
+bool UsesFlats(const std::string& chordName) {
+    return chordName.size() >= 2 && std::isupper((unsigned char)chordName[0]) && chordName[1] == 'b';
+}
 
 std::string NoteList(const std::vector<int>& notes, bool flats) {
     const std::vector<int> pcs = PitchClasses(notes);
@@ -105,7 +107,7 @@ std::string ChordMeaning(const std::string& rawName, const std::vector<int>& not
     const size_t slash = rest.find('/');
     if (slash != std::string::npos) {  // "G/B": B is the lowest note
         bass = rest.substr(slash + 1);
-        rest = rest.substr(0, slash);
+        rest.resize(slash);
     }
     if (!rest.empty() && rest.front() == '(' && rest.back() == ')') rest = rest.substr(1, rest.size() - 2);
     for (const auto& sx : kSuffixes) {

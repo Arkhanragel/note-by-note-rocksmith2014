@@ -37,7 +37,8 @@ int wmain(int argc, wchar_t** argv) {
     } else {
         GetModuleFileNameW(nullptr, path, MAX_PATH);
         std::wstring p(path);
-        p = p.substr(0, p.find_last_of(L"\\/") + 1) + L"NoteByNoteProbe.dll";
+        p.resize(p.find_last_of(L"\\/") + 1);  // the injector's folder
+        p += L"NoteByNoteProbe.dll";
         wcscpy_s(path, p.c_str());
     }
     if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) {

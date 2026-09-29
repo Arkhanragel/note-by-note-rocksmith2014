@@ -18,9 +18,8 @@ std::string Frets(int n) { return std::to_string(n) + (n == 1 ? " fret" : " fret
 
 Seg StringSeg(int s) { return {std::string(kColorName[s]) + " string", s}; }
 
-// Chart fret -> the fret that actually sounds (with a capo, "open" sounds at the capo) and back.
+// Chart fret -> the fret that actually sounds (with a capo, "open" sounds at the capo).
 int Sounding(const Neck& n, int fret) { return (fret == 0 && n.capo > 0) ? n.capo : fret; }
-int ChartFret(const Neck& n, int sounding) { return (n.capo > 0 && sounding == n.capo) ? 0 : sounding; }
 bool Playable(const Neck& n, int sounding) { return sounding >= n.capo && sounding <= kMaxFret; }
 
 // "fret 5 on the BLUE string" / "the BLUE string open"

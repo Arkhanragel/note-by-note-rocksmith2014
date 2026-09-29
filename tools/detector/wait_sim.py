@@ -66,7 +66,7 @@ def tap_blocks():
     capacity = 1 << 16
     size = header.size + 4 * capacity
     m = mmap.mmap(-1, size, tagname="Local\\NoteByNote_GuitarInput")
-    magic, _, sr, cap, write_pos, *_ = header.unpack_from(m, 0)
+    magic, _, sr, _cap, write_pos, *_ = header.unpack_from(m, 0)
     if magic != 0x314E424E:
         raise SystemExit("GuitarTap not active: is the game running with our RS_ASIO build installed?")
     if sr != SR:
@@ -214,7 +214,12 @@ def mini_tab(targets, i: int, labels: list[str], count: int = 6) -> str:
     for k, t in enumerate(targets[i:i + count]):
         n = t["Notes"][0]
         for s in rows:
-            cell = (f"[{n['Fret']}]" if k == 0 else f" {n['Fret']} ") if s == n["String"] else "---"
+            if s != n["String"]:
+                cell = "---"
+            elif k == 0:
+                cell = f"[{n['Fret']}]"  # the note being waited for
+            else:
+                cell = f" {n['Fret']} "
             rows[s] += cell.ljust(4, "-") + "-"
     return "\n".join("      " + rows[s] for s in reversed(range(len(labels))))
 
@@ -273,7 +278,9 @@ def cmd_play(args):
             print(explain_miss(ev, n), flush=True)
             continue
         waits.append(ev.time - armed_at)
-        tuning = "" if abs(ev.cents) < 25 else ("  (a bit sharp: check tuning)" if ev.cents > 0 else "  (a bit flat: check tuning)")
+        tuning = ""
+        if abs(ev.cents) >= 25:
+            tuning = "  (a bit sharp: check tuning)" if ev.cents > 0 else "  (a bit flat: check tuning)"
         print(f"  OK  Correct!{tuning}", flush=True)
         idx += 1
         if idx >= len(targets):

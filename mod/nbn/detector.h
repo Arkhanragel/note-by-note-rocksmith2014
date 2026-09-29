@@ -23,7 +23,7 @@ PitchResult Yin(const double* x, int W, int sr, double fmin, double fmax, double
 
 class OnsetDetector {
 public:
-    OnsetDetector(int sr, double ratio = 2.0, double gateDb = -45.0, double spanMs = 21.0,
+    explicit OnsetDetector(int sr, double ratio = 2.0, double gateDb = -45.0, double spanMs = 21.0,
                   double lookbackMs = 60.0, double refractoryMs = 150.0);
     // window: the tracker's analysis window (the last `span` samples are used); nowMs: stream time.
     bool Process(const double* window, int W, double nowMs);

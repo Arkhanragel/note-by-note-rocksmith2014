@@ -69,6 +69,15 @@ std::wstring DllDir() {
 
 std::wstring IniPath() { return DllDir() + L"NoteByNote.ini"; }
 
+// Wide -> narrow for text that is ASCII by nature (ini theme names, "#RRGGBB", our own file names).
+// Any other character becomes '?' instead of a truncated wchar_t that could turn into an unrelated letter.
+std::string Narrow(const std::wstring& w) {
+    std::string s;
+    s.reserve(w.size());
+    for (const wchar_t ch : w) s += ch < 128 ? (char)ch : '?';
+    return s;
+}
+
 int ParseKey(const std::wstring& k, int def) {
     if (k.size() >= 2 && (k[0] == L'F' || k[0] == L'f')) {
         int n = _wtoi(k.c_str() + 1);
@@ -214,14 +223,13 @@ Config LoadConfig() {
     c.initial.tabRecap = std::max(0, std::min(50, (int)GetPrivateProfileIntW(L"NoteByNote", L"TabRepeat", 8, ini.c_str())));
     c.initial.tabMirror = GetPrivateProfileIntW(L"NoteByNote", L"TabMirror", 0, ini.c_str()) != 0;
     c.initial.tabThickTop = GetPrivateProfileIntW(L"NoteByNote", L"TabThickOnTop", 0, ini.c_str()) != 0;
-    c.initial.tabOpacity =std::max(0, std::min(100, (int)GetPrivateProfileIntW(L"NoteByNote", L"TabBackground", 69, ini.c_str())));
-    c.initial.tabNoteSize =std::max(60, std::min(130, (int)GetPrivateProfileIntW(L"NoteByNote", L"TabNoteSize", 100, ini.c_str())));
-    auto narrow = [](const std::wstring& w) { return std::string(w.begin(), w.end()); };  // ASCII only
+    c.initial.tabOpacity = std::max(0, std::min(100, (int)GetPrivateProfileIntW(L"NoteByNote", L"TabBackground", 69, ini.c_str())));
+    c.initial.tabNoteSize = std::max(60, std::min(130, (int)GetPrivateProfileIntW(L"NoteByNote", L"TabNoteSize", 100, ini.c_str())));
     // Colours: the theme by name, then the player's own colours ("#RRGGBB"; missing or not a colour = the theme's).
-    c.initial.theme = theme::FindTheme(narrow(str(L"Theme", L"Default")));
+    c.initial.theme = theme::FindTheme(Narrow(str(L"Theme", L"Default")));
     for (int i = 0; i < theme::kSlots; ++i) {
         const std::string key = theme::kSlotInfo[i].key;
-        c.initial.colors[i] = theme::ParseHex(narrow(str(std::wstring(key.begin(), key.end()).c_str(), L"")));
+        c.initial.colors[i] = theme::ParseHex(Narrow(str(std::wstring(key.begin(), key.end()).c_str(), L"")));
     }
     c.initial.skipGreyed = GetPrivateProfileIntW(L"NoteByNote", L"SkipGreyedNotes", 1, ini.c_str()) != 0;
     c.initial.skipPopups = GetPrivateProfileIntW(L"NoteByNote", L"SkipUbisoftPopups", 1, ini.c_str()) != 0;
@@ -296,8 +304,6 @@ void SaveSettings(const overlay::Settings& st) {
     put(L"TabWidth", st.tabWidth);
     put(L"TabSize", st.tabSize);
 }
-
-std::string Narrow(const std::wstring& w) { return std::string(w.begin(), w.end()); }  // ASCII paths/names only
 
 std::string Join(const std::vector<int>& v) {
     std::string s;
@@ -374,7 +380,7 @@ public:
     }
 
 private:
-    static constexpr long long kSize = 48000 * 20;
+    static constexpr long long kSize = 48000LL * 20;
     std::vector<float> ring_ = std::vector<float>(kSize, 0.0f);
     long long pos_ = 0;
 };
@@ -589,7 +595,11 @@ DWORD WINAPI MainThread(LPVOID) {
             game::PostUiEvent(cfg.menuSound.c_str());
             Log("menu %s", overlay::MenuOpen() ? "opened" : "closed");
         }
-        const bool skip = skipKey.Pressed(cfg.skipKey) | overlay::TakeSkipRequest();
+        // Both are called every loop (not `a || b`): Pressed() tracks the key's up/down edge and
+        // TakeSkipRequest() clears the menu's request, so neither may be skipped.
+        const bool keySkip = skipKey.Pressed(cfg.skipKey);
+        const bool menuSkip = overlay::TakeSkipRequest();
+        const bool skip = keySkip || menuSkip;
 
         const overlay::Settings newSt = overlay::GetSettings();
         if (!(newSt == st)) {
@@ -864,7 +874,7 @@ DWORD WINAPI MainThread(LPVOID) {
                 waitFor = *next;
                 waitHint.clear();
                 frozenTick = now;
-                waitAudioStart = debugAudio.Pos() - 2 * 48000;
+                waitAudioStart = debugAudio.Pos() - 2LL * 48000;
                 // "+N ms": how far past the note the song stopped (chords: up to 200 ms, see above).
                 Log("WAIT %.3f (phrase iteration %d, level %d, stopped at %+d ms): play %s", next->time, next->pi, next->level,
                     (int)std::lround((t - next->time) * 1000), Describe(chart, *next).c_str());

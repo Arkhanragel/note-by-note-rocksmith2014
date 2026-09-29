@@ -451,8 +451,8 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
     const double cursorWant = holdT >= 0 ? std::min(now, holdT) : now;
     static double s_cursorT = -1e9;
     const double frameDt = std::min(0.1, (double)ImGui::GetIO().DeltaTime);
-    if (cursorWant > s_cursorT + 1.0 || cursorWant < s_cursorT - 0.25) s_cursorT = cursorWant;  // seek / new song
-    else if (cursorWant < s_cursorT) s_cursorT = cursorWant;  // a small step back: follow it
+    // A seek, a new song (big jump either way) or a small step back: follow it at once.
+    if (cursorWant > s_cursorT + 1.0 || cursorWant < s_cursorT) s_cursorT = cursorWant;
     else s_cursorT = std::min(cursorWant, s_cursorT + frameDt * 2.5);
     const double cursorT = s_cursorT;
 
@@ -945,10 +945,10 @@ void DrawArrangeHints(ImDrawList* dl, float S) {
         const Box& b = g_box[p];
         if (!b.drawn) continue;
         const ImU32 c = hot == p ? IM_COL32(255, 255, 255, 235) : IM_COL32(255, 255, 255, 110);
-        const float m = 3 * S, g = 20 * S;
+        const float m = 3 * S, corner = 20 * S;  // margin around the part, size of the resize corner
         const ImVec2 q0(b.p0.x - m, b.p0.y - m), q1(b.p1.x + m, b.p1.y + m);
         dl->AddRect(q0, q1, c, 8 * S, 0, (hot == p ? 2.5f : 1.5f) * S);
-        dl->AddTriangleFilled(ImVec2(q1.x, q1.y - g), q1, ImVec2(q1.x - g, q1.y), c);
+        dl->AddTriangleFilled(ImVec2(q1.x, q1.y - corner), q1, ImVec2(q1.x - corner, q1.y), c);
         // The name on a small tag above the top-left corner (below the part at the top of the screen).
         const ImVec2 ts = g_fontBold->CalcTextSizeA(17 * S, FLT_MAX, 0, kPartName[p]);
         const float ty = q0.y - ts.y - 6 * S >= 0 ? q0.y - ts.y - 6 * S : q1.y + 6 * S;
@@ -1539,7 +1539,8 @@ bool FindDeviceFunctions(HMODULE d3d9) {
 DWORD WINAPI InstallThread(LPVOID) {
     HMODULE d3d9 = nullptr;
     for (int i = 0; i < 1200 && !g_stopRequested; ++i) {  // up to 2 minutes
-        if ((d3d9 = GetModuleHandleW(L"d3d9.dll")) != nullptr) break;
+        d3d9 = GetModuleHandleW(L"d3d9.dll");
+        if (d3d9) break;
         Sleep(100);
     }
     if (!d3d9 || g_stopRequested) {

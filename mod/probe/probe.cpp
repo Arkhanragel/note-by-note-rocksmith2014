@@ -814,17 +814,6 @@ static uintptr_t FindProvider() {
     g_provider = ScanForProvider(song);
     Log(">>> provider scan: 0x%08X (%lu ms)", (unsigned)g_provider, GetTickCount() - t0);
     return g_provider;
-    for (uintptr_t off = 0; off < 0x1000; off += 4) {
-        uintptr_t p = 0, vt = 0, back = 0;
-        __try {
-            p = *(uintptr_t*)(song + off);
-            if (p < 0x10000) continue;
-            vt = *(uintptr_t*)p;
-            back = *(uintptr_t*)(p + 0x0C);
-        } __except (EXCEPTION_EXECUTE_HANDLER) { continue; }
-        if (vt == g_base + addr::kProviderVtable && back == song) return p;
-    }
-    return 0;
 }
 
 static bool SongEvent(std::string* ev, AkUniqueID* id) {

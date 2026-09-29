@@ -151,7 +151,9 @@ bool NoteTracker::Process(const float* block, NoteEvent* ev) {
     if (voiced) p = Yin(buf_.data(), W, cfg_.sr, cfg_.fmin, cfg_.fmax, cfg_.threshold);
     const int m = p.ok ? (int)std::lround(p.midi) : -1;
 
-    stable_ = (m >= 0 && m == cur_) ? stable_ + 1 : (m >= 0 ? 1 : 0);
+    // How many windows in a row heard this same note (0 = none heard).
+    if (m < 0) stable_ = 0;
+    else stable_ = (m == cur_) ? stable_ + 1 : 1;
     cur_ = m;
     if (m < 0) {
         reported_ = -1;  // a gap lets the same note be reported again

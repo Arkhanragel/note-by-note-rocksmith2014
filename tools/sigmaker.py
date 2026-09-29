@@ -88,7 +88,7 @@ def matches(pattern):
     return found
 
 
-def grow(start, first_len=None):
+def grow(start):
     """Pattern from `start`, one instruction at a time, until unique. None if it never is."""
     pat, rva = [], start
     for _ in range(MAX_INSNS):

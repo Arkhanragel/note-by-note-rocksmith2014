@@ -90,13 +90,13 @@ constexpr Layout kLayoutLearnAndPlay = {
 };
 
 struct Build {
-    const char* name;
-    DWORD checksum;   // PE checksum computed over the file (MapFileAndCheckSum; RSMods uses the same)
-    DWORD timestamp;  // link time in its PE header (0 = unknown). A copy patched on disk keeps this
-                      // and the header's CheckSum field, while the computed checksum changes.
-    bool verified;    // addresses checked by hand on this build; otherwise only compared in the report
-    Addresses addr;
-    Layout layout;
+    const char* name = nullptr;
+    DWORD checksum = 0;   // PE checksum computed over the file (MapFileAndCheckSum; RSMods uses the same)
+    DWORD timestamp = 0;  // link time in its PE header (0 = unknown). A copy patched on disk keeps this
+                          // and the header's CheckSum field, while the computed checksum changes.
+    bool verified = false;  // addresses checked by hand on this build; otherwise only compared in the report
+    Addresses addr{};
+    Layout layout{};
 };
 
 constexpr Build kBuilds[] = {
