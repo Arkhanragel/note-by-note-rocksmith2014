@@ -752,6 +752,45 @@ struct NoteDecoder {
     }
 };
 
+// Notes played together that the song stores one by one: a double stop (two strings at once, maybe
+// sliding together) is often two single notes with the same time, not a chord shape. The mod waited
+// for the first and skipped the second (same time = already passed), and the banner showed one note.
+// They become one "play these strings together" target (no chord name): both dots and techniques on
+// the banner, and the chord detector waits for both strings. `all` is in level, then time order.
+std::vector<Target> MergeTogether(std::vector<Target> all) {
+    auto asChord = [](Target& t) {
+        if (t.chord) return;
+        t.chord = true;
+        t.frets[t.string] = t.fret;
+        t.notes[t.string] = t.midi.empty() ? -1 : t.midi[0];
+        t.strings[t.string] = t.tech;
+        t.string = t.fret = -1;
+    };
+    std::vector<Target> out;
+    out.reserve(all.size());
+    for (auto& t : all) {
+        Target* last = out.empty() ? nullptr : &out.back();
+        const bool together = last && !t.chord && t.string >= 0 && t.string < 6 && last->level == t.level &&
+                              last->pi == t.pi && std::fabs(last->time - t.time) < 0.002 &&
+                              (last->chord ? last->chordName.empty() && last->frets[t.string] < 0 : last->string != t.string);
+        if (!together) {
+            out.push_back(std::move(t));
+            continue;
+        }
+        asChord(*last);
+        last->frets[t.string] = t.fret;
+        last->notes[t.string] = t.midi.empty() ? -1 : t.midi[0];
+        last->strings[t.string] = t.tech;
+        last->fingers[t.string] = t.fingers[t.string];
+        if (!t.midi.empty()) last->midi.push_back(t.midi[0]);
+        std::sort(last->midi.begin(), last->midi.end());
+        last->sustain = std::max(last->sustain, t.sustain);
+        last->ignore = last->ignore && t.ignore;
+        last->tech = technique::ForChord(0, last->strings, last->frets, &last->techFret);
+    }
+    return out;
+}
+
 // What was read, in the log (and a few beats, to check the grid by eye).
 void LogChart(const Chart& chart, const int tuning[6], size_t chordShapes, const std::vector<Target>& all) {
     size_t sustained = 0;
@@ -815,6 +854,7 @@ bool ReadSongChart(Chart* chart) {
     }
     c.bassUnsure = offsets.empty() && maxString <= 3;
     c.arrangement = c.bass ? "bass" : (c.bassUnsure ? "guitar or bass" : "guitar");
+    all = MergeTogether(std::move(all));
     c.Index(all);
     *chart = std::move(c);
     LogChart(*chart, tuning, chords.size() / kChordSize, all);
