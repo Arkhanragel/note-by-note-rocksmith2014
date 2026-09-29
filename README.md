@@ -12,7 +12,7 @@ A free, fan-made mod for **Rocksmith 2014 Edition - Remastered** (PC, Steam): th
 
 - **Waits for you.** When a note reaches the strike line and you haven't played it, the song pauses (music and highway together) until you play the right note. Notes played on time don't stop anything.
 - **Tells you what to play** while it waits: the string (by its highway colour) and fret, a small tab, and for chords the name and shape. After a wrong note it says how to fix it ("move up 2 frets", "that's the orange string").
-- **Shows the music coming up** as guitar tab, with bar lines, beats and rhythm (stems and beams). It can scroll, turn pages, or use two rows (the next page waits in the second row).
+- **Shows the music coming up** as guitar tab, with bar lines, beats and rhythm (stems and beams). It can scroll, turn pages, or use up to four rows (the next pages wait in the rows below, each starting with a dimmed bit of the page before).
 - **Follows the game.** It uses the difficulty (Dynamic Difficulty) you are playing at. Tested mostly with guitar in Learn a Song; Riff Repeater and bass are supported, but less tested.
 - **In-game menu (F8):** switch the mode on/off, wait for chords too or only single notes, timing, and tab and display options. You can drag and resize everything with the mouse while the menu is open. Colour themes (Default, High contrast, Midnight, Vintage, Paper), and any colour can be changed with a colour wheel or a hex code; the string colours stay the game's. F9 skips the note it's waiting for.
 - Extras: optionally closes the Ubisoft login popups at start-up, plays the start-up logos faster, and works around one of the game's own random crashes.
