@@ -127,9 +127,13 @@ Config LoadConfig() {
                 "; 1 = the tab stands still and a cursor moves over the notes, turning the page near the\n"
                 ";     right edge (easy to read fast parts); 0 = the notes scroll past a fixed line\n"
                 "TabPages=1\n"
-                "; Pages only: 1 = two rows; the cursor plays one while the other already shows the\n"
-                ";     next page (swapped in as soon as the cursor leaves it), 0 = one row\n"
-                "TabTwoRows=0\n"
+                "; Pages only: rows of tab, 1..4. With 2 or more, the cursor plays one row while the\n"
+                ";     others already show the next pages (a row gets a new page as soon as the cursor\n"
+                ";     leaves it)\n"
+                "TabRows=1\n"
+                "; Pages only: how much of the end of the previous page a new page repeats on its left,\n"
+                ";     percent of the width (0..50); on rows still to come it's drawn dimmed\n"
+                "TabRepeat=8\n"
                 "; 1 = left-handed tab: the notes run right to left, string names on the right\n"
                 "TabMirror=0\n"
                 "; 1 = thickest string on top of the tab, 0 = thinnest on top (like printed tab)\n"
@@ -201,7 +205,10 @@ Config LoadConfig() {
     c.initial.tabRhythm = GetPrivateProfileIntW(L"NoteByNote", L"TabRhythm", 1, ini.c_str()) != 0;
     c.initial.tabSpread = GetPrivateProfileIntW(L"NoteByNote", L"TabSpread", 1, ini.c_str()) != 0;
     c.initial.tabPage = GetPrivateProfileIntW(L"NoteByNote", L"TabPages", 1, ini.c_str()) != 0;
-    c.initial.tabTwoRows = GetPrivateProfileIntW(L"NoteByNote", L"TabTwoRows", 0, ini.c_str()) != 0;
+    // TabRows; older ini files have TabTwoRows=1 instead.
+    const int twoRowsOld = GetPrivateProfileIntW(L"NoteByNote", L"TabTwoRows", 0, ini.c_str()) != 0 ? 2 : 1;
+    c.initial.tabRows = std::max(1, std::min(4, (int)GetPrivateProfileIntW(L"NoteByNote", L"TabRows", twoRowsOld, ini.c_str())));
+    c.initial.tabRecap = std::max(0, std::min(50, (int)GetPrivateProfileIntW(L"NoteByNote", L"TabRepeat", 8, ini.c_str())));
     c.initial.tabMirror = GetPrivateProfileIntW(L"NoteByNote", L"TabMirror", 0, ini.c_str()) != 0;
     c.initial.tabThickTop = GetPrivateProfileIntW(L"NoteByNote", L"TabThickOnTop", 0, ini.c_str()) != 0;
     c.initial.tabOpacity =std::max(0, std::min(100, (int)GetPrivateProfileIntW(L"NoteByNote", L"TabBackground", 69, ini.c_str())));
@@ -257,7 +264,9 @@ void SaveSettings(const overlay::Settings& st) {
     put(L"TabNoteSize", st.tabNoteSize);
     put(L"TabBackground", st.tabOpacity);
     put(L"TabPages", st.tabPage);
-    put(L"TabTwoRows", st.tabTwoRows);
+    put(L"TabRows", st.tabRows);
+    put(L"TabRepeat", st.tabRecap);
+    WritePrivateProfileStringW(L"NoteByNote", L"TabTwoRows", nullptr, ini.c_str());  // replaced by TabRows
     put(L"TabMirror", st.tabMirror);
     put(L"TabThickOnTop", st.tabThickTop);
     put(L"TabRhythm", st.tabRhythm);
@@ -503,8 +512,11 @@ DWORD WINAPI MainThread(LPVOID) {
                     if (!game::GetPhraseLevels(&tabLevels)) tabLevels.clear();
                     // The past part: a page (tab pages mode) can show up to ~90 % of a page behind the cursor.
                     const double back = st.tabPage ? st.tabSeconds * 1.3 + 1.0 : 1.0;
-                    // The future part: two rows also show the whole next page (up to ~2.2 tabs ahead).
-                    const double ahead = (st.tabPage && st.tabTwoRows ? st.tabSeconds * 2.3 : st.tabSeconds) + 1.0;
+                    // The future part: several rows also show the next pages (each ~1.1 tabs long, a
+                    // little more with a big recap).
+                    const int rows = st.tabPage ? std::max(1, std::min(4, st.tabRows)) : 1;
+                    const double ahead = (rows > 1 ? st.tabSeconds * 1.2 * rows + st.tabSeconds * rows * st.tabRecap / 100.0
+                                                   : st.tabSeconds) + 1.0;
                     chart.TargetsBetween(v.songTime - back, v.songTime + ahead, tabLevels, &tabTargets);
                     chart.BeatsBetween(v.songTime - back, v.songTime + ahead, &tabBeatsRaw);
                     tabBeats.clear();  // always sent: the rhythm needs them even with the lines off

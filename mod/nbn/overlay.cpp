@@ -392,10 +392,11 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
     const float stemLen = 24 * s;
     const float w = std::min(ds.x, st.tabWidth * S), gap = 28 * s, top = 60 * s, labelW = 26 * s, pad = 12 * s;
     const float bottom = rhythm ? 18 * s + stemLen + 18 * s : 18 * s;
-    // Two rows (pages only, setting tabTwoRows): the box holds two staffs, one under the other.
-    const bool twoRows = st.tabPage && st.tabTwoRows;
+    // Rows (pages only, setting tabRows): the box holds 1..4 staffs, one under the other.
+    const int rows = st.tabPage ? std::max(1, std::min(4, st.tabRows)) : 1;
+    const bool multiRow = rows > 1;
     const float rowH = top + gap * (n - 1) + bottom;  // one staff with its lanes
-    const float h = rowH * (twoRows ? 2 : 1);
+    const float h = rowH * rows;
     // Position from the settings, kept on screen.
     const ImVec2 p0 = Place(ds.x * 0.5f + st.tabX * S, st.tabY * S, w, h, ds);
     const float x0 = p0.x, y0 = p0.y;
@@ -411,9 +412,12 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
     const float dir = mirror ? -1.0f : 1.0f;  // +1: later notes are to the right; -1: to the left
     const float lineL = x0 + pad + (mirror ? 0 : labelW), lineR = x0 + w - pad - (mirror ? labelW : 0);
     const float labelX = mirror ? lineR + 10 * s : x0 + pad;  // where the string names start
-    // Where "now" sits: scrolling = the fixed line; pages = where the cursor starts on a new page (the
-    // same place, so both modes look alike). A little of the past stays visible on its left.
+    // Where "now" sits: scrolling = the fixed line, a little of the past visible on its left (kCursorStart).
+    // Pages: a new page first repeats the end of the previous one (recap, the player's setting), and the
+    // cursor starts right after it. The speed (pixels per second) doesn't depend on the recap, so the
+    // spacing of the notes stays the same whatever is chosen.
     constexpr float kCursorStart = 0.08f;  // of the width, from the left edge (+ a small margin)
+    const float recap = st.tabPage ? std::max(0, std::min(50, st.tabRecap)) / 100.0f : kCursorStart;
     const float pageL = lineL + 6 * s;
     const float nowX = pageL + (lineR - pageL) * kCursorStart;
     const double secs = std::max(1, st.tabSeconds);
@@ -512,37 +516,46 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
     static double s_zoom = 1.0;  // the zoom need being shown (smoothed)
     double originT = cursorT;    // time -> x: x = originX + (t - originT) * pxPerS * zoom
     float originX = nowX;
-    // Two rows: the row the cursor is on (current page) and the other one (the next page).
-    double nextT = 0, nextNeed = 1.0;  // the next page: song time at its left edge, its zoom need
-    bool curOnTop = true;              // the current page is the upper row
-    if (twoRows) {
+    // Several rows: page k (0 = the cursor's page) starts at pageT[k] with zoom need pageNeedK[k], on
+    // row pageRow[k]; its first part repeats the previous page up to recapEnd[k] (drawn dimmed).
+    double pageT[4] = {}, pageNeedK[4] = {1, 1, 1, 1}, recapEnd[4] = {-1e9, -1e9, -1e9, -1e9};
+    int pageRow[4] = {0, 1, 2, 3};
+    if (multiRow) {
         // Pages follow each other: the next page starts where the cursor leaves this one, minus the
-        // bit of the past a new page keeps on its left (kCursorStart), so the cursor jumps from the
-        // right end of one row to the same point in the music on the other row. Each page's zoom is
+        // recap (the end of this page, repeated on the left of the next), so the cursor jumps from the
+        // right end of one row to the same point in the music on the next row. Each page's zoom is
         // set from the notes on it alone, when it's laid out, so its notes never move. The rows take
-        // turns: when the cursor leaves a row, that row gets the page after the next.
+        // turns top to bottom: when the cursor leaves a row, that row gets the page after the last one.
         static double s_rowT = -1e9;   // song time at the left edge of the current page
         static double s_rowNeed = 1.0; // its zoom need
-        static bool s_rowTop = true;   // the current page is on the upper row
+        static int s_row = 0;          // the row the current page is on
         originX = pageL;
         const float width = lineR - originX;
         auto pageLen = [&](double need) { return width / (pxPerS * zoomFor(need)); };  // seconds on a page
         // The need of the page starting at t: measured over the longest a page can be (need 1).
         auto pageNeed = [&](double t) { return needIn(t - 0.2, t + pageLen(1.0)); };
-        auto after = [&](double t, double need) { return t + pageLen(need) * (1.0 - kCursorStart); };
+        auto after = [&](double t, double need) { return t + pageLen(need) * (1.0 - recap); };
         if (now < s_rowT - 0.05 || now > s_rowT + 2 * pageLen(s_rowNeed)) {  // seek / new song
             s_rowNeed = pageNeed(now);
-            s_rowT = now - kCursorStart * pageLen(s_rowNeed);
-            s_rowTop = true;
+            s_rowT = now - recap * pageLen(s_rowNeed);
+            s_row = 0;
         }
+        s_row %= rows;  // (the number of rows was changed in the menu)
         for (int i = 0; i < 8 && now >= s_rowT + pageLen(s_rowNeed); ++i) {  // the cursor left the row
             s_rowT = after(s_rowT, s_rowNeed);
             s_rowNeed = pageNeed(s_rowT);
-            s_rowTop = !s_rowTop;
+            s_row = (s_row + 1) % rows;
         }
-        nextT = after(s_rowT, s_rowNeed);
-        nextNeed = pageNeed(nextT);
-        curOnTop = s_rowTop;
+        pageT[0] = s_rowT;
+        pageNeedK[0] = s_rowNeed;
+        for (int k = 0; k < rows; ++k) {
+            if (k > 0) {
+                pageT[k] = after(pageT[k - 1], pageNeedK[k - 1]);
+                pageNeedK[k] = pageNeed(pageT[k]);
+                recapEnd[k] = pageT[k - 1] + pageLen(pageNeedK[k - 1]);  // where the previous page ends
+            }
+            pageRow[k] = (s_row + k) % rows;
+        }
         originT = s_rowT;
         s_zoom = s_rowNeed;
     } else if (!st.tabPage) {
@@ -565,9 +578,10 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
         auto pageLen = [&](double need) { return width / (pxPerS * zoomFor(need)); };  // seconds on a page
         const double cursor = (now - s_pageT) / pageLen(s_pageNeed);  // 0..1 across the page
         const bool jumped = now < s_shownT - 0.05 || now > s_shownT + 3 * pageLen(s_pageNeed);  // seek / new song
-        if (jumped || cursor > 0.75 || target > s_pageNeed * 1.25) {
+        const double turnAt = recap + (1.0 - recap) * 0.73;  // 75 % of the width with the default recap
+        if (jumped || cursor > turnAt || target > s_pageNeed * 1.25) {
             s_pageNeed = target;
-            s_pageT = now - kCursorStart * pageLen(target);
+            s_pageT = now - recap * pageLen(target);
             if (jumped) { s_shownT = s_pageT; s_zoom = s_pageNeed; }
         }
         const double k = 1.0 - std::exp(-frameS / 0.1);
@@ -589,6 +603,7 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
         staffY = top;
     };
     bool nextFound = false;  // the next note to play is highlighted once (on the cursor's row first)
+    double dimBefore = -1e9; // rows still to come: notes before this (the recap) are drawn dimmed
     const float pulse = 0.6f + 0.4f * std::sin((float)ImGui::GetTime() * 5.0f);
     dl->PushClipRect(ImVec2(x0, y0), ImVec2(x0 + w, y0 + h), true);
 
@@ -646,6 +661,7 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
         auto alphaOf = [&](const Item& it) {
             float a = std::max(0.0f, 1.0f - (float)std::max(0.0, now - it.end) / 0.5f);
             if (st.tabPage) a = std::max(a, 0.35f);
+            if (it.last < dimBefore) a = std::min(a, 0.35f);  // the recap of a row still to come
             return it.note->ignore ? a * 0.4f : a;
         };
 
@@ -780,15 +796,16 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
         dl->PopClipRect();
     };  // drawStaff
 
-    if (twoRows) {
-        // The cursor's row first (the next note is highlighted there if it's on both), then the next
-        // page on the other row, with a thin line between the rows.
-        const float curY = curOnTop ? y0 : y0 + rowH, nextY = curOnTop ? y0 + rowH : y0;
-        layout(s_zoom, originT, curY);
-        drawStaff(true);
-        layout(nextNeed, nextT, nextY);
-        drawStaff(false);
-        dl->AddLine(ImVec2(x0 + pad, y0 + rowH), ImVec2(x0 + w - pad, y0 + rowH), Col(theme::kGrid, 40), 1 * s);
+    if (multiRow) {
+        // The cursor's page first (the next note is highlighted there if it's on two rows), then the
+        // pages still to come, each with its recap dimmed; a thin line between the rows.
+        for (int k = 0; k < rows; ++k) {
+            layout(pageNeedK[k], pageT[k], y0 + pageRow[k] * rowH);
+            dimBefore = recapEnd[k];
+            drawStaff(k == 0);
+        }
+        for (int r = 1; r < rows; ++r)
+            dl->AddLine(ImVec2(x0 + pad, y0 + r * rowH), ImVec2(x0 + w - pad, y0 + r * rowH), Col(theme::kGrid, 40), 1 * s);
     } else {
         layout(s_zoom, originT, y0);
         drawStaff(true);
@@ -1010,11 +1027,24 @@ void MenuTab(Settings& e) {
     ImGui::SameLine(0, ImGui::GetFontSize() * 2);
     if (ImGui::RadioButton("Scrolling", !e.tabPage)) e.tabPage = false;
     Help("The notes move to a fixed line, like the game's highway.");
-    ImGui::SameLine(0, ImGui::GetFontSize() * 2);
     ImGui::BeginDisabled(!e.tabPage);
-    Check("Two rows", &e.tabTwoRows, "Pages only: the next page already waits in the other row, so there's no page turn to wait for.");
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Rows");
+    for (int r = 1; r <= 4; ++r) {
+        ImGui::SameLine();
+        char label[8];
+        std::snprintf(label, sizeof(label), "%d##rows", r);
+        if (ImGui::RadioButton(label, e.tabRows == r)) e.tabRows = r;
+    }
+    Help("Pages only: with 2 to 4 rows, the next pages already wait in the rows below, so there's no page turn to wait for. "
+         "More rows = a taller tab (drag its corner to resize it).");
     ImGui::EndDisabled();
     SliderRow("Seconds ahead", "##tabsec", &e.tabSeconds, 2, 8, "%d s", "How much music the tab shows ahead of the cursor.");
+    ImGui::BeginDisabled(!e.tabPage);
+    SliderRow("Repeat previous page", "##tabrecap", &e.tabRecap, 0, 50, "%d %%",
+              "Pages only: how much of the end of the previous page a new page shows again on its left (percent of the width), "
+              "so you can see where you came from. The cursor starts right after it. On the rows still to come it's drawn dimmed.");
+    ImGui::EndDisabled();
 
     ImGui::SeparatorText("Reading");
     Check("Bar and beat lines", &e.tabBeats, "Bar lines with bar numbers, and faint lines on the beats.");

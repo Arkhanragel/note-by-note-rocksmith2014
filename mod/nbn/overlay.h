@@ -49,9 +49,13 @@ struct Settings {
                                  // one fret is drawn once as "12 x8"; off = spacing exactly by time
     bool tabPage = true;         // the tab stands still and a cursor moves over it, turning the page
                                  // near the right edge; off = the notes scroll past a fixed line
-    bool tabTwoRows = false;     // pages only: two rows, one under the other. The cursor plays one row
-                                 // while the other already shows the next page; when the cursor jumps
-                                 // to it, the row it left gets the page after (no page turn to wait for)
+    int tabRows = 1;             // pages only: 1..4 rows, one under the other. The cursor plays one row
+                                 // while the others already show the next pages; when the cursor jumps
+                                 // to the next row, the row it left gets the page after the last one
+                                 // (no page turn to wait for)
+    int tabRecap = 8;            // pages: how much of the previous page a new page repeats on its left,
+                                 // percent of its width (0..50); the cursor starts a page right after it.
+                                 // On the rows still to come, that repeated part is drawn dimmed
     bool tabMirror = false;      // left-handed: the tab runs right to left (string names on the right);
                                  // the banner's small tabs follow. Numbers and text are never mirrored
     bool tabThickTop = false;    // thickest string on top (off = thinnest on top, like printed tab);
