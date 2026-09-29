@@ -123,9 +123,14 @@ struct InFlight {
 // side too ("3rd string" = D), and Rocksmith colours each string on the highway.
 const ImU32 kStringColor[6] = {IM_COL32(232, 52, 52, 255),  IM_COL32(240, 206, 40, 255),  IM_COL32(52, 132, 242, 255),
                                IM_COL32(246, 136, 34, 255), IM_COL32(62, 196, 78, 255),   IM_COL32(182, 88, 228, 255)};
-const char* kColorName[6] = {"RED", "YELLOW", "BLUE", "ORANGE", "GREEN", "PURPLE"};
 const char* kStringName[6] = {"E", "A", "D", "G", "B", "e"};  // bass uses the first four
-const char* kOrdinal[6] = {"1st", "2nd", "3rd", "4th", "5th", "6th"};
+
+// Strings are named by number and letter, "string 3 (D)", drawn in the string's highway colour (the
+// colour names were hard to tell apart). 1 = the thickest, or the usual 1 = the thinnest (setting).
+int StringNumber(const Settings& st, int s, int n) { return st.stringsFromThick ? s + 1 : n - s; }
+std::string StringLabel(const Settings& st, int s, int n) {
+    return "string " + std::to_string(StringNumber(st, s, n)) + " (" + kStringName[s] + ")";
+}
 
 // ------------------------------------------------------------------ colours (theme.h)
 // This frame's theme colours (render thread only; Frame() fills them from the settings). The string
@@ -288,7 +293,7 @@ struct NeckPic {
         gap = (chord ? 24 : 20) * s;
         rad = (chord ? 11.5f : 14) * s;
         cell = std::max(34.0f, 276.0f / std::max(6, hi - lo + 1)) * s;  // 6 frets or fewer: 46
-        nameW = 20 * s;
+        nameW = 38 * s;  // "3 D": the string's number and letter
         openW = (open ? 30 : 8) * s;
         tailW = (chord ? 34 : 30) * s;  // chords: a column with each string's note name; notes: the name tag
         top = rad + 4 * s;
@@ -340,9 +345,9 @@ struct NeckPic {
             const bool on = used(str);
             const ImU32 c = on ? kStringColor[str] : ((kStringColor[str] & 0x00FFFFFF) | (120u << 24));
             dl->AddLine(ImVec2(X(neckL - openW * 0.55f), y), ImVec2(X(neckR), y), c, (1.3f + 0.45f * (n - 1 - str)) * s);
-            const char* name = kStringName[str];
-            const ImVec2 ns = g_fontUi->CalcTextSizeA(tiny, FLT_MAX, 0, name);
-            dl->AddText(g_fontUi, tiny, ImVec2(X(p0.x + nameW * 0.5f) - ns.x * 0.5f, y - ns.y * 0.5f), c, name);
+            const std::string name = std::to_string(StringNumber(st, str, n)) + " " + kStringName[str];
+            const ImVec2 ns = g_fontUi->CalcTextSizeA(tiny, FLT_MAX, 0, name.c_str());
+            dl->AddText(g_fontUi, tiny, ImVec2(X(p0.x + nameW * 0.5f) - ns.x * 0.5f, y - ns.y * 0.5f), c, name.c_str());
         }
 
         // Fret numbers under the neck; the ones in use brighter.
@@ -475,13 +480,13 @@ void DrawBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVe
     char fret[32];
     std::snprintf(fret, sizeof(fret), "fret %d", v.fret);
     std::vector<Seg> line1;
-    if (v.fret == 0) line1 = {{"Play the ", Col(theme::kText)}, {std::string(kColorName[i]) + " string", col}, {" open", Col(theme::kText)}};
-    else line1 = {{"Play ", Col(theme::kText)}, {fret, Col(theme::kText)}, {" on the ", Col(theme::kText)}, {std::string(kColorName[i]) + " string", col}};
+    if (v.fret == 0) line1 = {{"Play ", Col(theme::kText)}, {StringLabel(st, i, n), col}, {" open", Col(theme::kText)}};
+    else line1 = {{"Play ", Col(theme::kText)}, {fret, Col(theme::kText)}, {" on ", Col(theme::kText)}, {StringLabel(st, i, n), col}};
 
-    char which[96];
-    if (i == 0) std::snprintf(which, sizeof(which), "%s string - the thickest one", kStringName[i]);
-    else if (i == n - 1) std::snprintf(which, sizeof(which), "%s string - the thinnest one", kStringName[i]);
-    else std::snprintf(which, sizeof(which), "%s string - the %s counting from the thickest", kStringName[i], kOrdinal[i]);
+    // How the strings are counted, and which one this is in words.
+    std::string which = st.stringsFromThick ? "counting from the thickest string" : "counting from the thinnest string";
+    if (i == 0) which += " - it's the thickest one";
+    else if (i == n - 1) which += " - it's the thinnest one";
     std::vector<Seg> line2 = {{which, Col(theme::kText)}};
     if (v.midi >= 0) line2.push_back({"   \xC2\xB7   note " + music::NoteName(v.midi), Col(theme::kTextDim)});
     const std::vector<Seg> line3 = {{v.fret == 0 ? "(no finger on the neck)   " : "", Col(theme::kTextDim)}, {"F9 = skip   F8 = menu", Col(theme::kTextDim)}};
@@ -566,13 +571,14 @@ void DrawChordBanner(ImDrawList* dl, const View& v, const Settings& st, float S,
     if (!meaning.empty()) lineM.push_back({meaning, gold});
     if (!notes.empty()) lineM.push_back({(meaning.empty() ? "notes " : "   \xC2\xB7   notes ") + music::NoteList(notes, flats), Col(theme::kTextDim)});
 
-    std::vector<Seg> line2;  // "RED open = E    YELLOW 2 = B ..." from the thickest string
+    std::vector<Seg> line2;  // "string 1 open = E    2 fret 2 = B ..." from the thickest string
     int played = 0;
     for (int i = 0; i < n; ++i) {
         if (v.frets[i] < 0) continue;
         if (played++) line2.push_back({"     ", Col(theme::kText)});
-        line2.push_back({kColorName[i], kStringColor[i]});
-        line2.push_back({v.frets[i] == 0 ? " open" : " " + std::to_string(v.frets[i]), Col(theme::kText)});
+        else line2.push_back({"string ", Col(theme::kTextDim)});
+        line2.push_back({std::to_string(StringNumber(st, i, n)), kStringColor[i]});
+        line2.push_back({v.frets[i] == 0 ? " open" : " fret " + std::to_string(v.frets[i]), Col(theme::kText)});
         if (v.notes[i] >= 0) line2.push_back({" = " + music::NoteName(v.notes[i], flats), Col(theme::kTextDim)});
     }
     const std::vector<Seg> line3 = {{played < n ? "x = don't play that string   " : "", Col(theme::kTextDim)}, {"F9 = skip   F8 = menu", Col(theme::kTextDim)}};
@@ -1537,6 +1543,17 @@ void MenuTab(Settings& e) {
     ImGui::SameLine(0, ImGui::GetFontSize() * 2);
     Check("Left-handed (right to left)", &e.tabMirror,
           "Time runs from right to left and the string names move to the right. The banner's small tab follows.");
+    Check("Number the strings from the thickest", &e.stringsFromThick,
+          "The banner and its advice name strings by number, \"string 4 (D)\", in the string's colour. Off: the "
+          "standard numbering of guitar books, string 1 is the thinnest (high e). On: string 1 is the thickest (low E).");
+    // Back to the way tab is written in books and on tab sites (the left-handed option is about the
+    // player's hands, not about the notation, so it stays as it is).
+    if (ImGui::Button("Standard layout (like printed tab)")) {
+        e.tabThickTop = false;
+        e.stringsFromThick = false;
+    }
+    Help("Thinnest string on top and string 1 = the thinnest (high e), as in guitar books and on tab sites. "
+         "The left-handed option is kept.");
 
     ImGui::SeparatorText("Look");
     SliderRow("Note size", "##tabnote", &e.tabNoteSize, 60, 130, "%d %%",
@@ -1552,9 +1569,11 @@ void MenuScreen(Settings& e) {
     Check("What to play while the song waits", &e.showBanner,
           "The banner: string, fret and a small tab (for chords: name and shape), and how to fix a wrong note.");
     ImGui::BeginDisabled(!e.showBanner);
-    Check("   Show it on a fretboard", &e.bannerNeck,
+    ImGui::Indent();
+    Check("Show it on a fretboard", &e.bannerNeck,
           "The banner's picture is a piece of the neck: the note is a dot in its string's colour with the fret "
           "number, and after a wrong note a red X shows where you probably played it. Off = a small tab.");
+    ImGui::Unindent();
     ImGui::EndDisabled();
     Check("Song time", &e.showClock, "A small clock, \"1:23 / 4:28\", top-left by default.");
     ImGui::SeparatorText("Arrange");

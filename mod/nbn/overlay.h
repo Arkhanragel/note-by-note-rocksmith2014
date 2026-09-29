@@ -42,6 +42,9 @@ struct Settings {
     int earlyMs = 300;           // a correct note up to this early counts without stopping
     bool acceptOctaves = false;  // the same note one octave higher/lower also counts
     bool showBanner = true;      // show "play this" while the song is waiting
+    bool stringsFromThick = false; // strings are named by number ("string 4 (D)", in the string's colour):
+                                 // off = the standard numbering, 1 = the thinnest (high e); on = 1 is the
+                                 // thickest (low E)
     bool bannerNeck = true;      // the banner's picture is a piece of fretboard (the note as a dot in its
                                  // string's colour with the fret number, a red X where a wrong note was
                                  // played); off = the small tab

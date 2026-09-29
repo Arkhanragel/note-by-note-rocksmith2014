@@ -1,11 +1,14 @@
 // hint.h: "what went wrong" advice while the song waits. When the player plays something other than
 // the note or chord the song is waiting for, the banner shows how to fix it in guitar terms:
 //
-//   single note:  "You played G - move UP 2 frets (to fret 7)"
-//                 "You played C - that's the ORANGE string: use the BLUE string, fret 5"
-//                 "You played E - right note, one octave too high: fret 2 on the BLUE string"
-//   chord:        "GREEN string: move DOWN 1 fret (to fret 3)"
-//                 "Not sounding: BLUE string (fret 2) - press it firmly and strum it"
+//   single note:  "You played A - move DOWN 2 frets, to fret 5 on string 4 (D)"
+//                 "You played C - that's string 3 (G), use fret 5 on string 4 (D)"
+//                 "You played G - right note, but an octave too high: play fret 5 on string 4 (D)"
+//   chord:        "string 4 (D) is 1 fret too high: move DOWN to fret 2"
+//                 "not sounding: string 5 (A) at fret 2 - press firmly and strum every string"
+//
+// Strings are named by number and letter ("string 3 (D)"); the banner draws that in the string's
+// highway colour. The number is the standard one (1 = the thinnest) unless Neck::fromThick.
 //
 // A guitar note doesn't say which string it was played on (the same pitch exists on several
 // strings), so the advice guesses the most likely slip: the same fret on a neighbouring string, or a
@@ -40,6 +43,8 @@ struct Neck {
     int open[6] = {40, 45, 50, 55, 59, 64}; // MIDI of each open string with the song's tuning
     int capo = 0;                           // capo fret (0 = none): chart fret 0 then sounds here
     bool bassUnsure = false;                // chart might be bass (sounds an octave lower): allow both
+    bool fromThick = false;                 // string numbers: false = the standard numbering of guitar
+                                            // books, 1 = the thinnest (high e); true = 1 is the thickest
 };
 
 // Single note: the song waits for fret `fret` on `string` (MIDI `want`) and the player played `heard`.

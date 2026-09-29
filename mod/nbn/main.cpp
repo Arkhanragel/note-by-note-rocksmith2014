@@ -117,6 +117,9 @@ Config LoadConfig() {
                 "; 1 = the banner shows the note on a piece of fretboard (and where a wrong note was played),\n"
                 ";     0 = as a small tab\n"
                 "BannerFretboard=1\n"
+                "; 0 = strings are numbered like in guitar books (high e = string 1), 1 = from the thickest\n"
+                ";     (low E = string 1)\n"
+                "StringsFromThickest=0\n"
                 "; 1 = the song also waits at chords, 0 = chords pass (only single notes wait)\n"
                 "WaitChords=1\n"
                 "; 1 = after resuming from the game's pause screen, don't wait again for the notes the game\n"
@@ -214,6 +217,7 @@ Config LoadConfig() {
     c.initial.acceptOctaves = GetPrivateProfileIntW(L"NoteByNote", L"AcceptOctaves", 0, ini.c_str()) != 0;
     c.initial.showBanner = GetPrivateProfileIntW(L"NoteByNote", L"ShowBanner", 1, ini.c_str()) != 0;
     c.initial.bannerNeck = GetPrivateProfileIntW(L"NoteByNote", L"BannerFretboard", 1, ini.c_str()) != 0;
+    c.initial.stringsFromThick = GetPrivateProfileIntW(L"NoteByNote", L"StringsFromThickest", 0, ini.c_str()) != 0;
     c.initial.waitChords = GetPrivateProfileIntW(L"NoteByNote", L"WaitChords", 1, ini.c_str()) != 0;
     c.initial.showClock = GetPrivateProfileIntW(L"NoteByNote", L"ShowClock", 1, ini.c_str()) != 0;
     c.initial.showTab = GetPrivateProfileIntW(L"NoteByNote", L"ShowTab", 1, ini.c_str()) != 0;
@@ -273,6 +277,7 @@ void SaveSettings(const overlay::Settings& st) {
     put(L"AcceptOctaves", st.acceptOctaves);
     put(L"ShowBanner", st.showBanner);
     put(L"BannerFretboard", st.bannerNeck);
+    put(L"StringsFromThickest", st.stringsFromThick);
     put(L"WaitChords", st.waitChords);
     put(L"SkipGreyedNotes", st.skipGreyed);
     put(L"ShowClock", st.showClock);
@@ -979,6 +984,7 @@ struct MainLoop {
         std::copy(std::begin(chart.open), std::end(chart.open), neck.open);
         neck.capo = chart.capo;
         neck.bassUnsure = chart.bassUnsure;
+        neck.fromThick = st.stringsFromThick;
         // A wrong note gets advice only when it was picked (an attack), and not in the first moment of
         // the wait (that is still the previous note ringing).
         const bool adviseNow = now - frozenTick > 150;
