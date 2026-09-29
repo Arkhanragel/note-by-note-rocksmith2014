@@ -77,6 +77,7 @@ Chains: read the pointer, add the offset, repeat.
 | `[root] +0x28 → +0x8C` | before the first dialog the name is stored **in place** here (`MainOverlay`, `TitleScreen`); the chain above faults until then |
 | `[previewName] +0xBC → +0x0` | `Play_<SongKey>_Preview` (only while the song list shows a song; `_Invalid` with previews off) |
 | `[root] +0xB0` | the **song object** (while a song is loaded) |
+| `[root] +0x68 → +0x10 → +0x2C → +0x28 → +0x3DC` | float: the **grey-out time**: every note before it is greyed out on the highway. After resuming from the pause screen the game goes back ~3 s and replays with the notes already passed greyed (RSMods `ptr_greyOutNoteTimer`; checked on L&P: paused at 136.43, resumed at 133.41, grey time stayed at the pause point). Note-by-Note doesn't wait for those notes again (setting `SkipGreyedNotes`); it only trusts a value up to 20 s ahead of the clock |
 
 **Song object** (`song`):
 

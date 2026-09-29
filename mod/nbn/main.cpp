@@ -106,6 +106,9 @@ Config LoadConfig() {
                 "ShowBanner=1\n"
                 "; 1 = the song also waits at chords, 0 = chords pass (only single notes wait)\n"
                 "WaitChords=1\n"
+                "; 1 = after resuming from the game's pause screen, don't wait again for the notes the game\n"
+                ";     replays greyed out (the few seconds before where you paused)\n"
+                "SkipGreyedNotes=1\n"
                 "; 1 = show the song time (top-left corner) while playing\n"
                 "ShowClock=1\n"
                 "; 1 = show the notes coming up as a scrolling tab (left of the highway, below the lyrics)\n"
@@ -220,6 +223,7 @@ Config LoadConfig() {
         const std::string key = theme::kSlotInfo[i].key;
         c.initial.colors[i] = theme::ParseHex(narrow(str(std::wstring(key.begin(), key.end()).c_str(), L"")));
     }
+    c.initial.skipGreyed = GetPrivateProfileIntW(L"NoteByNote", L"SkipGreyedNotes", 1, ini.c_str()) != 0;
     c.initial.skipPopups = GetPrivateProfileIntW(L"NoteByNote", L"SkipUbisoftPopups", 1, ini.c_str()) != 0;
     c.initial.fastIntro = std::max(1, std::min(8, (int)GetPrivateProfileIntW(L"NoteByNote", L"FastIntro", 4, ini.c_str())));
     c.initial.fixCrash = GetPrivateProfileIntW(L"NoteByNote", L"FixGameCrash", 1, ini.c_str()) != 0;
@@ -256,6 +260,7 @@ void SaveSettings(const overlay::Settings& st) {
     put(L"AcceptOctaves", st.acceptOctaves);
     put(L"ShowBanner", st.showBanner);
     put(L"WaitChords", st.waitChords);
+    put(L"SkipGreyedNotes", st.skipGreyed);
     put(L"ShowClock", st.showClock);
     put(L"ShowTab", st.showTab);
     put(L"TabBeats", st.tabBeats);
@@ -494,6 +499,10 @@ DWORD WINAPI MainThread(LPVOID) {
             v.waiting = frozen;
             v.waitTime = frozen ? waitFor.time : -1;
             v.nextWaitTime = frozen ? -1 : nextWaitT;
+            {  // the tab dims greyed-out notes like the highway does (only when they aren't waited for)
+                double g = -1, ts = -1;
+                if (st.skipGreyed && inSong && game::GetGreyTime(&g) && game::GetSongTime(&ts) && g > ts && g < ts + 20) v.greyTime = g;
+            }
             v.bass = chart.bass;
             v.string = waitFor.string;
             v.fret = waitFor.fret;
@@ -737,6 +746,13 @@ DWORD WINAPI MainThread(LPVOID) {
 
         double t;
         if (!chartOk || !st.enabled || !game::GetSongTime(&t)) { upcomingChord.clear(); continue; }
+        // Greyed-out notes (setting SkipGreyedNotes): after resuming from the game's pause screen the
+        // song replays a few seconds with the notes already passed greyed out; those aren't waited for
+        // again. Only a grey time a little ahead of the song counts (a resume goes back ~3 s), so a
+        // stale value can never switch off the waits for a whole song.
+        double greyT = -1;
+        if (st.skipGreyed && game::GetGreyTime(&greyT) && !(greyT > t && greyT < t + 20)) greyT = -1;
+        auto canWait = [&](const Target& x) { return Waitable(st, x) && !(greyT > 0 && x.time < greyT - 0.001); };
         if (!game::GetPhraseLevels(&levels)) levels.clear();
 
         // ---- 6. keep the cursor in sync with the song position
@@ -806,14 +822,16 @@ DWORD WINAPI MainThread(LPVOID) {
         // Next note on the highway (using the current level of each phrase), skipping ignored notes
         // (and chords if the player turned chord waits off).
         const Target* next = chart.NextTarget(cursor, levels);
-        while (next && !Waitable(st, *next) && next->time <= t + earlyS) {
-            if (next->chord) Log("pass %.3f %s (%s)", next->time, Describe(chart, *next).c_str(), next->ignore ? "ignored" : "chord waits off");
+        while (next && !canWait(*next) && next->time <= t + earlyS) {
+            if (next->chord || (greyT > 0 && Waitable(st, *next)))
+                Log("pass %.3f %s (%s)", next->time, Describe(chart, *next).c_str(),
+                    Waitable(st, *next) ? "greyed out after resuming" : next->ignore ? "ignored" : "chord waits off");
             cursor = next->time;
             next = chart.NextTarget(cursor, levels);
         }
         if (!next) { upcomingChord.clear(); continue; }  // end of the chart
 
-        if (Waitable(st, *next) && t >= next->time - earlyS) {
+        if (canWait(*next) && t >= next->time - earlyS) {
             bool hit = false;
             if (next->chord) {
                 for (const auto& cr : chordResults) hit = hit || cr.match;
@@ -827,8 +845,8 @@ DWORD WINAPI MainThread(LPVOID) {
                 next = chart.NextTarget(cursor, levels);
             }
         }
-        upcomingChord = (next && next->chord && Waitable(st, *next)) ? next->midi : kNoChord;
-        if (!next || !Waitable(st, *next)) continue;
+        upcomingChord = (next && next->chord && canWait(*next)) ? next->midi : kNoChord;
+        if (!next || !canWait(*next)) continue;
         nextWaitT = next->time;  // the song stops here unless it's played (the tab's cursor won't pass it)
         // A strum is checked 90 and 180 ms after its attack: while one is being checked, give it a
         // moment before stopping the song (so a chord played right on time doesn't stop it).

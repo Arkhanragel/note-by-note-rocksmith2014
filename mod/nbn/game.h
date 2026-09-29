@@ -40,6 +40,9 @@ bool GetSongKey(std::string* key);
 
 // Current song position in seconds: the clock the highway, scoring, etc. all read.
 bool GetSongTime(double* t);
+// The game greys out every note before this song time (seconds): after resuming from the pause
+// screen it replays a few seconds with the notes already passed greyed. Usually <= the song time.
+bool GetGreyTime(double* t);
 // Length of the loaded song in seconds (SongLength of the arrangement being played).
 bool GetSongLength(double* len);
 

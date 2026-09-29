@@ -677,6 +677,7 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
             float a = std::max(0.0f, 1.0f - (float)std::max(0.0, now - it.end) / 0.5f);
             if (st.tabPage) a = std::max(a, 0.35f);
             if (it.last < dimBefore) a = std::min(a, 0.35f);  // the recap of a row still to come
+            if (it.last < v.greyTime) a = std::min(a, 0.35f);  // greyed out on the highway (replayed after a resume)
             return it.note->ignore ? a * 0.4f : a;
         };
 
@@ -1035,6 +1036,9 @@ void MenuPlaying(Settings& e) {
     ImGui::BeginDisabled(!e.enabled);
     Check("Wait for chords too", &e.waitChords, "Off: the song only waits for single notes; chords pass by themselves.");
     ImGui::EndDisabled();
+    Check("Don't wait again for greyed-out notes", &e.skipGreyed,
+          "When you resume from the game's pause screen, the song goes back a few seconds and replays them with the "
+          "notes you already passed greyed out. On: the song doesn't stop for those again (the tab dims them too).");
     Check("Accept the same note an octave higher or lower", &e.acceptOctaves,
           "Useful if you play a riff in another position. Off is stricter: string and fret must match.");
     ImGui::SeparatorText("Timing");

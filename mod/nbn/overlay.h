@@ -40,6 +40,8 @@ struct Settings {
     bool acceptOctaves = false;  // the same note one octave higher/lower also counts
     bool showBanner = true;      // show "play this" while the song is waiting
     bool waitChords = true;      // also wait at chords (off = chords pass, only single notes wait)
+    bool skipGreyed = true;      // after resuming from the game's pause screen, the notes the game replays
+                                 // greyed out are not waited for again
     bool showClock = true;       // show the song time while playing
     bool showTab = true;         // show the scrolling tab while playing
     bool tabBeats = true;        // bar lines (with bar numbers) and beat lines in the tab
@@ -117,6 +119,8 @@ struct View {
     bool waiting = false;        // the song is frozen, waiting for a note
     double waitTime = -1;        // while waiting: the song time of that note (the tab highlights it;
                                  // the song clock stops a few ms after it, so "now" can't tell)
+    double greyTime = -1;        // notes before this song time are greyed out on the highway and not
+                                 // waited for (after resuming from the pause screen); -1 = none
     double nextWaitTime = -1;    // while playing: the next note the song will stop at if it isn't
                                  // played (-1 = none). The tab's cursor never passes it
     bool bass = false;           // 4-string layout

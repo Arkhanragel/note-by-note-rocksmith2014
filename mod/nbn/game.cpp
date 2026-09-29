@@ -73,6 +73,9 @@ struct Layout {
     uint32_t providerPlayingId; // clock provider: the Wwise playing ID the clock follows
     uint32_t providerStopped;   // clock provider, byte: != 0 -> the clock does not advance
     uint32_t songGameObject;    // the Wwise game object the game plays the song on
+    uint32_t greyChain[5];      // [root] -> ... -> float: notes before this song time are greyed out on
+                                // the highway (after resuming from the pause screen the game replays a
+                                // few seconds with those notes greyed). RSMods' ptr_greyOutNoteTimer
 };
 
 // Learn & Play, all verified (BITACORA: "the freeze mechanism", "Song data", test 24). Other
@@ -83,6 +86,7 @@ constexpr Layout kLayoutLearnAndPlay = {
     0x18, 64, 4,
     0x0C, 0xCC, 0xDA,
     0x1234,
+    {0x68, 0x10, 0x2C, 0x28, 0x3DC},  // checked 2026-09-29: resumed at 133.36 s, grey time stayed 135.962
 };
 
 struct Build {
@@ -553,6 +557,15 @@ bool GetSongTime(double* t) {
     const uintptr_t song = SongObject();
     float f;
     if (!g_ready || !song || !ReadFloat(song + g_lay.songClock, &f)) return false;
+    *t = f;
+    return true;
+}
+
+bool GetGreyTime(double* t) {
+    uintptr_t a;
+    float f;
+    if (!g_ready || !ReadChain(g_base + g_addr.root, g_lay.greyChain, 5, &a) || !ReadFloat(a, &f) || !(f >= 0 && f < 36000))
+        return false;
     *t = f;
     return true;
 }
