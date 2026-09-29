@@ -616,11 +616,109 @@ uintptr_t SongDataAddress() {
     return (g_ready && song && ReadU32(song + g_lay.songData, &data)) ? data : 0;
 }
 
+namespace {
+
+const int kGuitarOpen[6] = {40, 45, 50, 55, 59, 64};  // E2 A2 D3 G3 B3 E4 (MIDI)
+
+// With a capo, an open string sounds at the capo fret (same rule as Rocksmith2014.NET's toMidiNote).
+int SoundingFret(int fret, int capo) { return (fret == 0 && capo > 0) ? capo : fret; }
+
+// Guitar or bass: the chord templates store MIDI notes, computed with -12 for bass. This is every
+// template note minus what a guitar in this tuning plays there: {-12} = bass, {0} = guitar, {} = no
+// chords (can't tell).
+std::set<int> ChordOctaveOffsets(const std::vector<uint8_t>& chords, const int tuning[6], int capo) {
+    std::set<int> offsets;
+    for (size_t i = 0; i < chords.size(); i += kChordSize)
+        for (int s = 0; s < 6; ++s) {
+            const int8_t fret = At<int8_t>(chords, i + kChordFrets + s);
+            if (fret >= 0)
+                offsets.insert(At<int32_t>(chords, i + kChordMidi + s * 4) - (kGuitarOpen[s] + tuning[s] + SoundingFret(fret, capo)));
+        }
+    return offsets;
+}
+
+// The beat grid (optional: without it the tab just has no bar lines). Kept only if the times go up,
+// so garbage never draws lines.
+std::vector<Beat> ReadBeats(uintptr_t data) {
+    std::vector<uint8_t> raw;
+    std::vector<Beat> beats;
+    if (!ReadVector(data + kSongDataBeats, kBeatSize, 100000, &raw)) return beats;
+    for (size_t i = 0; i < raw.size(); i += kBeatSize) {
+        Beat b;
+        b.time = At<float>(raw, i);
+        b.measure = At<int16_t>(raw, i + 4);
+        b.downbeat = (At<uint32_t>(raw, i + 0xC) & kBeatFirstOfMeasure) != 0;
+        if (!(b.time >= 0 && b.time < 3600) || (!beats.empty() && b.time < beats.back().time)) {
+            Log("beats: not a beat grid at #%zu (time %.3f), ignored", i / kBeatSize, b.time);
+            beats.clear();
+            break;
+        }
+        beats.push_back(b);
+    }
+    return beats;
+}
+
+// Turns the in-memory notes of one difficulty level into Targets.
+struct NoteDecoder {
+    const std::vector<uint8_t>& chords;  // the chord templates
+    int open[6];                         // MIDI of each open string (bass: an octave down), no capo
+    int capo;
+
+    // The note at byte n of `notes`; false = not a usable note (its string is out of range).
+    bool Decode(const std::vector<uint8_t>& notes, size_t n, int level, Target* out) const {
+        Target t;
+        const uint32_t mask = At<uint32_t>(notes, n + kNoteMask);
+        const int chordId = At<int32_t>(notes, n + kNoteChordId);
+        t.time = At<float>(notes, n + kNoteTime);
+        t.level = level;
+        t.pi = At<int32_t>(notes, n + kNotePi);
+        t.ignore = (mask & kMaskIgnore) != 0;
+        const float sus = At<float>(notes, n + kNoteSustain);
+        t.sustain = (sus > 0 && sus < 60) ? sus : 0;
+        if (chordId >= 0 && (mask & kMaskChord) && (size_t)chordId * kChordSize < chords.size()) {
+            t.chord = true;
+            const size_t ch = (size_t)chordId * kChordSize;
+            for (int s = 0; s < 6; ++s) {
+                t.frets[s] = At<int8_t>(chords, ch + kChordFrets + s);
+                if (t.frets[s] < 0) continue;
+                t.notes[s] = At<int32_t>(chords, ch + kChordMidi + s * 4);
+                t.midi.push_back(t.notes[s]);
+            }
+            const char* name = (const char*)&chords[ch + kChordName];
+            t.chordName.assign(name, strnlen(name, kChordNameSize));
+        } else {
+            t.string = At<int8_t>(notes, n + kNoteString);
+            t.fret = At<int8_t>(notes, n + kNoteFret);
+            if (t.string < 0 || t.string > 5) return false;
+            t.midi.push_back(open[t.string] + SoundingFret(t.fret, capo));
+        }
+        *out = std::move(t);
+        return true;
+    }
+};
+
+// What was read, in the log (and a few beats, to check the grid by eye).
+void LogChart(const Chart& chart, const int tuning[6], size_t chordShapes, const std::vector<Target>& all) {
+    size_t sustained = 0;
+    double maxSustain = 0;
+    for (const auto& t : all)
+        if (t.sustain > 0) { ++sustained; maxSustain = std::max(maxSustain, t.sustain); }
+    Log("chart from memory: %s, tuning %d %d %d %d %d %d, capo %d, %zu chord shapes, %d levels, %zu phrase iterations, %zu notes",
+        chart.arrangement.c_str(), tuning[0], tuning[1], tuning[2], tuning[3], tuning[4], tuning[5], chart.capo,
+        chordShapes, chart.Levels(), chart.pis.size(), all.size());
+    Log("  %zu beats (last bar %d), %zu notes held (longest %.2f s)", chart.beats.size(),
+        chart.beats.empty() ? 0 : chart.beats.back().measure, sustained, maxSustain);
+    for (size_t i = 0; i < chart.beats.size() && i < 6; ++i)
+        Log("  beat %zu: %.3f s, bar %d%s", i, chart.beats[i].time, chart.beats[i].measure,
+            chart.beats[i].downbeat ? ", first of the bar" : "");
+}
+
+}  // namespace
+
 bool ReadSongChart(Chart* chart) {
-    static const int kGuitarOpen[6] = {40, 45, 50, 55, 59, 64};  // E2 A2 D3 G3 B3 E4 (MIDI)
     const uintptr_t data = SongDataAddress();
     if (!data) return false;
-    std::vector<uint8_t> tuningRaw, chords, levels, pis, notes, beats;
+    std::vector<uint8_t> tuningRaw, chords, levels, pis, notes;
     uint32_t levelsBegin = 0;
     int8_t capoRaw;
     if (!ReadVector(data + kSongDataTuning, 2, 8, &tuningRaw) || !ReadBytes(data + kSongDataCapo, &capoRaw, 1) ||
@@ -632,40 +730,19 @@ bool ReadSongChart(Chart* chart) {
     int tuning[6] = {0, 0, 0, 0, 0, 0};
     for (size_t i = 0; i < tuningRaw.size() / 2 && i < 6; ++i) tuning[i] = At<int16_t>(tuningRaw, i * 2);
     const int capo = capoRaw > 0 ? capoRaw : 0;
-    // With a capo, an open string sounds at the capo fret (same rule as Rocksmith2014.NET's toMidiNote).
-    auto fretOf = [&](int fret) { return (fret == 0 && capo > 0) ? capo : fret; };
 
     Chart c;
-    // Guitar or bass: the chord templates store MIDI notes, computed with -12 for bass.
-    std::set<int> offsets;
-    for (size_t i = 0; i < chords.size(); i += kChordSize)
-        for (int s = 0; s < 6; ++s) {
-            const int8_t fret = At<int8_t>(chords, i + kChordFrets + s);
-            if (fret >= 0) offsets.insert(At<int32_t>(chords, i + kChordMidi + s * 4) - (kGuitarOpen[s] + tuning[s] + fretOf(fret)));
-        }
+    const std::set<int> offsets = ChordOctaveOffsets(chords, tuning, capo);
     c.bass = offsets.size() == 1 && *offsets.begin() == -12;
-    for (int s = 0; s < 6; ++s) c.open[s] = kGuitarOpen[s] + tuning[s] - (c.bass ? 12 : 0);
+    NoteDecoder dec{chords, {}, capo};
+    for (int s = 0; s < 6; ++s) {
+        c.open[s] = kGuitarOpen[s] + tuning[s] - (c.bass ? 12 : 0);
+        dec.open[s] = c.open[s];
+    }
     c.capo = capo;
-
     for (size_t i = 0; i < pis.size(); i += kPiSize)
         c.pis.push_back({At<int32_t>(pis, i), At<float>(pis, i + 4), At<float>(pis, i + 8)});
-
-    // The beat grid (optional: without it the tab just has no bar lines). Kept only if the times
-    // go up, so garbage never draws lines.
-    if (ReadVector(data + kSongDataBeats, kBeatSize, 100000, &beats)) {
-        for (size_t i = 0; i < beats.size(); i += kBeatSize) {
-            Beat b;
-            b.time = At<float>(beats, i);
-            b.measure = At<int16_t>(beats, i + 4);
-            b.downbeat = (At<uint32_t>(beats, i + 0xC) & kBeatFirstOfMeasure) != 0;
-            if (!(b.time >= 0 && b.time < 3600) || (!c.beats.empty() && b.time < c.beats.back().time)) {
-                Log("beats: not a beat grid at #%zu (time %.3f), ignored", i / kBeatSize, b.time);
-                c.beats.clear();
-                break;
-            }
-            c.beats.push_back(b);
-        }
-    }
+    c.beats = ReadBeats(data);
 
     std::vector<Target> all;
     int maxString = 0;
@@ -674,32 +751,8 @@ bool ReadSongChart(Chart* chart) {
         c.levelCounts.push_back((int)(notes.size() / kNoteSize));
         for (size_t n = 0; n < notes.size(); n += kNoteSize) {
             Target t;
-            const uint32_t mask = At<uint32_t>(notes, n + kNoteMask);
-            const int chordId = At<int32_t>(notes, n + kNoteChordId);
-            t.time = At<float>(notes, n + kNoteTime);
-            t.level = (int)lv;
-            t.pi = At<int32_t>(notes, n + kNotePi);
-            t.ignore = (mask & kMaskIgnore) != 0;
-            const float sus = At<float>(notes, n + kNoteSustain);
-            t.sustain = (sus > 0 && sus < 60) ? sus : 0;
-            if (chordId >= 0 && (mask & kMaskChord) && (size_t)chordId * kChordSize < chords.size()) {
-                t.chord = true;
-                const size_t ch = (size_t)chordId * kChordSize;
-                for (int s = 0; s < 6; ++s) {
-                    t.frets[s] = At<int8_t>(chords, ch + kChordFrets + s);
-                    if (t.frets[s] < 0) continue;
-                    t.notes[s] = At<int32_t>(chords, ch + kChordMidi + s * 4);
-                    t.midi.push_back(t.notes[s]);
-                }
-                const char* name = (const char*)&chords[ch + kChordName];
-                t.chordName.assign(name, strnlen(name, kChordNameSize));
-            } else {
-                t.string = At<int8_t>(notes, n + kNoteString);
-                t.fret = At<int8_t>(notes, n + kNoteFret);
-                if (t.string < 0 || t.string > 5) continue;
-                maxString = std::max(maxString, t.string);
-                t.midi.push_back(kGuitarOpen[t.string] + tuning[t.string] + fretOf(t.fret) - (c.bass ? 12 : 0));
-            }
+            if (!dec.Decode(notes, n, (int)lv, &t)) continue;
+            if (!t.chord) maxString = std::max(maxString, t.string);
             all.push_back(std::move(t));
         }
     }
@@ -707,18 +760,7 @@ bool ReadSongChart(Chart* chart) {
     c.arrangement = c.bass ? "bass" : (c.bassUnsure ? "guitar or bass" : "guitar");
     c.Index(all);
     *chart = std::move(c);
-    size_t sustained = 0;
-    double maxSustain = 0;
-    for (const auto& t : all)
-        if (t.sustain > 0) { ++sustained; maxSustain = std::max(maxSustain, t.sustain); }
-    Log("chart from memory: %s, tuning %d %d %d %d %d %d, capo %d, %zu chord shapes, %d levels, %zu phrase iterations, %zu notes",
-        chart->arrangement.c_str(), tuning[0], tuning[1], tuning[2], tuning[3], tuning[4], tuning[5], capo,
-        chords.size() / kChordSize, chart->Levels(), chart->pis.size(), all.size());
-    Log("  %zu beats (last bar %d), %zu notes held (longest %.2f s)", chart->beats.size(),
-        chart->beats.empty() ? 0 : chart->beats.back().measure, sustained, maxSustain);
-    for (size_t i = 0; i < chart->beats.size() && i < 6; ++i)
-        Log("  beat %zu: %.3f s, bar %d%s", i, chart->beats[i].time, chart->beats[i].measure,
-            chart->beats[i].downbeat ? ", first of the bar" : "");
+    LogChart(*chart, tuning, chords.size() / kChordSize, all);
     return true;
 }
 

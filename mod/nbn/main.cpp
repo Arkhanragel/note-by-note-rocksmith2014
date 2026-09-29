@@ -421,27 +421,24 @@ struct KeyEdge {
 };
 
 // ------------------------------------------------------------------ main loop
-DWORD WINAPI MainThread(LPVOID) {
-    LogOpen(DllDir() + L"NoteByNote.log");
-    Log("Note-by-Note starting");
-    report::Open(DllDir() + L"NoteByNote_report.txt");
-    const Config cfg = LoadConfig();
-    overlay::Settings st = cfg.initial;  // the live settings (the menu can change them)
-    Log("config: enabled=%d menuKey=0x%X skipKey=0x%X lead=%dms early=%dms octaves=%d banner=%d chords=%d", st.enabled,
-        cfg.menuKey, cfg.skipKey, st.leadMs, st.earlyMs, st.acceptOctaves, st.showBanner, st.waitChords);
-    crashfix::Start(st.fixCrash);    // first of all: the game can crash any moment until then
-    fastintro::Start(st.fastIntro);  // then: the logos are already playing
-    if (cfg.testUnverifiedGame || cfg.testAutoPassMs)
-        report::Line("Test settings: TestUnverifiedGame=%d, TestAutoPassMs=%d", cfg.testUnverifiedGame, cfg.testAutoPassMs);
-    if (!game::Init(cfg.testUnverifiedGame, cfg.testPatternsOnly)) { fastintro::Tick(true); return 0; }
-    overlay::Start(st);
+TrackerConfig BassTrackerConfig() {  // bass needs a longer window and a lower lowest note
+    TrackerConfig c;
+    c.window = 4096;
+    c.fmin = 35.0;
+    return c;
+}
+
+// Everything the main loop keeps between iterations, and its steps: Run() calls them in order about
+// every millisecond (0. what the overlay shows, 1. guitar input, 2. keys + menu + settings, 3. game
+// screen, 4. chart, 5. menu hold, 6.-8. following the song and waiting at its notes).
+struct MainLoop {
+    const Config cfg;
+    overlay::Settings st;  // the live settings (the menu can change them)
 
     KeyEdge menuKey, skipKey;
     TapReader tap;
-    TrackerConfig guitarCfg, bassCfg;
-    bassCfg.window = 4096;
-    bassCfg.fmin = 35.0;
-    NoteTracker tracker(guitarCfg);
+    TrackerConfig guitarCfg, bassCfg = BassTrackerConfig();
+    NoteTracker tracker{guitarCfg};
     bool trackerIsBass = false;
     std::vector<float> samples, pending;
     std::vector<NoteEvent> events;
@@ -468,6 +465,7 @@ DWORD WINAPI MainThread(LPVOID) {
     double cursor = 0;                // song time of the last note that was hit/passed
     double nextWaitT = -1;            // the next note the song would stop at (for the tab's cursor), -1 = none
     double lastT = -1;
+    double greyT = -1;                // notes before this are greyed out and not waited for (-1 = none)
     Target waitFor;                   // the note we're frozen on
     hint::Line waitHint;              // how to fix the last wrong note played during this wait
     DWORD frozenTick = 0, lastTapTry = 0, nextFreezeTry = 0, lastHeartbeat = 0, lastUnloadCheck = 0, nextChartTry = 0,
@@ -480,93 +478,118 @@ DWORD WINAPI MainThread(LPVOID) {
     double clockT = 0;
     long long totalSamples = 0;
     DebugAudio debugAudio;
-    debugAudio.enabled = cfg.saveWaitAudio;
     long long waitAudioStart = 0;
     const std::wstring debugDir = DllDir() + L"NoteByNote_debug\\";
 
+    explicit MainLoop(const Config& c) : cfg(c), st(c.initial) { debugAudio.enabled = cfg.saveWaitAudio; }
+
+    // Runs until the dev unload file appears; then releases the song if we're holding it.
+    void Run() {
+        for (;;) {
+            Sleep(1);
+            const DWORD now = GetTickCount();
+            game::Tick();
+            PublishView(now);  // 0. (state of the previous iteration; 1 ms old is fine)
+            nextWaitT = -1;    // set again in Follow() while the mode can stop the song at a next note
+            ReadGuitar(now);   // 1.
+            const bool skip = ReadKeys();  // 2.
+            ApplySettings();
+            if (UnloadRequested(now)) break;
+            if (!UpdateScreen(now)) continue;  // 3. not (yet) in a song
+            ReadChart(now);    // 4.
+            CheckClock(now);
+            HoldForMenu(now);  // 5.
+            // Right after the song screen opens (song start, Riff Repeater, unpausing) the clock still
+            // reports the old time for a moment: acting on it froze the song too early. Let it settle.
+            if (now - songScreenTick < 400) continue;
+            Follow(now, skip);  // 6.-8.
+        }
+        if (frozen || menuHold) game::Unfreeze();
+    }
+
     // Stops waiting for the current note. If our menu is open, the song stays held until it closes.
-    auto releaseWait = [&]() {
+    void ReleaseWait() {
         if (!frozen) return;
         frozen = false;
         if (overlay::MenuOpen()) menuHold = true;
         else game::Unfreeze();
-    };
+    }
 
-    timeBeginPeriod(1);
-    for (;;) {
-        Sleep(1);
-        const DWORD now = GetTickCount();
-        game::Tick();
+    // The guitar audio from 2 s before the current wait until now (setting SaveWaitAudio).
+    void SaveWaitAudio() { debugAudio.Save(debugDir, waitFor.time, waitAudioStart, 48000); }
 
-        // ---- 0. what the overlay shows (state of the previous iteration; 1 ms old is fine)
-        {
-            overlay::View v;
-            v.inSong = inSong;
-            v.waiting = frozen;
-            v.waitTime = frozen ? waitFor.time : -1;
-            v.nextWaitTime = frozen ? -1 : nextWaitT;
-            {  // the tab dims greyed-out notes like the highway does (only when they aren't waited for)
-                double g = -1, ts = -1;
-                if (st.skipGreyed && inSong && game::GetGreyTime(&g) && game::GetSongTime(&ts) && g > ts && g < ts + 20) v.greyTime = g;
-            }
-            v.bass = chart.bass;
-            v.string = waitFor.string;
-            v.fret = waitFor.fret;
-            v.chord = waitFor.chord;
-            v.chordName = waitFor.chordName;
-            std::copy(std::begin(waitFor.frets), std::end(waitFor.frets), v.frets);
-            std::copy(std::begin(waitFor.notes), std::end(waitFor.notes), v.notes);
-            v.midi = (!waitFor.chord && !waitFor.midi.empty()) ? waitFor.midi[0] : -1;
-            if (frozen) v.hint = waitHint;
-            // The clock works even with the mode off or without a chart (it's just the song time).
-            if (!inSong || !game::GetSongTime(&v.songTime)) v.songTime = -1;
-            if (inSong && !game::GetSongLength(&v.songLength)) v.songLength = 0;
-            // The scrolling tab: the notes the highway shows from 1 s ago to the end of the tab (+1 s
-            // margin, the list is only refreshed every 50 ms). Works with the mode off too.
-            if (inSong && chartOk && st.showTab && v.songTime >= 0) {
-                if (now >= nextTabRefresh) {
-                    nextTabRefresh = now + 50;
-                    if (!game::GetPhraseLevels(&tabLevels)) tabLevels.clear();
-                    // The past part: a page (tab pages mode) can show up to ~90 % of a page behind the cursor.
-                    const double back = st.tabPage ? st.tabSeconds * 1.3 + 1.0 : 1.0;
-                    // The future part: several rows also show the next pages (each ~1.1 tabs long, a
-                    // little more with a big recap).
-                    const int rows = st.tabPage ? std::max(1, std::min(4, st.tabRows)) : 1;
-                    const double ahead = (rows > 1 ? st.tabSeconds * 1.2 * rows + st.tabSeconds * rows * st.tabRecap / 100.0
-                                                   : st.tabSeconds) + 1.0;
-                    chart.TargetsBetween(v.songTime - back, v.songTime + ahead, tabLevels, &tabTargets);
-                    chart.BeatsBetween(v.songTime - back, v.songTime + ahead, &tabBeatsRaw);
-                    tabBeats.clear();  // always sent: the rhythm needs them even with the lines off
-                    for (const Beat& b : tabBeatsRaw) tabBeats.push_back({b.time, b.measure, b.downbeat});
-                    tabNotes.clear();
-                    for (const Target* t : tabTargets) {
-                        overlay::TabNote tn;
-                        tn.time = t->time;
-                        tn.chord = t->chord;
-                        tn.ignore = t->ignore;
-                        if (t->chord) std::copy(std::begin(t->frets), std::end(t->frets), tn.frets);
-                        else if (t->string >= 0 && t->string < 6) tn.frets[t->string] = t->fret;
-                        tn.name = t->chordName;
-                        tn.sustain = t->sustain;
-                        tabNotes.push_back(tn);
-                    }
-                }
-                v.tab = tabNotes;
-                v.tabBeats = tabBeats;
-            } else {
-                tabNotes.clear();
-                tabBeats.clear();
-                nextTabRefresh = 0;
-            }
-            v.chartOk = chartOk;
-            if (chartOk) v.chartInfo = "Song notes read from the game (" + chart.arrangement + ", " + std::to_string(chart.Levels()) + " levels)";
-            else if (inSong) v.chartInfo = "Couldn't read this song's notes yet: it plays normally";
-            else v.chartInfo = "Start a song to use Note-by-Note";
-            overlay::SetView(v);
+    // ---- 0. what the overlay shows
+    void PublishView(DWORD now) {
+        overlay::View v;
+        v.inSong = inSong;
+        v.waiting = frozen;
+        v.waitTime = frozen ? waitFor.time : -1;
+        v.nextWaitTime = frozen ? -1 : nextWaitT;
+        {  // the tab dims greyed-out notes like the highway does (only when they aren't waited for)
+            double g = -1, ts = -1;
+            if (st.skipGreyed && inSong && game::GetGreyTime(&g) && game::GetSongTime(&ts) && g > ts && g < ts + 20) v.greyTime = g;
         }
-        nextWaitT = -1;  // set again below (step 7) while the mode can stop the song at a next note
+        v.bass = chart.bass;
+        v.string = waitFor.string;
+        v.fret = waitFor.fret;
+        v.chord = waitFor.chord;
+        v.chordName = waitFor.chordName;
+        std::copy(std::begin(waitFor.frets), std::end(waitFor.frets), v.frets);
+        std::copy(std::begin(waitFor.notes), std::end(waitFor.notes), v.notes);
+        v.midi = (!waitFor.chord && !waitFor.midi.empty()) ? waitFor.midi[0] : -1;
+        if (frozen) v.hint = waitHint;
+        // The clock works even with the mode off or without a chart (it's just the song time).
+        if (!inSong || !game::GetSongTime(&v.songTime)) v.songTime = -1;
+        if (inSong && !game::GetSongLength(&v.songLength)) v.songLength = 0;
+        // The scrolling tab (works with the mode off too).
+        if (inSong && chartOk && st.showTab && v.songTime >= 0) {
+            if (now >= nextTabRefresh) RefreshTab(v.songTime, now);
+            v.tab = tabNotes;
+            v.tabBeats = tabBeats;
+        } else {
+            tabNotes.clear();
+            tabBeats.clear();
+            nextTabRefresh = 0;
+        }
+        v.chartOk = chartOk;
+        if (chartOk) v.chartInfo = "Song notes read from the game (" + chart.arrangement + ", " + std::to_string(chart.Levels()) + " levels)";
+        else if (inSong) v.chartInfo = "Couldn't read this song's notes yet: it plays normally";
+        else v.chartInfo = "Start a song to use Note-by-Note";
+        overlay::SetView(v);
+    }
 
-        // ---- 1. guitar -> note events
+    // The tab's notes: the ones the highway shows from 1 s ago to the end of the tab (+1 s margin, the
+    // list is only refreshed every 50 ms).
+    void RefreshTab(double songTime, DWORD now) {
+        nextTabRefresh = now + 50;
+        if (!game::GetPhraseLevels(&tabLevels)) tabLevels.clear();
+        // The past part: a page (tab pages mode) can show up to ~90 % of a page behind the cursor.
+        const double back = st.tabPage ? st.tabSeconds * 1.3 + 1.0 : 1.0;
+        // The future part: several rows also show the next pages (each ~1.1 tabs long, a little more
+        // with a big recap).
+        const int rows = st.tabPage ? std::max(1, std::min(4, st.tabRows)) : 1;
+        const double ahead = (rows > 1 ? st.tabSeconds * 1.2 * rows + st.tabSeconds * rows * st.tabRecap / 100.0
+                                       : st.tabSeconds) + 1.0;
+        chart.TargetsBetween(songTime - back, songTime + ahead, tabLevels, &tabTargets);
+        chart.BeatsBetween(songTime - back, songTime + ahead, &tabBeatsRaw);
+        tabBeats.clear();  // always sent: the rhythm needs them even with the lines off
+        for (const Beat& b : tabBeatsRaw) tabBeats.push_back({b.time, b.measure, b.downbeat});
+        tabNotes.clear();
+        for (const Target* t : tabTargets) {
+            overlay::TabNote tn;
+            tn.time = t->time;
+            tn.chord = t->chord;
+            tn.ignore = t->ignore;
+            if (t->chord) std::copy(std::begin(t->frets), std::end(t->frets), tn.frets);
+            else if (t->string >= 0 && t->string < 6) tn.frets[t->string] = t->fret;
+            tn.name = t->chordName;
+            tn.sustain = t->sustain;
+            tabNotes.push_back(tn);
+        }
+    }
+
+    // ---- 1. guitar -> note events (and chord results)
+    void ReadGuitar(DWORD now) {
         if (!tap.IsOpen() && now - lastTapTry > 1000) {
             lastTapTry = now;
             if (tap.Open()) Log("guitar input connected (GuitarTap, %u Hz)", tap.SampleRate());
@@ -588,8 +611,10 @@ DWORD WINAPI MainThread(LPVOID) {
             if (chordDet.Process(&pending[used], expectChord, &cr)) chordResults.push_back(cr);
         }
         pending.erase(pending.begin(), pending.begin() + used);
+    }
 
-        // ---- 2. keys and the menu
+    // ---- 2. keys and the menu. Returns true when the player asked to skip the note (key or menu).
+    bool ReadKeys() {
         if (menuKey.Pressed(cfg.menuKey)) {
             overlay::ToggleMenu();
             game::PostUiEvent(cfg.menuSound.c_str());
@@ -599,37 +624,41 @@ DWORD WINAPI MainThread(LPVOID) {
         // TakeSkipRequest() clears the menu's request, so neither may be skipped.
         const bool keySkip = skipKey.Pressed(cfg.skipKey);
         const bool menuSkip = overlay::TakeSkipRequest();
-        const bool skip = keySkip || menuSkip;
+        return keySkip || menuSkip;
+    }
 
+    // Settings changed in the menu: act on the ones that matter right now, and save them.
+    void ApplySettings() {
         const overlay::Settings newSt = overlay::GetSettings();
-        if (!(newSt == st)) {
-            if (newSt.enabled != st.enabled) {
-                Log("Note-by-Note %s", newSt.enabled ? "ON" : "OFF");
-                overlay::Toast(newSt.enabled ? "Note-by-Note ON" : "Note-by-Note OFF");
-                if (!newSt.enabled && frozen) {
-                    debugAudio.Save(debugDir, waitFor.time, waitAudioStart, 48000);
-                    releaseWait();
-                }
-                if (newSt.enabled) lastT = -1;  // re-sync to the current position
+        if (newSt == st) return;
+        if (newSt.enabled != st.enabled) {
+            Log("Note-by-Note %s", newSt.enabled ? "ON" : "OFF");
+            overlay::Toast(newSt.enabled ? "Note-by-Note ON" : "Note-by-Note OFF");
+            if (!newSt.enabled && frozen) {
+                SaveWaitAudio();
+                ReleaseWait();
             }
-            if (!newSt.waitChords && frozen && waitFor.chord) {  // chord waits switched off while waiting at one
-                cursor = waitFor.time;
-                releaseWait();
-            }
-            st = newSt;
-            SaveSettings(st);
-            Log("settings: enabled=%d lead=%dms early=%dms octaves=%d banner=%d chords=%d (saved)", st.enabled, st.leadMs,
-                st.earlyMs, st.acceptOctaves, st.showBanner, st.waitChords);
+            if (newSt.enabled) lastT = -1;  // re-sync to the current position
         }
-        const double leadS = st.leadMs / 1000.0, earlyS = st.earlyMs / 1000.0;
-
-        // ---- dev: unload when the file NoteByNote.unload appears next to the DLL
-        if (now - lastUnloadCheck > 500) {
-            lastUnloadCheck = now;
-            if (DeleteFileW((DllDir() + L"NoteByNote.unload").c_str())) break;
+        if (!newSt.waitChords && frozen && waitFor.chord) {  // chord waits switched off while waiting at one
+            cursor = waitFor.time;
+            ReleaseWait();
         }
+        st = newSt;
+        SaveSettings(st);
+        Log("settings: enabled=%d lead=%dms early=%dms octaves=%d banner=%d chords=%d (saved)", st.enabled, st.leadMs,
+            st.earlyMs, st.acceptOctaves, st.showBanner, st.waitChords);
+    }
 
-        // ---- 3. game state
+    // ---- dev: unload when the file NoteByNote.unload appears next to the DLL
+    bool UnloadRequested(DWORD now) {
+        if (now - lastUnloadCheck <= 500) return false;
+        lastUnloadCheck = now;
+        return DeleteFileW((DllDir() + L"NoteByNote.unload").c_str()) != FALSE;
+    }
+
+    // ---- 3. game state. Returns true while a song is on screen.
+    bool UpdateScreen(DWORD now) {
         // Before the first dialog the menu pointer isn't valid and every read of it fails with an
         // exception (caught); don't do that every millisecond while the game is loading.
         if (menuOk || now >= nextMenuTry) {
@@ -643,18 +672,9 @@ DWORD WINAPI MainThread(LPVOID) {
             }
         }
         fastintro::Tick(menuOk || lastPreMenu == "TitleScreen");
-        if (now - lastHeartbeat > 5000) {  // what the mod sees, every 5 s (diagnostics)
-            lastHeartbeat = now;
-            crashfix::Tick();
-            double ht = -1;
-            const bool tOk = game::GetSongTime(&ht);
-            game::GetPhraseLevels(&levels);
-            Log("status: menu=%s key=%s chart=%s enabled=%d t=%s%.3f cursor=%.3f frozen=%d hold=%d tap=%d samples=%lld levels=[%s]",
-                menuOk ? menu.c_str() : "?", lastKey.c_str(), chartOk ? chart.arrangement.c_str() : "-", st.enabled,
-                tOk ? "" : "(n/a)", ht, cursor, frozen, menuHold, tap.IsOpen(), totalSamples, Join(levels).c_str());
-        }
+        if (now - lastHeartbeat > 5000) Heartbeat(now);
         startup::Tick(st.skipPopups, menuOk, menu, overlay::GameWindow(), now);  // Ubisoft popups at game start
-        if (!menuOk) continue;
+        if (!menuOk) return false;
         if (menu != lastMenu) {
             Log("screen: %s", menu.c_str());
             report::Limited(("screen " + menu).c_str(), 1, "  Screen: %s", menu.c_str());
@@ -667,27 +687,45 @@ DWORD WINAPI MainThread(LPVOID) {
             if (key != lastKey) report::Limited("songkey", 3, "  Song highlighted in the list: %s", key.c_str());
             lastKey = key;
         }
-
         if (!inSong) {
-            // Pause menu, song end, other screens: the game is in charge. If we were holding the song,
-            // just forget it (the game's own pause stops/restarts the music and resets its clock flag).
-            if (frozen || menuHold) {
-                Log("left the song screen while holding the song; releasing");
-                if (frozen) debugAudio.Save(debugDir, waitFor.time, waitAudioStart, 48000);
-                frozen = menuHold = false;
-            }
-            game::ResetSongCache();
-            lastT = -1;
-            announced = false;
-            clockTick = 0;
-            upcomingChord.clear();
-            songScreenTick = 0;
-            continue;
+            LeftSong();
+            return false;
         }
         if (!songScreenTick) songScreenTick = now;
+        return true;
+    }
 
-        // ---- 4. the chart of the arrangement being played, read from game memory (again whenever the
-        //         game loads another song/arrangement; retried while the song is still loading)
+    // What the mod sees, every 5 s (diagnostics).
+    void Heartbeat(DWORD now) {
+        lastHeartbeat = now;
+        crashfix::Tick();
+        double ht = -1;
+        const bool tOk = game::GetSongTime(&ht);
+        game::GetPhraseLevels(&levels);
+        Log("status: menu=%s key=%s chart=%s enabled=%d t=%s%.3f cursor=%.3f frozen=%d hold=%d tap=%d samples=%lld levels=[%s]",
+            menuOk ? menu.c_str() : "?", lastKey.c_str(), chartOk ? chart.arrangement.c_str() : "-", st.enabled,
+            tOk ? "" : "(n/a)", ht, cursor, frozen, menuHold, tap.IsOpen(), totalSamples, Join(levels).c_str());
+    }
+
+    // Pause menu, song end, other screens: the game is in charge. If we were holding the song, just
+    // forget it (the game's own pause stops/restarts the music and resets its clock flag).
+    void LeftSong() {
+        if (frozen || menuHold) {
+            Log("left the song screen while holding the song; releasing");
+            if (frozen) SaveWaitAudio();
+            frozen = menuHold = false;
+        }
+        game::ResetSongCache();
+        lastT = -1;
+        announced = false;
+        clockTick = 0;
+        upcomingChord.clear();
+        songScreenTick = 0;
+    }
+
+    // ---- 4. the chart of the arrangement being played, read from game memory (again whenever the
+    //         game loads another song/arrangement; retried while the song is still loading)
+    void ReadChart(DWORD now) {
         const uintptr_t data = game::SongDataAddress();
         if (data != chartData) chartOk = false;
         if (!chartOk && data && now >= nextChartTry) {
@@ -716,29 +754,32 @@ DWORD WINAPI MainThread(LPVOID) {
                 overlay::Toast("Note-by-Note ON  -  F8 menu", 3500);
             }
         }
+    }
 
-        // Report: the song clock must run with the music (1 s with the song not held).
-        if (chartOk && !clockChecked) {
-            double ct;
-            if (frozen || menuHold || !game::GetSongTime(&ct)) {
-                clockTick = 0;
-            } else if (!clockTick) {
-                clockTick = now;
-                clockT = ct;
-            } else if (now - clockTick >= 1000) {
-                const double moved = ct - clockT;
-                if (moved == 0 && ++clockStill < 20) {
-                    clockTick = 0;  // not started yet (the song's intro): measure again
-                } else {
-                    report::Limited("clock", 3, "  Song clock: moved %.2f s in 1 s: %s", moved,
-                                    (moved > 0.5 && moved < 1.6) ? "OK"
-                                    : moved == 0 ? "FAILED (it never moved in 20 s)" : "FAILED (or the game was paused)");
-                    clockChecked = true;
-                }
+    // Report: the song clock must run with the music (1 s with the song not held).
+    void CheckClock(DWORD now) {
+        if (!chartOk || clockChecked) return;
+        double ct;
+        if (frozen || menuHold || !game::GetSongTime(&ct)) {
+            clockTick = 0;
+        } else if (!clockTick) {
+            clockTick = now;
+            clockT = ct;
+        } else if (now - clockTick >= 1000) {
+            const double moved = ct - clockT;
+            if (moved == 0 && ++clockStill < 20) {
+                clockTick = 0;  // not started yet (the song's intro): measure again
+            } else {
+                report::Limited("clock", 3, "  Song clock: moved %.2f s in 1 s: %s", moved,
+                                (moved > 0.5 && moved < 1.6) ? "OK"
+                                : moved == 0 ? "FAILED (it never moved in 20 s)" : "FAILED (or the game was paused)");
+                clockChecked = true;
             }
         }
+    }
 
-        // ---- 5. our menu holds the song while it is open (so settings can be changed calmly)
+    // ---- 5. our menu holds the song while it is open (so settings can be changed calmly)
+    void HoldForMenu(DWORD now) {
         if (overlay::MenuOpen()) {
             if (!frozen && !menuHold && now >= nextFreezeTry) {
                 if (game::Freeze()) { menuHold = true; Log("menu: song held"); }
@@ -749,20 +790,21 @@ DWORD WINAPI MainThread(LPVOID) {
             menuHold = false;
             Log("menu: song resumed");
         }
+    }
 
-        // Right after the song screen opens (song start, Riff Repeater, unpausing) the clock still
-        // reports the old time for a moment: acting on it froze the song too early. Let it settle.
-        if (now - songScreenTick < 400) continue;
+    // A note the mode waits for: not ignored, chords only if chord waits are on, and not greyed out.
+    bool CanWait(const Target& x) const { return Waitable(st, x) && !(greyT > 0 && x.time < greyT - 0.001); }
 
+    // ---- 6.-8. follow the song: keep the cursor in sync, wait at the next note, or pass it
+    void Follow(DWORD now, bool skip) {
         double t;
-        if (!chartOk || !st.enabled || !game::GetSongTime(&t)) { upcomingChord.clear(); continue; }
+        if (!chartOk || !st.enabled || !game::GetSongTime(&t)) { upcomingChord.clear(); return; }
         // Greyed-out notes (setting SkipGreyedNotes): after resuming from the game's pause screen the
         // song replays a few seconds with the notes already passed greyed out; those aren't waited for
         // again. Only a grey time a little ahead of the song counts (a resume goes back ~3 s), so a
         // stale value can never switch off the waits for a whole song.
-        double greyT = -1;
+        greyT = -1;
         if (st.skipGreyed && game::GetGreyTime(&greyT) && !(greyT > t && greyT < t + 20)) greyT = -1;
-        auto canWait = [&](const Target& x) { return Waitable(st, x) && !(greyT > 0 && x.time < greyT - 0.001); };
         if (!game::GetPhraseLevels(&levels)) levels.clear();
 
         // ---- 6. keep the cursor in sync with the song position
@@ -776,114 +818,157 @@ DWORD WINAPI MainThread(LPVOID) {
 
         // ---- 7. waiting: the player's notes, or a skip
         if (frozen) {
-            // Testing without a guitar: after TestAutoPassMs the wait passes as if the note was played.
-            const bool autoPass = !skip && cfg.testAutoPassMs > 0 && now - frozenTick >= (DWORD)cfg.testAutoPassMs;
-            if (skip || autoPass) {
-                Log("%s %.3f %s after waiting %.2f s", skip ? "SKIP" : "AUTO-PASS (test)", waitFor.time,
-                    Describe(chart, waitFor).c_str(), (now - frozenTick) / 1000.0);
-                if (skip) debugAudio.Save(debugDir, waitFor.time, waitAudioStart, 48000);  // skipped = maybe not detected
-                overlay::Toast(skip ? "Skipped" : "Test: passed by itself", 1200);
-                cursor = waitFor.time;
-                releaseWait();
-                continue;
-            }
-            bool hit = false;
-            hint::Neck neck;  // for the "how to fix it" advice
-            neck.strings = chart.bass ? 4 : 6;
-            std::copy(std::begin(chart.open), std::end(chart.open), neck.open);
-            neck.capo = chart.capo;
-            neck.bassUnsure = chart.bassUnsure;
-            // A wrong note gets advice only when it was picked (an attack), and not in the first
-            // moment of the wait (that is still the previous note ringing).
-            const bool adviseNow = now - frozenTick > 150;
-            for (const auto& ev : events) {
-                if (Matches(st, chart, waitFor, ev.midi)) { hit = true; break; }
-                Log("  heard %s (%+.0f cents, %.1f dB, aper %.2f%s), waiting for %s", MidiName(ev.midi).c_str(), ev.cents, ev.levelDb,
-                    ev.aperiodicity, ev.attack ? ", attack" : "", Describe(chart, waitFor).c_str());
-                if (ev.attack && adviseNow && !waitFor.chord && !waitFor.midi.empty()) {
-                    waitHint = hint::ForNote(neck, waitFor.string, waitFor.fret, waitFor.midi[0], ev.midi);
-                    if (!waitHint.empty()) Log("  advice: %s", hint::Text(waitHint).c_str());
-                }
-            }
-            for (const auto& cr : chordResults) {  // only produced while waiting for a chord
-                Log("  %s", cr.Describe().c_str());
-                hit = hit || cr.match;
-                if (!cr.match && !cr.quiet && !cr.heard.empty() && adviseNow) {
-                    std::vector<int> heardMidi;
-                    for (const auto& h : cr.heard) heardMidi.push_back(h.first);
-                    hint::Line l = hint::ForChord(neck, waitFor.frets, waitFor.notes, heardMidi, cr.extra, cr.hits, cr.needed);
-                    if (!l.empty()) {
-                        waitHint = l;
-                        Log("  advice: %s", hint::Text(waitHint).c_str());
-                    }
-                }
-            }
-            if (hit) {
-                Log("HIT  %.3f %s after waiting %.2f s", waitFor.time, Describe(chart, waitFor).c_str(), (now - frozenTick) / 1000.0);
-                // Keep the audio of long waits, and of every chord for now (to tune chord detection offline).
-                if (waitFor.chord || now - frozenTick > 3000) debugAudio.Save(debugDir, waitFor.time, waitAudioStart, 48000);
-                cursor = waitFor.time;
-                releaseWait();
-            }
-            continue;
+            Waiting(now, skip);
+            return;
         }
-        if (menuHold) continue;
+        if (menuHold) return;
 
-        // Next note on the highway (using the current level of each phrase), skipping ignored notes
-        // (and chords if the player turned chord waits off).
+        const double leadS = st.leadMs / 1000.0, earlyS = st.earlyMs / 1000.0;
+        const Target* next = PassNotes(t, earlyS);
+        if (!next) { upcomingChord.clear(); return; }  // end of the chart
+        next = CheckOnTime(next, t, earlyS);
+        upcomingChord = (next && next->chord && CanWait(*next)) ? next->midi : kNoChord;
+        if (!next || !CanWait(*next)) return;
+        nextWaitT = next->time;  // the song stops here unless it's played (the tab's cursor won't pass it)
+        // A strum is checked 90 and 180 ms after its attack: while one is being checked, give it a
+        // moment before stopping the song (so a chord played right on time doesn't stop it).
+        if (next->chord && chordDet.Pending() && t < next->time + 0.2) return;
+
+        // ---- 8. reached the next note without it being played -> wait for it
+        if (t >= next->time - leadS && now >= nextFreezeTry) FreezeAt(*next, t, now);
+    }
+
+    // Next note on the highway (using the current level of each phrase), passing the ones not waited
+    // for (ignored notes, chords if the player turned chord waits off, greyed-out notes) once the song
+    // reaches them. nullptr = the end of the chart.
+    const Target* PassNotes(double t, double earlyS) {
         const Target* next = chart.NextTarget(cursor, levels);
-        while (next && !canWait(*next) && next->time <= t + earlyS) {
+        while (next && !CanWait(*next) && next->time <= t + earlyS) {
             if (next->chord || (greyT > 0 && Waitable(st, *next)))
                 Log("pass %.3f %s (%s)", next->time, Describe(chart, *next).c_str(),
                     Waitable(st, *next) ? "greyed out after resuming" : next->ignore ? "ignored" : "chord waits off");
             cursor = next->time;
             next = chart.NextTarget(cursor, levels);
         }
-        if (!next) { upcomingChord.clear(); continue; }  // end of the chart
-
-        if (canWait(*next) && t >= next->time - earlyS) {
-            bool hit = false;
-            if (next->chord) {
-                for (const auto& cr : chordResults) hit = hit || cr.match;
-            } else {
-                for (const auto& ev : events) hit = hit || Matches(st, chart, *next, ev.midi);
-            }
-            if (hit) {  // played on time (or a little early): no need to stop
-                Log("hit  %.3f %s on time (%+.0f ms, level %d)", next->time, Describe(chart, *next).c_str(),
-                    (t - next->time) * 1000.0, next->level);
-                cursor = next->time;
-                next = chart.NextTarget(cursor, levels);
-            }
-        }
-        upcomingChord = (next && next->chord && canWait(*next)) ? next->midi : kNoChord;
-        if (!next || !canWait(*next)) continue;
-        nextWaitT = next->time;  // the song stops here unless it's played (the tab's cursor won't pass it)
-        // A strum is checked 90 and 180 ms after its attack: while one is being checked, give it a
-        // moment before stopping the song (so a chord played right on time doesn't stop it).
-        if (next->chord && chordDet.Pending() && t < next->time + 0.2) continue;
-
-        // ---- 8. reached the next note without it being played -> wait for it
-        if (t >= next->time - leadS && now >= nextFreezeTry) {
-            // Only a FAILED freeze waits 0.5 s before the next try (e.g. the song is still loading).
-            // (It used to wait after every freeze: with fast notes, or right after F9, the next stop
-            // then came up to ~0.35 s late and the song ran past the note.)
-            if (!game::Freeze()) {
-                nextFreezeTry = now + 500;
-            } else {
-                frozen = true;
-                waitFor = *next;
-                waitHint.clear();
-                frozenTick = now;
-                waitAudioStart = debugAudio.Pos() - 2LL * 48000;
-                // "+N ms": how far past the note the song stopped (chords: up to 200 ms, see above).
-                Log("WAIT %.3f (phrase iteration %d, level %d, stopped at %+d ms): play %s", next->time, next->pi, next->level,
-                    (int)std::lround((t - next->time) * 1000), Describe(chart, *next).c_str());
-            }
-        }
+        return next;
     }
 
-    // Unload (dev): release the song if we're holding it, remove the overlay, then free the DLL.
-    if (frozen || menuHold) game::Unfreeze();
+    // Played on time (or a little early): no need to stop there. Returns the note after it, or `next`.
+    const Target* CheckOnTime(const Target* next, double t, double earlyS) {
+        if (!CanWait(*next) || t < next->time - earlyS) return next;
+        bool hit = false;
+        if (next->chord) {
+            for (const auto& cr : chordResults) hit = hit || cr.match;
+        } else {
+            for (const auto& ev : events) hit = hit || Matches(st, chart, *next, ev.midi);
+        }
+        if (!hit) return next;
+        Log("hit  %.3f %s on time (%+.0f ms, level %d)", next->time, Describe(chart, *next).c_str(),
+            (t - next->time) * 1000.0, next->level);
+        cursor = next->time;
+        return chart.NextTarget(cursor, levels);
+    }
+
+    // Stops the song at `next` (t = the song time now).
+    void FreezeAt(const Target& next, double t, DWORD now) {
+        // Only a FAILED freeze waits 0.5 s before the next try (e.g. the song is still loading).
+        // (It used to wait after every freeze: with fast notes, or right after F9, the next stop
+        // then came up to ~0.35 s late and the song ran past the note.)
+        if (!game::Freeze()) {
+            nextFreezeTry = now + 500;
+            return;
+        }
+        frozen = true;
+        waitFor = next;
+        waitHint.clear();
+        frozenTick = now;
+        waitAudioStart = debugAudio.Pos() - 2LL * 48000;
+        // "+N ms": how far past the note the song stopped (chords: up to 200 ms, see Follow()).
+        Log("WAIT %.3f (phrase iteration %d, level %d, stopped at %+d ms): play %s", next.time, next.pi, next.level,
+            (int)std::lround((t - next.time) * 1000), Describe(chart, next).c_str());
+    }
+
+    // ---- 7. while the song waits: a skip, or the note played (then the song goes on)
+    void Waiting(DWORD now, bool skip) {
+        // Testing without a guitar: after TestAutoPassMs the wait passes as if the note was played.
+        const bool autoPass = !skip && cfg.testAutoPassMs > 0 && now - frozenTick >= (DWORD)cfg.testAutoPassMs;
+        if (skip || autoPass) {
+            Log("%s %.3f %s after waiting %.2f s", skip ? "SKIP" : "AUTO-PASS (test)", waitFor.time,
+                Describe(chart, waitFor).c_str(), (now - frozenTick) / 1000.0);
+            if (skip) SaveWaitAudio();  // skipped = maybe not detected
+            overlay::Toast(skip ? "Skipped" : "Test: passed by itself", 1200);
+            cursor = waitFor.time;
+            ReleaseWait();
+            return;
+        }
+        if (!HeardWaitedNote(now)) return;
+        Log("HIT  %.3f %s after waiting %.2f s", waitFor.time, Describe(chart, waitFor).c_str(), (now - frozenTick) / 1000.0);
+        // Keep the audio of long waits, and of every chord for now (to tune chord detection offline).
+        if (waitFor.chord || now - frozenTick > 3000) SaveWaitAudio();
+        cursor = waitFor.time;
+        ReleaseWait();
+    }
+
+    // True if what was just played is the note/chord being waited for. Logs what was heard, and after a
+    // wrong note or chord sets the "how to fix it" advice (waitHint) the banner shows.
+    bool HeardWaitedNote(DWORD now) {
+        bool hit = false;
+        hint::Neck neck;  // for the "how to fix it" advice
+        neck.strings = chart.bass ? 4 : 6;
+        std::copy(std::begin(chart.open), std::end(chart.open), neck.open);
+        neck.capo = chart.capo;
+        neck.bassUnsure = chart.bassUnsure;
+        // A wrong note gets advice only when it was picked (an attack), and not in the first moment of
+        // the wait (that is still the previous note ringing).
+        const bool adviseNow = now - frozenTick > 150;
+        for (const auto& ev : events) {
+            if (Matches(st, chart, waitFor, ev.midi)) { hit = true; break; }
+            Log("  heard %s (%+.0f cents, %.1f dB, aper %.2f%s), waiting for %s", MidiName(ev.midi).c_str(), ev.cents, ev.levelDb,
+                ev.aperiodicity, ev.attack ? ", attack" : "", Describe(chart, waitFor).c_str());
+            if (ev.attack && adviseNow && !waitFor.chord && !waitFor.midi.empty()) {
+                waitHint = hint::ForNote(neck, waitFor.string, waitFor.fret, waitFor.midi[0], ev.midi);
+                if (!waitHint.empty()) Log("  advice: %s", hint::Text(waitHint).c_str());
+            }
+        }
+        for (const auto& cr : chordResults) {  // only produced while waiting for a chord
+            Log("  %s", cr.Describe().c_str());
+            hit = hit || cr.match;
+            if (!cr.match && !cr.quiet && !cr.heard.empty() && adviseNow) {
+                std::vector<int> heardMidi;
+                for (const auto& h : cr.heard) heardMidi.push_back(h.first);
+                hint::Line l = hint::ForChord(neck, waitFor.frets, waitFor.notes, heardMidi, cr.extra, cr.hits, cr.needed);
+                if (!l.empty()) {
+                    waitHint = l;
+                    Log("  advice: %s", hint::Text(waitHint).c_str());
+                }
+            }
+        }
+        return hit;
+    }
+};
+
+DWORD WINAPI MainThread(LPVOID) {
+    LogOpen(DllDir() + L"NoteByNote.log");
+    Log("Note-by-Note starting");
+    report::Open(DllDir() + L"NoteByNote_report.txt");
+    const Config cfg = LoadConfig();
+    const overlay::Settings& st = cfg.initial;
+    Log("config: enabled=%d menuKey=0x%X skipKey=0x%X lead=%dms early=%dms octaves=%d banner=%d chords=%d", st.enabled,
+        cfg.menuKey, cfg.skipKey, st.leadMs, st.earlyMs, st.acceptOctaves, st.showBanner, st.waitChords);
+    crashfix::Start(st.fixCrash);    // first of all: the game can crash any moment until then
+    fastintro::Start(st.fastIntro);  // then: the logos are already playing
+    if (cfg.testUnverifiedGame || cfg.testAutoPassMs)
+        report::Line("Test settings: TestUnverifiedGame=%d, TestAutoPassMs=%d", cfg.testUnverifiedGame, cfg.testAutoPassMs);
+    if (!game::Init(cfg.testUnverifiedGame, cfg.testPatternsOnly)) { fastintro::Tick(true); return 0; }
+    overlay::Start(st);
+
+    timeBeginPeriod(1);
+    {
+        MainLoop loop(cfg);
+        loop.Run();  // until the dev unload
+    }
+
+    // Unload (dev): the loop released the song; remove the overlay, then free the DLL.
     fastintro::Stop();  // before the overlay: it uninitializes MinHook
     overlay::Stop();
     timeEndPeriod(1);
