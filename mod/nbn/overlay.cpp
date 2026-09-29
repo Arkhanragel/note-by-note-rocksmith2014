@@ -43,8 +43,18 @@ struct Shared {
     std::string toast;
     DWORD toastUntil = 0;
     bool skipRequest = false;
+    std::vector<Range> ranges;  // the practice parts (song seconds), sorted; empty = the whole song
 } g;
 std::atomic<bool> g_menuOpen{false};
+
+// The mouse, for the practice bar (it works without the menu). The window hook records what it sees;
+// the render thread does the dragging. The bar's box (client pixels) says which clicks are ours.
+std::atomic<int> g_mouseX{-10000}, g_mouseY{-10000};
+std::atomic<bool> g_mouseLeft{false};    // left button held after a press on the bar
+std::atomic<DWORD> g_mouseMoved{0};      // when the mouse last moved (the pointer shows for a moment)
+std::atomic<int> g_barL{0}, g_barT{0}, g_barR{0}, g_barB{0};  // 0 x 0 = no bar
+std::atomic<bool> g_clearDrawRanges{false};  // a new song: the render thread forgets its parts
+bool OverBar(int x, int y) { return g_barR > g_barL && x >= g_barL && x <= g_barR && y >= g_barT && y <= g_barB; }
 
 // Copies the layout fields (positions and sizes) only, so a drag never undoes a menu change.
 void CopyLayout(const Settings& from, Settings* to) {
@@ -274,6 +284,9 @@ struct NeckPic {
     bool hand = false;         // show fingers and the hand's zone (setting bannerHand)
     int anchor = 0, anchorW = 0;  // the hand's zone: frets anchor .. anchor + anchorW - 1
     int fingers[6] = {-1, -1, -1, -1, -1, -1};
+    uint32_t dotTech[6] = {};  // each dot's technique bits (a chord's own palm mute / mute / accent included)
+    int strSlide[6] = {-1, -1, -1, -1, -1, -1};  // chords: where each string's slide ends (-1 = none)
+    bool strPitched[6] = {true, true, true, true, true, true};
     float s = 1, gap = 0, cell = 0, rad = 0, nameW = 0, openW = 0, tailW = 0, top = 0, w = 0, h = 0;
 
     NeckPic(const View& v, const Settings& st, float scale) : s(scale) {
@@ -311,6 +324,19 @@ struct NeckPic {
             }
             for (const auto& l : chain) vibrato = vibrato || (l.tech.mask & technique::kVibrato);
             if (slideEnd > 0) { mn = std::min(mn, slideEnd); mx = std::max(mx, slideEnd); }
+            if (!dots.empty()) dotTech[dots[0].string] = v.tech.mask;
+        } else {  // a chord: each string that slides (a double stop sliding down together)
+            const uint32_t whole = (v.tech.mask & (technique::kPalmMute | technique::kAccent)) |
+                                   ((v.tech.mask & technique::kChordMute) ? technique::kMute : 0);
+            for (const auto& d : dots) dotTech[d.string] = v.strings[d.string].mask | whole;
+            for (const auto& d : dots) {
+                const technique::Technique& t = v.strings[d.string];
+                const int end = (t.mask & technique::kSlide) ? t.slideTo : (t.mask & technique::kUnpitchedSlide) ? t.slideUnpitchTo : -1;
+                if (end < 0 || end == d.fret) continue;
+                strSlide[d.string] = end;
+                strPitched[d.string] = (t.mask & technique::kSlide) != 0;
+                if (end > 0) { mn = std::min(mn, end); mx = std::max(mx, end); }
+            }
         }
         if (anchor > 0 && mx >= 0) {  // the hand's zone is part of the picture (when it's near the notes)
             const int a = std::min(mn, anchor), b = std::max(mx, anchor + anchorW - 1);
@@ -470,12 +496,7 @@ struct NeckPic {
         // Techniques of a single note. A slide: a dashed line along the string to a ring at the fret
         // where it ends (solid ring = a slide to that note; faint = an unpitched slide that just fades).
         // A bend: an arrow above the dot with how many steps ("1/2", "1").
-        if (!chord && !dots.empty()) {
-            const Dot& d = dots[0];
-            const ImVec2 c(X(FretX(p0.x, d.fret)), Y(d.string));
-            const ImU32 sc = kStringColor[d.string];
-            if (slideEnd >= 0 && slideEnd != d.fret) {
-                const bool pitched = slidePitched;
+        auto drawSlide = [&](ImVec2 c, int slideEnd, bool pitched, ImU32 sc) {
                 const ImVec2 e(X(FretX(p0.x, slideEnd)), c.y);
                 const float dir = e.x > c.x ? 1.0f : -1.0f;
                 // Light dashes with a dark outline, so the arrow stands out on any string colour (a light
@@ -499,7 +520,14 @@ struct NeckPic {
                 const float efs = 18 * s;
                 const ImVec2 ts = g_fontBold->CalcTextSizeA(efs, FLT_MAX, 0, t.c_str());
                 dl->AddText(g_fontBold, efs, ImVec2(e.x - ts.x * 0.5f, e.y - ts.y * 0.5f), pitched ? Col(theme::kText) : Col(theme::kTextDim), t.c_str());
-            }
+        };
+        if (chord)
+            for (const auto& d : dots)
+                if (strSlide[d.string] >= 0) drawSlide(ImVec2(X(FretX(p0.x, d.fret)), Y(d.string)), strSlide[d.string], strPitched[d.string], kStringColor[d.string]);
+        if (!chord && !dots.empty()) {
+            const Dot& d = dots[0];
+            const ImVec2 c(X(FretX(p0.x, d.fret)), Y(d.string));
+            if (slideEnd >= 0 && slideEnd != d.fret) drawSlide(c, slideEnd, slidePitched, kStringColor[d.string]);
             if (vibrato) {  // "~~" above the dot, like tab (left of a bend's arrow)
                 const float wy = c.y - rad - 9 * s, w0 = c.x - 13 * s, amp = 3 * s;
                 ImVec2 pts[13];
@@ -526,8 +554,39 @@ struct NeckPic {
         for (const auto& d : dots) {
             const ImVec2 c(X(FretX(p0.x, d.fret)), Y(d.string));
             const ImU32 sc = kStringColor[d.string];
-            dl->AddCircleFilled(c, rad + 3 * s, (sc & 0x00FFFFFF) | (70u << 24));  // soft glow (steady)
-            dl->AddCircleFilled(c, rad, sc);
+            // The dot: a circle, or a diamond for a harmonic (the highway draws harmonics as diamonds);
+            // an accent gets a bright ring.
+            const uint32_t tq = dotTech[d.string];
+            if (tq & (technique::kHarmonic | technique::kPinchHarmonic)) {
+                const float dr = rad * 1.25f;
+                dl->AddQuadFilled(ImVec2(c.x, c.y - dr - 3 * s), ImVec2(c.x + dr + 3 * s, c.y), ImVec2(c.x, c.y + dr + 3 * s),
+                                  ImVec2(c.x - dr - 3 * s, c.y), (sc & 0x00FFFFFF) | (70u << 24));
+                dl->AddQuadFilled(ImVec2(c.x, c.y - dr), ImVec2(c.x + dr, c.y), ImVec2(c.x, c.y + dr), ImVec2(c.x - dr, c.y), sc);
+            } else {
+                dl->AddCircleFilled(c, rad + 3 * s, (sc & 0x00FFFFFF) | (70u << 24));  // soft glow (steady)
+                dl->AddCircleFilled(c, rad, sc);
+            }
+            if (tq & technique::kAccent) dl->AddCircle(c, rad + 5 * s, Col(theme::kText, 230), 0, 2.2f * s);
+            // Other techniques: a small tag at the top-right, in tab words.
+            std::string techTag;
+            auto add = [&](const char* t) { techTag += (techTag.empty() ? "" : " ") + std::string(t); };
+            if (tq & technique::kMute) add("X");
+            if (tq & technique::kPalmMute) add("PM");
+            if (tq & technique::kHammerOn) add("H");
+            if (tq & technique::kPullOff) add("P");
+            if (tq & technique::kTap) add("T");
+            if (tq & technique::kSlap) add("S");
+            if (tq & technique::kPluck) add("Pop");
+            if (tq & technique::kTremolo) add("tr");
+            if (tq & technique::kPinchHarmonic) add("PH");
+            if (!techTag.empty()) {
+                const float tfs = (chord ? 13 : 15) * s;
+                const ImVec2 tsz = g_fontBold->CalcTextSizeA(tfs, FLT_MAX, 0, techTag.c_str());
+                const ImVec2 a(c.x + rad * 0.45f, c.y - rad - tsz.y * 0.55f), b(a.x + tsz.x + 6 * s, a.y + tsz.y);
+                dl->AddRectFilled(a, b, IM_COL32(245, 245, 245, 255), 4 * s);
+                dl->AddRect(a, b, IM_COL32(20, 20, 24, 255), 4 * s, 0, 1.2f * s);
+                dl->AddText(g_fontBold, tfs, ImVec2(a.x + 3 * s, a.y), IM_COL32(20, 20, 24, 255), techTag.c_str());
+            }
             const std::string t = std::to_string(d.fret);
             const ImVec2 ts = g_fontBold->CalcTextSizeA(fs, FLT_MAX, 0, t.c_str());
             // Dark digits on the light string colours (yellow, green, orange), white on the others.
@@ -807,6 +866,7 @@ bool DrawCalmBanner(ImDrawList* dl, const View& v, const Settings& st, bool on, 
         s_note.midi = v.midi;
         s_note.tech = v.tech;
         s_note.techFret = v.techFret;
+        std::copy(std::begin(v.strings), std::end(v.strings), s_note.strings);
         s_note.anchorFret = v.anchorFret;
         s_note.anchorWidth = v.anchorWidth;
         s_note.handFrom = v.handFrom;
@@ -829,6 +889,191 @@ bool DrawCalmBanner(ImDrawList* dl, const View& v, const Settings& st, bool on, 
     else DrawBanner(dl, s_note, st, S, ds);
     FadeFrom(dl, vtx0, s_fade.alpha);
     return true;
+}
+
+// ------------------------------------------------------------------ the practice bar
+// Like a video editor's timeline, on the game's own progress bar (the same length and place): drag on
+// it with the mouse (no menu needed) to mark parts of the song. The mod waits only inside them, and
+// the tab shades them. Drag on an empty stretch = a new part; drag a part's end = move it; click a
+// part (without dragging) = remove it. Ends snap to phrase starts nearby; overlapping parts merge.
+// (Not the right button: the game opens its pause screen with it, whatever the window hook does.)
+// The game hides the mouse pointer in a song, so the bar draws one for a moment after it moves.
+std::vector<Range> g_drawRanges;  // the parts, for drawing (render thread)
+
+// The game's progress bar, measured on a 3440x1440 screen (2026-09-29): its picture is 16:9, centred
+// and scaled by height; the bar runs from 15.9% to 89.7% of its width, 4.8% to 11.7% of its height,
+// from the first phrase to the end of the song.
+struct GameBar {
+    float x0, x1, top, bottom;
+    explicit GameBar(ImVec2 ds) {
+        float gw = ds.y * 16.0f / 9.0f, gh = ds.y, gx = (ds.x - gw) * 0.5f, gy = 0;
+        if (gw > ds.x) { gw = ds.x; gh = ds.x * 9.0f / 16.0f; gx = 0; gy = (ds.y - gh) * 0.5f; }
+        x0 = gx + 0.159f * gw;
+        x1 = gx + 0.897f * gw;
+        top = gy + 0.048f * gh;
+        bottom = gy + 0.117f * gh;
+    }
+};
+
+// Sorted, overlapping parts merged.
+void Tidy(std::vector<Range>* r) {
+    std::sort(r->begin(), r->end());
+    std::vector<Range> out;
+    for (const auto& p : *r) {
+        if (p.second - p.first < 0.3) continue;
+        if (!out.empty() && p.first <= out.back().second) out.back().second = std::max(out.back().second, p.second);
+        else out.push_back(p);
+    }
+    *r = out;
+}
+
+void DrawPracticeBar(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 ds) {
+    if (!st.showPracticeBar || !v.inSong || v.songLength <= 1 || v.songTime < 0) {
+        g_barL = g_barT = g_barR = g_barB = 0;
+        return;
+    }
+    const GameBar gb(ds);
+    const double t0 = v.phraseStarts.empty() ? 0.0 : v.phraseStarts.front(), t1 = std::max(t0 + 1, v.songLength);
+    const float x0 = gb.x0, x1 = gb.x1, w = x1 - x0;
+    const float h = 10 * S, y1 = gb.bottom - 16 * S, y0 = y1 - h;  // our strip: low in the game's bar
+    auto X = [&](double t) { return x0 + (float)((std::max(t0, std::min(t1, t)) - t0) / (t1 - t0)) * w; };
+    auto T = [&](float x) { return std::max(t0, std::min(t1, t0 + (double)(x - x0) / w * (t1 - t0))); };
+
+    // The mouse in drawing coordinates (the window's client area may be scaled to the back buffer).
+    RECT rc{};
+    GetClientRect(g_hwnd, &rc);
+    const float sx = rc.right > 0 ? ds.x / rc.right : 1, sy = rc.bottom > 0 ? ds.y / rc.bottom : 1;
+    const ImVec2 mouse(g_mouseX * sx, g_mouseY * sy);
+    // The clickable box: the whole height of the game's bar, in client pixels for the window hook.
+    g_barL = (int)(x0 / sx) - 4;
+    g_barR = (int)(x1 / sx) + 4;
+    g_barT = (int)(gb.top / sy);
+    g_barB = (int)(gb.bottom / sy);
+    const bool hover = mouse.x >= x0 - 4 && mouse.x <= x1 + 4 && mouse.y >= gb.top && mouse.y <= gb.bottom;
+
+    auto snap = [&](double t) {  // to a phrase start within 10 px
+        double best = t;
+        float bestD = 10 * S;
+        for (double p : v.phraseStarts) {
+            const float d = std::abs(X(p) - X(t));
+            if (d < bestD) { bestD = d; best = p; }
+        }
+        return best;
+    };
+
+    // Dragging (render thread; the hook only reports the button).
+    static bool s_down = false, s_dragged = false;
+    static int s_part = -1;      // the part being changed or clicked (-1 = a new one)
+    static int s_end = 0;        // 0 = a new part / a click, 1 = moving its start, 2 = moving its end
+    static double s_anchor = 0;
+    static float s_pressX = 0;
+    std::vector<Range> parts = g_drawRanges;
+    const bool down = g_mouseLeft;
+    if (down && !s_down) {  // pressed: on an end, inside a part, or on an empty stretch
+        s_pressX = mouse.x;
+        s_dragged = false;
+        s_part = -1;
+        s_end = 0;
+        for (size_t i = 0; i < parts.size() && s_end == 0; ++i) {
+            if (std::abs(mouse.x - X(parts[i].first)) < 9 * S) { s_part = (int)i; s_end = 1; }
+            else if (std::abs(mouse.x - X(parts[i].second)) < 9 * S) { s_part = (int)i; s_end = 2; }
+            else if (mouse.x > X(parts[i].first) && mouse.x < X(parts[i].second)) s_part = (int)i;
+        }
+        s_anchor = snap(T(mouse.x));
+    }
+    if (down && std::abs(mouse.x - s_pressX) > 5 * S) s_dragged = true;
+    bool changed = false;
+    if (down && s_dragged) {
+        const double t = snap(T(mouse.x));
+        if (s_end == 1 && s_part >= 0) { parts[s_part].first = std::min(t, parts[s_part].second - 0.3); changed = true; }
+        else if (s_end == 2 && s_part >= 0) { parts[s_part].second = std::max(t, parts[s_part].first + 0.3); changed = true; }
+        else if (std::abs(t - s_anchor) >= 0.3) {
+            // A new part: the last one in the list while it's being dragged.
+            const Range r(std::min(t, s_anchor), std::max(t, s_anchor));
+            if (s_end != 3) { parts.push_back(r); s_end = 3; s_part = (int)parts.size() - 1; }
+            else parts[s_part] = r;
+            changed = true;
+        }
+    }
+    if (!down && s_down) {
+        if (!s_dragged && s_part >= 0 && s_end == 0) { parts.erase(parts.begin() + s_part); changed = true; }  // a click on a part
+        Tidy(&parts);
+        changed = true;
+        s_end = 0;
+        s_part = -1;
+    }
+    s_down = down;
+    if (changed && parts != g_drawRanges) {
+        g_drawRanges = parts;
+        std::vector<Range> tidy = parts;
+        Tidy(&tidy);
+        std::lock_guard<std::mutex> lk(g.m);
+        g.ranges = tidy;
+    }
+
+    // Drawing. The parts: shaded over the game's bar (its whole height), with handles; our strip low
+    // in the bar: phrase ticks, what has been played, the "now" line.
+    for (const auto& p : parts) {
+        const float xa = X(p.first), xb = X(p.second);
+        dl->AddRectFilled(ImVec2(xa, gb.top), ImVec2(xb, gb.bottom), Col(theme::kChord, 70), 3 * S);
+        dl->AddRect(ImVec2(xa, gb.top), ImVec2(xb, gb.bottom), Col(theme::kChord, 255), 3 * S, 0, 2 * S);
+        for (float x : {xa, xb}) {  // the handles
+            dl->AddRectFilled(ImVec2(x - 3 * S, gb.top - 4 * S), ImVec2(x + 3 * S, gb.bottom + 4 * S), Col(theme::kChord, 255), 2 * S);
+            dl->AddLine(ImVec2(x, gb.top), ImVec2(x, gb.bottom), Col(theme::kPanel, 255), 1.2f * S);
+        }
+    }
+    if (hover || !parts.empty()) {
+        dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), Col(theme::kPanel, 170), h * 0.5f);
+        for (double p : v.phraseStarts) dl->AddLine(ImVec2(X(p), y0 + 2 * S), ImVec2(X(p), y1 - 2 * S), Col(theme::kTextDim, 120), 1 * S);
+        dl->AddRectFilled(ImVec2(x0, y0), ImVec2(X(v.songTime), y1), Col(theme::kText, 50), h * 0.5f);
+        dl->AddLine(ImVec2(X(v.songTime), y0 - 3 * S), ImVec2(X(v.songTime), y1 + 3 * S), Col(theme::kText, 230), 2 * S);
+    }
+
+    // Words under the bar: the parts, or how to use the bar (while the mouse is on it).
+    auto mmss = [](double t) {
+        char buf[16];
+        const int x = (int)std::max(0.0, t);
+        std::snprintf(buf, sizeof(buf), "%d:%02d", x / 60, x % 60);
+        return std::string(buf);
+    };
+    std::string text;
+    if (parts.size() == 1) text = "practising " + mmss(parts[0].first) + " - " + mmss(parts[0].second);
+    else if (parts.size() > 1) text = "practising " + std::to_string(parts.size()) + " parts";
+    if (hover) text += std::string(text.empty() ? "" : "   \xC2\xB7   ") + "drag: add a part   click a part: remove it   drag an end: change it";
+    if (!text.empty()) {
+        const float fs = 17 * S;
+        const ImVec2 ts = g_fontUi->CalcTextSizeA(fs, FLT_MAX, 0, text.c_str());
+        const ImVec2 p(x1 - ts.x, gb.bottom + 6 * S);
+        dl->AddRectFilled(ImVec2(p.x - 6 * S, p.y - 1 * S), ImVec2(x1 + 2 * S, p.y + ts.y + 1 * S), Col(theme::kPanel, 210), 4 * S);
+        dl->AddText(g_fontUi, fs, p, parts.empty() ? Col(theme::kTextDim) : Col(theme::kChord), text.c_str());
+    }
+    // The mouse pointer (the game hides the real one): for 2 s after it moves, or while dragging.
+    if (down || GetTickCount() - g_mouseMoved < 2000) {
+        const ImVec2 m = mouse;
+        const ImVec2 p1(m.x, m.y + 18 * S), p2(m.x + 12 * S, m.y + 13 * S);
+        dl->AddTriangleFilled(ImVec2(m.x - 1.5f * S, m.y - 2 * S), ImVec2(p1.x - 1.5f * S, p1.y + 2 * S), ImVec2(p2.x + 2 * S, p2.y + 1 * S), IM_COL32(0, 0, 0, 200));
+        dl->AddTriangleFilled(m, p1, p2, IM_COL32(255, 255, 255, 240));
+    }
+}
+
+// The count-in after a long wait: a big number (beats left before the song goes on) under the banner.
+// It changes once a beat (at most ~3 a second at 180 bpm; never a flash: it only changes its digit).
+void DrawCountIn(ImDrawList* dl, const View& v, float S, ImVec2 ds) {
+    if (v.countIn <= 0) return;
+    const float s = S;
+    const std::string num = std::to_string(v.countIn), sub = "the song goes on in";
+    const float big = 96 * s, subSize = 22 * s, pad = 16 * s;
+    const ImVec2 ns = g_fontBold->CalcTextSizeA(big, FLT_MAX, 0, num.c_str());
+    const ImVec2 ss = g_fontUi->CalcTextSizeA(subSize, FLT_MAX, 0, sub.c_str());
+    const float w = std::max(ns.x, ss.x) + pad * 2, h = ss.y + ns.y + pad * 2;
+    // Under the banner if it's up, else at its default place.
+    const float cx = g_box[kBanner].drawn ? (g_box[kBanner].p0.x + g_box[kBanner].p1.x) * 0.5f : ds.x * 0.5f;
+    const float top = g_box[kBanner].drawn ? g_box[kBanner].p1.y + 12 * s : 140 * s;
+    const ImVec2 p0 = Place(cx - w * 0.5f, top, w, h, ds), p1(p0.x + w, p0.y + h);
+    dl->AddRectFilled(p0, p1, Col(theme::kPanel, 225), 14 * s);
+    dl->AddRect(p0, p1, Col(theme::kChord, 200), 14 * s, 0, 3 * s);
+    dl->AddText(g_fontUi, subSize, ImVec2(p0.x + (w - ss.x) * 0.5f, p0.y + pad * 0.7f), Col(theme::kTextDim), sub.c_str());
+    dl->AddText(g_fontBold, big, ImVec2(p0.x + (w - ns.x) * 0.5f, p0.y + pad * 0.7f + ss.y), Col(theme::kChord), num.c_str());
 }
 
 // The song clock, top-left by default: "1:23 / 4:28". Small and quiet, the game's HUD stays readable.
@@ -1407,6 +1652,12 @@ void DrawTabStaff(const TabStaff& tab, TabShow& sh, int cursor) {
     // (The beats always come with the View, for the rhythm below; the lines are the tabBeats setting.)
     static const std::vector<TabBeat> kNoBeats;
     DrawTabGrid(tab, sh.st->tabBeats ? sh.v->tabBeats : kNoBeats, staffTop, staffBottom);
+    // The practice parts (the practice bar), lightly shaded.
+    for (const auto& p : g_drawRanges) {
+        const float xa = tab.TimeX(p.first), xb = tab.TimeX(p.second);
+        tab.dl->AddRectFilled(ImVec2(std::min(xa, xb), tab.TopY() - 12 * s), ImVec2(std::max(xa, xb), tab.BotY() + 10 * s),
+                              Col(theme::kChord, 28), 3 * s);
+    }
     // The "now" line: where the highway's notes reach the fretboard.
     if (cursor == 2)
         tab.dl->AddLine(ImVec2(cursorX, tab.TopY() - 16 * s), ImVec2(cursorX, tab.BotY() + 12 * s), Col(theme::kHighlight, 200), 2.5f * s);
@@ -1732,6 +1983,9 @@ void MenuPlaying(Settings& e) {
               "Keep at least a little (30 ms): stopped right on the note, the game counts it as already passed.");
     SliderRow("Early notes count", "##early", &e.earlyMs, 0, 1000, "up to %d ms",
               "A right note played up to this early counts, and the song doesn't stop for it.");
+    SliderRow("Count-in after a wait", "##countin", &e.countInBeats, 0, 4, e.countInBeats ? "%d beats" : "off",
+              "After a long wait (over 2 seconds) ends with the right note, the song counts this many beats at its own "
+              "tempo (3, 2, 1 on screen) before it goes on, so you find the beat again. 0 = off.");
 }
 
 // Page "Tab": everything about the scrolling tab.
@@ -1815,6 +2069,10 @@ void MenuScreen(Settings& e) {
     ImGui::Unindent();
     ImGui::EndDisabled();
     Check("Song time", &e.showClock, "A small clock, \"1:23 / 4:28\", top-left by default.");
+    Check("Practice bar", &e.showPracticeBar,
+          "On the game's progress bar, with the mouse (no menu needed): drag to mark a part of the song; Note-by-Note "
+          "only waits inside the parts you mark, and the tab shades them. Drag a part's end to change it, click a part "
+          "to remove it.");
     ImGui::SeparatorText("Arrange");
     ImGui::TextWrapped("While this menu is open, drag the banner, the clock or the tab to move it, and drag its "
                        "bottom-right corner to resize it. The menu itself moves by its title bar.");
@@ -2116,6 +2374,10 @@ void Frame(IDirect3DDevice9* dev) {
     ImDrawList* dl = ImGui::GetBackgroundDrawList();  // under the menu window
     const bool bannerOn = st.enabled && st.showBanner;
     const bool bannerShown = DrawCalmBanner(dl, v, lay, bannerOn, s, ds);
+    if (st.enabled) DrawCountIn(dl, v, s, ds);
+    if (g_clearDrawRanges.exchange(false)) g_drawRanges.clear();
+    if (!menu) DrawPracticeBar(dl, v, st, s, ds);
+    else g_barL = g_barT = g_barR = g_barB = 0;
     if (!bannerShown && bannerOn && menu) {
         View ex;  // "Play fret 5 on the BLUE string" (D string, note G)
         ex.bass = v.bass;
@@ -2199,6 +2461,23 @@ HRESULT APIENTRY HkReset(IDirect3DDevice9* dev, D3DPRESENT_PARAMETERS* pp) {
 LRESULT CALLBACK HkWndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     InFlight f;
     WNDPROC old = g_oldWndProc;
+    // The practice bar: the mouse works on it any time; its clicks don't reach the game.
+    if (!g_menuOpen && (m == WM_MOUSEMOVE || m == WM_LBUTTONDOWN || m == WM_LBUTTONUP)) {
+        const int x = (short)LOWORD(l), y = (short)HIWORD(l);
+        g_mouseX = x;
+        g_mouseY = y;
+        if (m == WM_MOUSEMOVE) g_mouseMoved = GetTickCount();
+        if (m == WM_LBUTTONDOWN && OverBar(x, y)) {
+            g_mouseLeft = true;
+            SetCapture(h);
+            return 0;
+        }
+        if (m == WM_LBUTTONUP && g_mouseLeft) {
+            g_mouseLeft = false;
+            ReleaseCapture();
+            return 0;
+        }
+    }
     if (g_menuOpen) {
         // Our menu has the keyboard and mouse: ImGui gets them, the game doesn't. (System keys like
         // Alt+F4 still pass.)
@@ -2347,6 +2626,17 @@ Settings GetSettings() {
 void SetEnabled(bool on) {
     std::lock_guard<std::mutex> lk(g.m);
     g.settings.enabled = on;
+}
+
+std::vector<Range> GetRanges() {
+    std::lock_guard<std::mutex> lk(g.m);
+    return g.ranges;
+}
+
+void ClearRanges() {
+    std::lock_guard<std::mutex> lk(g.m);
+    g.ranges.clear();
+    g_clearDrawRanges = true;  // the render thread drops its copy on the next frame
 }
 
 bool TakeSkipRequest() {

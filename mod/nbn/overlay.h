@@ -41,6 +41,8 @@ struct Settings {
                                  // its own pause screen it greys it out, and its fretboard already shows
                                  // the next chord)
     int earlyMs = 300;           // a correct note up to this early counts without stopping
+    int countInBeats = 3;        // after a long wait (over 2 s) ends with the note played, count this many
+                                 // beats of the song's tempo (3-2-1 on screen) before it goes on; 0 = off
     bool acceptOctaves = false;  // the same note one octave higher/lower also counts
     bool showBanner = true;      // show "play this" while the song is waiting
     bool stringsFromThick = false; // strings are named by number ("string 4 (D)", in the string's colour):
@@ -55,6 +57,8 @@ struct Settings {
     bool skipGreyed = true;      // after resuming from the game's pause screen, the notes the game replays
                                  // greyed out are not waited for again
     bool showClock = true;       // show the song time while playing
+    bool showPracticeBar = true; // the practice bar on the game's progress bar: drag on it with the mouse to
+                                 // choose parts of the song; the mod only waits inside them
     bool showTab = true;         // show the scrolling tab while playing
     bool tabBeats = true;        // bar lines (with bar numbers) and beat lines in the tab
     bool tabRhythm = true;       // rhythm under the tab: stems + beams (how many notes per beat)
@@ -146,9 +150,12 @@ struct View {
     technique::Technique tech;   // how to play it (slide, bend...; the banner explains it); chords: all
                                  // strings merged, techFret = the fret it refers to
     int techFret = -1;
+    technique::Technique strings[6];  // chords: each string's technique (the fretboard draws their slides)
     int anchorFret = 0, anchorWidth = 0;  // where the fretting hand is (0 = unknown)
     int handFrom = 0;            // the anchor of the note before (0 = unknown): the hand moves from there
     int fingers[6] = {-1, -1, -1, -1, -1, -1};  // per string: 1 = index .. 4 = little, 0 = thumb, -1 = none
+    int countIn = 0;             // the count-in's number on screen (3, 2, 1), 0 = no count-in now
+    std::vector<double> phraseStarts;  // when each phrase iteration starts (the practice bar's ticks and snaps)
     std::vector<technique::Link> chain;  // the note and the notes linked after it (same string, not picked
                                          // again), for the banner's steps; empty = just `tech`
     bool chord = false;          // waiting for a chord: chordName + frets instead of string/fret
@@ -186,6 +193,13 @@ void SetEnabled(bool on);
 
 // True once after the player pressed "Skip this note" in the menu.
 bool TakeSkipRequest();
+
+// The practice parts the player chose on the practice bar (song seconds, in time order, not
+// overlapping): the mod waits only for the notes inside them. Empty = the whole song. ClearRanges: a
+// new song starts with none.
+using Range = std::pair<double, double>;
+std::vector<Range> GetRanges();
+void ClearRanges();
 
 // The game window (nullptr until the overlay is ready). Any thread.
 HWND GameWindow();

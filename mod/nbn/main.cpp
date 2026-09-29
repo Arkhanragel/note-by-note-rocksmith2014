@@ -110,6 +110,9 @@ Config LoadConfig() {
                 "LeadMs=30\n"
                 "; A correct note played up to this many milliseconds early counts without stopping\n"
                 "EarlyMs=300\n"
+                "; After a long wait (over 2 s) ends with the note played, count this many beats (3-2-1 on\n"
+                ";     screen, at the song's tempo) before the song goes on; 0 = no count-in\n"
+                "CountInBeats=3\n"
                 "; 1 = the same note one octave higher/lower also counts\n"
                 "AcceptOctaves=0\n"
                 "; 1 = show what to play (string, colour, fret) while the song waits\n"
@@ -129,6 +132,8 @@ Config LoadConfig() {
                 "SkipGreyedNotes=1\n"
                 "; 1 = show the song time (top-left corner) while playing\n"
                 "ShowClock=1\n"
+                "; 1 = the practice bar under the game's progress bar (drag on it to practise a part of the song)\n"
+                "ShowPracticeBar=1\n"
                 "; 1 = show the notes coming up as a scrolling tab (left of the highway, below the lyrics)\n"
                 "ShowTab=1\n"
                 "; 1 = bar lines (with bar numbers) and beat lines in the tab, to read the rhythm\n"
@@ -216,6 +221,7 @@ Config LoadConfig() {
     c.skipKey = ParseKey(str(L"SkipKey", L"F9"), VK_F9);
     c.initial.leadMs = GetPrivateProfileIntW(L"NoteByNote", L"LeadMs", 30, ini.c_str());
     c.initial.earlyMs = GetPrivateProfileIntW(L"NoteByNote", L"EarlyMs", 300, ini.c_str());
+    c.initial.countInBeats = std::max(0, std::min(4, (int)GetPrivateProfileIntW(L"NoteByNote", L"CountInBeats", 3, ini.c_str())));
     c.initial.acceptOctaves = GetPrivateProfileIntW(L"NoteByNote", L"AcceptOctaves", 0, ini.c_str()) != 0;
     c.initial.showBanner = GetPrivateProfileIntW(L"NoteByNote", L"ShowBanner", 1, ini.c_str()) != 0;
     c.initial.bannerNeck = GetPrivateProfileIntW(L"NoteByNote", L"BannerFretboard", 1, ini.c_str()) != 0;
@@ -223,6 +229,7 @@ Config LoadConfig() {
     c.initial.stringsFromThick = GetPrivateProfileIntW(L"NoteByNote", L"StringsFromThickest", 0, ini.c_str()) != 0;
     c.initial.waitChords = GetPrivateProfileIntW(L"NoteByNote", L"WaitChords", 1, ini.c_str()) != 0;
     c.initial.showClock = GetPrivateProfileIntW(L"NoteByNote", L"ShowClock", 1, ini.c_str()) != 0;
+    c.initial.showPracticeBar = GetPrivateProfileIntW(L"NoteByNote", L"ShowPracticeBar", 1, ini.c_str()) != 0;
     c.initial.showTab = GetPrivateProfileIntW(L"NoteByNote", L"ShowTab", 1, ini.c_str()) != 0;
     c.initial.tabBeats = GetPrivateProfileIntW(L"NoteByNote", L"TabBeats", 1, ini.c_str()) != 0;
     c.initial.tabSeconds = std::max(2, std::min(8, (int)GetPrivateProfileIntW(L"NoteByNote", L"TabSeconds", 4, ini.c_str())));
@@ -277,6 +284,7 @@ void SaveSettings(const overlay::Settings& st) {
     put(L"Enabled", st.enabled);
     put(L"LeadMs", st.leadMs);
     put(L"EarlyMs", st.earlyMs);
+    put(L"CountInBeats", st.countInBeats);
     put(L"AcceptOctaves", st.acceptOctaves);
     put(L"ShowBanner", st.showBanner);
     put(L"BannerFretboard", st.bannerNeck);
@@ -285,6 +293,7 @@ void SaveSettings(const overlay::Settings& st) {
     put(L"WaitChords", st.waitChords);
     put(L"SkipGreyedNotes", st.skipGreyed);
     put(L"ShowClock", st.showClock);
+    put(L"ShowPracticeBar", st.showPracticeBar);
     put(L"ShowTab", st.showTab);
     put(L"TabBeats", st.tabBeats);
     put(L"TabSeconds", st.tabSeconds);
@@ -486,8 +495,11 @@ struct MainLoop {
     double greyT = -1;                // notes before this are greyed out and not waited for (-1 = none)
     double unplayedT = -1;            // the note the song was waiting at when the pause screen opened: never
                                       // passed as greyed out (-1 = none)
+    std::vector<overlay::Range> ranges;  // the practice parts (the practice bar): waits only inside; empty = all
     Target waitFor;                   // the note we're frozen on
     double frozenT = 0;               // the song time when it was held (the hold watchdog compares with it)
+    DWORD countInEnd = 0;             // the count-in after a long wait: when it ends (0 = none), and one
+    DWORD countInBeat = 0;            // beat of the song's tempo (ms)
     int holdRetries = 0;              // times the hold was re-applied during this wait
     hint::Line waitHint;              // how to fix the last wrong note played during this wait
     std::vector<hint::Mark> waitMarks;  // and where it was probably played (the banner's fretboard)
@@ -534,6 +546,7 @@ struct MainLoop {
     void ReleaseWait() {
         if (!frozen) return;
         frozen = false;
+        countInEnd = 0;
         if (overlay::MenuOpen()) menuHold = true;
         else game::Unfreeze();
     }
@@ -587,6 +600,7 @@ struct MainLoop {
         v.midi = (!note.chord && !note.midi.empty()) ? note.midi[0] : -1;
         v.tech = note.tech;
         v.techFret = note.techFret;
+        for (int s = 0; s < 6; ++s) v.strings[s] = note.chord ? note.strings[s] : technique::Technique{};
         v.anchorFret = note.anchorFret;
         v.anchorWidth = note.anchorWidth;
         std::copy(std::begin(note.fingers), std::end(note.fingers), v.fingers);
@@ -597,6 +611,11 @@ struct MainLoop {
             shownAnchor = note.anchorFret;
         }
         v.handFrom = handFrom;
+        v.phraseStarts.clear();
+        if (chartOk)
+            for (const auto& p : chart.pis) v.phraseStarts.push_back(p.start);
+        // The count-in's number: beats left (3, 2, 1).
+        v.countIn = (frozen && countInEnd && countInBeat) ? (int)((countInEnd - std::min(countInEnd, now) + countInBeat - 1) / countInBeat) : 0;
         if (!note.chord) v.chain = LinkedChain(note);
         if (frozen) {
             v.hint = waitHint;
@@ -791,6 +810,7 @@ struct MainLoop {
                 unplayedT = waitFor.time;
             }
             frozen = menuHold = false;
+            countInEnd = 0;
         }
         game::ResetSongCache();
         lastT = -1;
@@ -812,6 +832,7 @@ struct MainLoop {
                 chartData = data;
                 lastT = -1;
                 unplayedT = -1;
+                overlay::ClearRanges();  // a new song: no practice parts yet
                 clockChecked = false;
                 clockStill = 0;
                 clockTick = 0;
@@ -874,15 +895,30 @@ struct MainLoop {
     // The song stops a few ms PAST its note, so when the player opens the game's pause screen while it
     // waits, the game counts that note as passed and greys it out on resuming; it was never played, so
     // it (and what follows) is waited for anyway. Before this, every pause during a wait lost a note.
+    // Outside the practice part (the practice bar), the song plays on without waiting.
     bool CanWait(const Target& x) const {
         const bool greyed = greyT > 0 && x.time < greyT - 0.001 && !(unplayedT >= 0 && x.time >= unplayedT - 0.001);
-        return Waitable(st, x) && !greyed;
+        bool inside = ranges.empty();
+        for (const auto& r : ranges) inside = inside || (x.time >= r.first - 0.001 && x.time <= r.second + 0.001);
+        return Waitable(st, x) && !greyed && inside;
     }
 
     // ---- 6.-8. follow the song: keep the cursor in sync, wait at the next note, or pass it
     void Follow(DWORD now, bool skip) {
         double t;
         if (!chartOk || !st.enabled || !game::GetSongTime(&t)) { upcomingChord.clear(); return; }
+        // The practice parts, if the player chose some (logged when they change).
+        std::vector<overlay::Range> parts = overlay::GetRanges();
+        if (parts != ranges) {
+            std::string list;
+            for (const auto& r : parts) {
+                char buf[48];
+                std::snprintf(buf, sizeof(buf), "%s%.2f-%.2f", list.empty() ? "" : ", ", r.first, r.second);
+                list += buf;
+            }
+            Log("practice parts: %s", parts.empty() ? "none (the whole song)" : list.c_str());
+            ranges = std::move(parts);
+        }
         // Greyed-out notes (setting SkipGreyedNotes): after resuming from the game's pause screen the
         // song replays a few seconds with the notes already passed greyed out; those aren't waited for
         // again. Only a grey time a little ahead of the song counts (a resume goes back ~3 s), so a
@@ -984,6 +1020,10 @@ struct MainLoop {
     // ---- 7. while the song waits: a skip, or the note played (then the song goes on)
     void Waiting(DWORD now, bool skip) {
         if (!HoldKept(now)) return;
+        if (countInEnd) {  // counting in: the note was played, the song goes on when the count ends
+            if (skip || now >= countInEnd) ReleaseWait();
+            return;
+        }
         // Testing without a guitar: after TestAutoPassMs the wait passes as if the note was played.
         const bool autoPass = !skip && cfg.testAutoPassMs > 0 && now - frozenTick >= (DWORD)cfg.testAutoPassMs;
         if (skip || autoPass) {
@@ -1000,7 +1040,26 @@ struct MainLoop {
         // Keep the audio of long waits, and of every chord for now (to tune chord detection offline).
         if (waitFor.chord || now - frozenTick > 3000) SaveWaitAudio();
         cursor = waitFor.time;
+        // After a long wait, a count-in in the song's tempo before it goes on (the player finds the beat
+        // again). The note was played: the song stays held only for the count.
+        if (st.countInBeats > 0 && now - frozenTick > 2000) {
+            countInBeat = (DWORD)std::lround(BeatSeconds(waitFor.time) * 1000.0);
+            countInEnd = now + countInBeat * st.countInBeats;
+            Log("count-in: %d beats of %u ms", st.countInBeats, countInBeat);
+            return;
+        }
         ReleaseWait();
+    }
+
+    // One beat of the song around song time t (from the beat grid), for the count-in; 0.5 s if unknown.
+    double BeatSeconds(double t) const {
+        const auto& b = chart.beats;
+        for (size_t i = 1; i < b.size(); ++i)
+            if (b[i].time > t) {
+                const double d = b[i].time - b[i - 1].time;
+                return (d > 0.2 && d < 2.0) ? d : 0.5;
+            }
+        return 0.5;
     }
 
     // The hold watchdog: the song must not move while it waits. Right after coming back from Riff
