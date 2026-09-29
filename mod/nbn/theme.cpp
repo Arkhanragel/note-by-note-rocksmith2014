@@ -55,8 +55,9 @@ int ParseHex(const std::string& s) {
     while (i < s.size() && std::isspace((unsigned char)s[i])) ++i;
     if (i < s.size() && s[i] == '#') ++i;
     int v = 0, digits = 0;
+    // Only the first 6 digits are added up (more would overflow the int); longer is rejected below.
     for (; i < s.size() && std::isxdigit((unsigned char)s[i]); ++i, ++digits)
-        v = v * 16 + (std::isdigit((unsigned char)s[i]) ? s[i] - '0' : std::tolower((unsigned char)s[i]) - 'a' + 10);
+        if (digits < 6) v = v * 16 + (std::isdigit((unsigned char)s[i]) ? s[i] - '0' : std::tolower((unsigned char)s[i]) - 'a' + 10);
     while (i < s.size() && std::isspace((unsigned char)s[i])) ++i;
     return digits == 6 && i == s.size() ? v : -1;
 }
