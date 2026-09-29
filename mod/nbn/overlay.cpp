@@ -433,6 +433,10 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
     auto staffBotY = [&] { return staffY + top + (n - 1) * gap; };
 
     const double now = v.songTime;
+    // The next note to play (highlighted, and where a run's "x8" counts from): while the song waits,
+    // exactly the note it waits for (the clock stops a few ms past it, sometimes more than 20 ms, which
+    // made the note AFTER it look "next"); while playing, the first one not yet past.
+    const double nextFrom = v.waiting && v.waitTime >= 0 ? v.waitTime - 0.002 : now - 0.02;
 
     // What gets drawn: one item per note or chord. With "spread" on, a fast repeat of the same fret
     // on the same string (4+ notes, each within kRunGap of the previous one) becomes ONE item drawn
@@ -464,7 +468,7 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
             while (j < v.tab.size() && sameFret(v.tab[j], v.tab[i]) && v.tab[j].time - v.tab[j - 1].time <= kRunGap) ++j;
         if (j - i < 4) j = i + 1;  // 2 or 3 quick repeats stay separate notes
         Item it{&v.tab[i], v.tab[i].time, v.tab[j - 1].time, v.tab[j - 1].time + v.tab[j - 1].sustain, (int)(j - i), 0, 0};
-        for (size_t k = i; k < j; ++k) it.left += v.tab[k].time >= now - 0.02;
+        for (size_t k = i; k < j; ++k) it.left += v.tab[k].time >= nextFrom;
         const std::string run = runText(it);
         for (int str = 0; str < n; ++str)
             if (it.note->frets[str] >= 0) it.half = std::max(it.half, boxHalf(std::to_string(it.note->frets[str]), run));
@@ -724,7 +728,7 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
             if (std::max(x, xEnd) < lineL - 30 * s || std::min(x, xEnd) > lineR + 30 * s) continue;
             const float a = alphaOf(it);
             if (a <= 0) continue;
-            const bool next = !nextFound && !t.ignore && it.last >= now - 0.02;  // a run stays "next" until its last note
+            const bool next = !nextFound && !t.ignore && it.last >= nextFrom;  // a run stays "next" until its last note
             if (next) nextFound = true;
             const std::string run = runText(it);
 

@@ -482,6 +482,7 @@ DWORD WINAPI MainThread(LPVOID) {
             overlay::View v;
             v.inSong = inSong;
             v.waiting = frozen;
+            v.waitTime = frozen ? waitFor.time : -1;
             v.bass = chart.bass;
             v.string = waitFor.string;
             v.fret = waitFor.fret;
@@ -826,8 +827,9 @@ DWORD WINAPI MainThread(LPVOID) {
                 waitHint.clear();
                 frozenTick = now;
                 waitAudioStart = debugAudio.Pos() - 2 * 48000;
-                Log("WAIT %.3f (phrase iteration %d, level %d): play %s", next->time, next->pi, next->level,
-                    Describe(chart, *next).c_str());
+                // "+N ms": how far past the note the song stopped (chords: up to 200 ms, see above).
+                Log("WAIT %.3f (phrase iteration %d, level %d, stopped at %+d ms): play %s", next->time, next->pi, next->level,
+                    (int)std::lround((t - next->time) * 1000), Describe(chart, *next).c_str());
             }
         }
     }
