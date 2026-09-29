@@ -35,10 +35,16 @@ namespace nbn::overlay {
 // back when the menu changes them.
 struct Settings {
     bool enabled = true;         // the mode itself (the song waits for each note)
-    int leadMs = 0;              // stop this long BEFORE the note reaches the line
+    int leadMs = 30;             // stop this long BEFORE the note reaches the line. A little before, not
+                                 // on it: stopped a few ms PAST a note, the game counts it as passed (on
+                                 // its own pause screen it greys it out, and its fretboard already shows
+                                 // the next chord)
     int earlyMs = 300;           // a correct note up to this early counts without stopping
     bool acceptOctaves = false;  // the same note one octave higher/lower also counts
     bool showBanner = true;      // show "play this" while the song is waiting
+    bool bannerNeck = true;      // the banner's picture is a piece of fretboard (the note as a dot in its
+                                 // string's colour with the fret number, a red X where a wrong note was
+                                 // played); off = the small tab
     bool waitChords = true;      // also wait at chords (off = chords pass, only single notes wait)
     bool skipGreyed = true;      // after resuming from the game's pause screen, the notes the game replays
                                  // greyed out are not waited for again
@@ -140,6 +146,7 @@ struct View {
     std::vector<TabNote> tab;    // notes on the highway around songTime (empty = no tab)
     std::vector<TabBeat> tabBeats;  // the beat grid over the same time span (empty = no lines)
     hint::Line hint;             // while waiting: how to fix the last wrong note/chord (empty = none)
+    std::vector<hint::Mark> heardAt;  // and where it was probably played (red X on the banner's fretboard)
 };
 
 // Starts a thread that waits for d3d9.dll and installs the hooks. Returns immediately.

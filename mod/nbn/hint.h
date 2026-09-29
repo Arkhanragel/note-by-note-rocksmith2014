@@ -25,6 +25,15 @@ struct Seg {
 };
 using Line = std::vector<Seg>;  // empty = no advice
 
+// Where a wrong note was probably played, for the banner's fretboard picture (a red X there). A
+// guess, like the advice: the pitch is known, the string isn't.
+struct Mark {
+    int string = -1;  // 0 = thickest
+    int fret = -1;    // chart fret (0 = open, or the capo when there is one)
+    int midi = -1;    // what was heard (for its name)
+    bool likely = true;  // the advice's guess; false = another spot with the same pitch (drawn fainter)
+};
+
 // The instrument, as the chart says.
 struct Neck {
     int strings = 6;                        // 4 for bass
@@ -34,13 +43,18 @@ struct Neck {
 };
 
 // Single note: the song waits for fret `fret` on `string` (MIDI `want`) and the player played `heard`.
-Line ForNote(const Neck& neck, int string, int fret, int want, int heard);
+// If `where` is given, it gets the spot the wrong note was most likely played at (string -1 = none).
+Line ForNote(const Neck& neck, int string, int fret, int want, int heard, Mark* where = nullptr);
 
 // Chord: frets/notes per string (-1 = not played), what the chord detector heard (MIDI, strongest
 // first), the wrong pitch classes it found (0 = C), and how many of the chord's notes it heard vs.
-// needed.
+// needed. If `where` is given, it gets the spots of the wrong frets the advice names.
 Line ForChord(const Neck& neck, const int frets[6], const int notes[6], const std::vector<int>& heard,
-              const std::vector<int>& extraPcs, int hits, int needed);
+              const std::vector<int>& extraPcs, int hits, int needed, std::vector<Mark>* where = nullptr);
+
+// The other spots of the neck where the note at `at` can be played (same pitch, other strings), as
+// likely = false marks: the player may have played any of them.
+std::vector<Mark> SameNoteElsewhere(const Neck& neck, const Mark& at);
 
 // Plain text of a line (for the log).
 std::string Text(const Line& line);

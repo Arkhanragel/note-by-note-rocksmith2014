@@ -105,14 +105,18 @@ Config LoadConfig() {
                 "MenuKey=F8\n"
                 "; Key that skips the note the song is waiting for\n"
                 "SkipKey=F9\n"
-                "; Stop this many milliseconds BEFORE the note reaches the line (0 = exactly on it)\n"
-                "LeadMs=0\n"
+                "; Stop this many milliseconds BEFORE the note reaches the line (0 = exactly on it; a little\n"
+                ";     before keeps the game from counting the note as passed if you pause while it waits)\n"
+                "LeadMs=30\n"
                 "; A correct note played up to this many milliseconds early counts without stopping\n"
                 "EarlyMs=300\n"
                 "; 1 = the same note one octave higher/lower also counts\n"
                 "AcceptOctaves=0\n"
                 "; 1 = show what to play (string, colour, fret) while the song waits\n"
                 "ShowBanner=1\n"
+                "; 1 = the banner shows the note on a piece of fretboard (and where a wrong note was played),\n"
+                ";     0 = as a small tab\n"
+                "BannerFretboard=1\n"
                 "; 1 = the song also waits at chords, 0 = chords pass (only single notes wait)\n"
                 "WaitChords=1\n"
                 "; 1 = after resuming from the game's pause screen, don't wait again for the notes the game\n"
@@ -205,10 +209,11 @@ Config LoadConfig() {
     // MenuKey; older ini files called it ToggleKey (it used to switch the mode directly).
     c.menuKey = ParseKey(str(L"MenuKey", str(L"ToggleKey", L"F8").c_str()), VK_F8);
     c.skipKey = ParseKey(str(L"SkipKey", L"F9"), VK_F9);
-    c.initial.leadMs = GetPrivateProfileIntW(L"NoteByNote", L"LeadMs", 0, ini.c_str());
+    c.initial.leadMs = GetPrivateProfileIntW(L"NoteByNote", L"LeadMs", 30, ini.c_str());
     c.initial.earlyMs = GetPrivateProfileIntW(L"NoteByNote", L"EarlyMs", 300, ini.c_str());
     c.initial.acceptOctaves = GetPrivateProfileIntW(L"NoteByNote", L"AcceptOctaves", 0, ini.c_str()) != 0;
     c.initial.showBanner = GetPrivateProfileIntW(L"NoteByNote", L"ShowBanner", 1, ini.c_str()) != 0;
+    c.initial.bannerNeck = GetPrivateProfileIntW(L"NoteByNote", L"BannerFretboard", 1, ini.c_str()) != 0;
     c.initial.waitChords = GetPrivateProfileIntW(L"NoteByNote", L"WaitChords", 1, ini.c_str()) != 0;
     c.initial.showClock = GetPrivateProfileIntW(L"NoteByNote", L"ShowClock", 1, ini.c_str()) != 0;
     c.initial.showTab = GetPrivateProfileIntW(L"NoteByNote", L"ShowTab", 1, ini.c_str()) != 0;
@@ -267,6 +272,7 @@ void SaveSettings(const overlay::Settings& st) {
     put(L"EarlyMs", st.earlyMs);
     put(L"AcceptOctaves", st.acceptOctaves);
     put(L"ShowBanner", st.showBanner);
+    put(L"BannerFretboard", st.bannerNeck);
     put(L"WaitChords", st.waitChords);
     put(L"SkipGreyedNotes", st.skipGreyed);
     put(L"ShowClock", st.showClock);
@@ -467,8 +473,13 @@ struct MainLoop {
     Target nextTarget;                // that note (valid while nextWaitT >= 0): the banner shows it early
     double lastT = -1;
     double greyT = -1;                // notes before this are greyed out and not waited for (-1 = none)
+    double unplayedT = -1;            // the note the song was waiting at when the pause screen opened: never
+                                      // passed as greyed out (-1 = none)
     Target waitFor;                   // the note we're frozen on
+    double frozenT = 0;               // the song time when it was held (the hold watchdog compares with it)
+    int holdRetries = 0;              // times the hold was re-applied during this wait
     hint::Line waitHint;              // how to fix the last wrong note played during this wait
+    std::vector<hint::Mark> waitMarks;  // and where it was probably played (the banner's fretboard)
     DWORD frozenTick = 0, lastTapTry = 0, nextFreezeTry = 0, lastHeartbeat = 0, lastUnloadCheck = 0, nextChartTry = 0,
           songScreenTick = 0;
     // Report: does the song clock run with the music? Checked once per song, over 1 s with the song
@@ -542,7 +553,10 @@ struct MainLoop {
         std::copy(std::begin(note.frets), std::end(note.frets), v.frets);
         std::copy(std::begin(note.notes), std::end(note.notes), v.notes);
         v.midi = (!note.chord && !note.midi.empty()) ? note.midi[0] : -1;
-        if (frozen) v.hint = waitHint;
+        if (frozen) {
+            v.hint = waitHint;
+            v.heardAt = waitMarks;
+        }
         // The clock works even with the mode off or without a chart (it's just the song time).
         if (!inSong || !game::GetSongTime(&v.songTime)) v.songTime = -1;
         if (inSong && !game::GetSongLength(&v.songLength)) v.songLength = 0;
@@ -717,7 +731,10 @@ struct MainLoop {
     void LeftSong() {
         if (frozen || menuHold) {
             Log("left the song screen while holding the song; releasing");
-            if (frozen) SaveWaitAudio();
+            if (frozen) {
+                SaveWaitAudio();
+                unplayedT = waitFor.time;
+            }
             frozen = menuHold = false;
         }
         game::ResetSongCache();
@@ -739,6 +756,7 @@ struct MainLoop {
                 chartOk = true;
                 chartData = data;
                 lastT = -1;
+                unplayedT = -1;
                 clockChecked = false;
                 clockStill = 0;
                 clockTick = 0;
@@ -798,7 +816,13 @@ struct MainLoop {
     }
 
     // A note the mode waits for: not ignored, chords only if chord waits are on, and not greyed out.
-    bool CanWait(const Target& x) const { return Waitable(st, x) && !(greyT > 0 && x.time < greyT - 0.001); }
+    // The song stops a few ms PAST its note, so when the player opens the game's pause screen while it
+    // waits, the game counts that note as passed and greys it out on resuming; it was never played, so
+    // it (and what follows) is waited for anyway. Before this, every pause during a wait lost a note.
+    bool CanWait(const Target& x) const {
+        const bool greyed = greyT > 0 && x.time < greyT - 0.001 && !(unplayedT >= 0 && x.time >= unplayedT - 0.001);
+        return Waitable(st, x) && !greyed;
+    }
 
     // ---- 6.-8. follow the song: keep the cursor in sync, wait at the next note, or pass it
     void Follow(DWORD now, bool skip) {
@@ -824,6 +848,7 @@ struct MainLoop {
             cursor = t - 0.05;
         }
         lastT = t;
+        if (unplayedT >= 0 && !frozen && cursor >= unplayedT - 0.001) unplayedT = -1;  // played or skipped since
 
         // ---- 7. waiting: the player's notes, or a skip
         if (frozen) {
@@ -889,8 +914,11 @@ struct MainLoop {
             return;
         }
         frozen = true;
+        frozenT = t;
+        holdRetries = 0;
         waitFor = next;
         waitHint.clear();
+        waitMarks.clear();
         frozenTick = now;
         waitAudioStart = debugAudio.Pos() - 2LL * 48000;
         // "+N ms": how far past the note the song stopped (chords: up to 200 ms, see Follow()).
@@ -900,6 +928,7 @@ struct MainLoop {
 
     // ---- 7. while the song waits: a skip, or the note played (then the song goes on)
     void Waiting(DWORD now, bool skip) {
+        if (!HoldKept(now)) return;
         // Testing without a guitar: after TestAutoPassMs the wait passes as if the note was played.
         const bool autoPass = !skip && cfg.testAutoPassMs > 0 && now - frozenTick >= (DWORD)cfg.testAutoPassMs;
         if (skip || autoPass) {
@@ -919,6 +948,28 @@ struct MainLoop {
         ReleaseWait();
     }
 
+    // The hold watchdog: the song must not move while it waits. Right after coming back from Riff
+    // Repeater (and maybe elsewhere) the game restarts the music just after we paused it: the pause
+    // said OK, but the new playback runs, and the song used to go on with the mod still "waiting".
+    // Paused again, the new playback stops (Freeze looks up the current one). If it can't be held,
+    // stop waiting and follow the song from where it really is (the next note stops it again).
+    bool HoldKept(DWORD now) {
+        double t;
+        if (!game::GetSongTime(&t) || t - frozenT < 0.3) return true;
+        if (holdRetries < 2 && game::Freeze()) {
+            ++holdRetries;
+            Log("the song kept playing while held (%.2f s past the stop): paused it again", t - frozenT);
+            frozenT = t;
+            return true;
+        }
+        Log("couldn't hold the song at %.3f (it kept playing, now %.3f s): following from here", waitFor.time, t);
+        frozen = false;
+        game::Unfreeze();
+        lastT = -1;  // re-sync the cursor to the song on the next loop
+        nextFreezeTry = now + 1000;
+        return false;
+    }
+
     // True if what was just played is the note/chord being waited for. Logs what was heard, and after a
     // wrong note or chord sets the "how to fix it" advice (waitHint) the banner shows.
     bool HeardWaitedNote(DWORD now) {
@@ -936,7 +987,13 @@ struct MainLoop {
             Log("  heard %s (%+.0f cents, %.1f dB, aper %.2f%s), waiting for %s", MidiName(ev.midi).c_str(), ev.cents, ev.levelDb,
                 ev.aperiodicity, ev.attack ? ", attack" : "", Describe(chart, waitFor).c_str());
             if (ev.attack && adviseNow && !waitFor.chord && !waitFor.midi.empty()) {
-                waitHint = hint::ForNote(neck, waitFor.string, waitFor.fret, waitFor.midi[0], ev.midi);
+                hint::Mark at;
+                waitHint = hint::ForNote(neck, waitFor.string, waitFor.fret, waitFor.midi[0], ev.midi, &at);
+                waitMarks.clear();
+                if (at.string >= 0) {
+                    waitMarks.push_back(at);
+                    for (const auto& m : hint::SameNoteElsewhere(neck, at)) waitMarks.push_back(m);
+                }
                 if (!waitHint.empty()) Log("  advice: %s", hint::Text(waitHint).c_str());
             }
         }
@@ -947,9 +1004,11 @@ struct MainLoop {
                 std::vector<int> heardMidi;
                 heardMidi.reserve(cr.heard.size());
                 for (const auto& h : cr.heard) heardMidi.push_back(h.first);
-                hint::Line l = hint::ForChord(neck, waitFor.frets, waitFor.notes, heardMidi, cr.extra, cr.hits, cr.needed);
+                std::vector<hint::Mark> at;
+                hint::Line l = hint::ForChord(neck, waitFor.frets, waitFor.notes, heardMidi, cr.extra, cr.hits, cr.needed, &at);
                 if (!l.empty()) {
                     waitHint = l;
+                    waitMarks = at;
                     Log("  advice: %s", hint::Text(waitHint).c_str());
                 }
             }

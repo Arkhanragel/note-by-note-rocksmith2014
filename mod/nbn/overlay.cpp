@@ -210,7 +210,236 @@ struct MiniTab {
         : labelX(st.tabMirror ? tx + tabW + 8 * s : tx), lineL(st.tabMirror ? tx : tx + labelW) {}
 };
 
-// The "waiting" banner: what to play in words (+ colour) and as a tiny tab.
+// ------------------------------------------------------------------ the banner's fretboard
+// A piece of the neck, seen like the highway: strings across in their colours, frets numbered below.
+// The note(s) to play are dots in the string's colour with the fret number inside (read like tab),
+// labelled with the note's name; after a wrong note, a red X where it was probably played (hint.h
+// guesses the spot: the pitch is heard, the string isn't) with an arrow to where it should be.
+// Measure first (the banner needs the size), then Draw.
+struct NeckPic {
+    struct Dot {
+        int string, fret, midi;
+        bool likely = true;  // marks: the advice's guess (X + name + arrow); false = same note elsewhere (faint X)
+    };
+    int n = 6;                 // strings
+    bool chord = false;
+    bool flats = false;        // note names with flats (the chord's name has them)
+    std::vector<Dot> dots;     // what to play
+    std::vector<Dot> marks;    // where wrong notes were played (inside the window only)
+    int lo = 1, hi = 5;        // fret cells shown (1 = the first fret, with the nut on its left)
+    float s = 1, gap = 0, cell = 0, rad = 0, nameW = 0, openW = 0, tailW = 0, top = 0, w = 0, h = 0;
+
+    NeckPic(const View& v, float scale) : s(scale) {
+        n = v.bass ? 4 : 6;
+        chord = v.chord;
+        if (chord) {
+            flats = music::UsesFlats(v.chordName);
+            for (int i = 0; i < n; ++i)
+                if (v.frets[i] >= 0) dots.push_back({i, v.frets[i], v.notes[i]});
+        } else {
+            dots.push_back({std::max(0, std::min(n - 1, v.string)), std::max(0, v.fret), v.midi});
+        }
+        // The window: the fretted notes with a fret of room, at least 5 frets, from the nut when they
+        // are low on the neck. A wrong note joins it if it isn't too far (else only the text says it);
+        // the same note's other spots too, up to a wider window (the frets get narrower).
+        int mn = 99, mx = -1;
+        for (const auto& d : dots) if (d.fret > 0) { mn = std::min(mn, d.fret); mx = std::max(mx, d.fret); }
+        for (const bool likely : {true, false}) {
+            for (const auto& m : v.heardAt) {
+                if (m.likely != likely || m.string < 0 || m.string >= n || m.fret < 0) continue;
+                const int a = m.fret > 0 ? std::min(mn, m.fret) : mn, b = std::max(mx, m.fret);
+                if (mx >= 0 && b - (a <= 4 ? 1 : a) > (likely ? 9 : 12)) continue;
+                if (m.fret > 0) { mn = a; mx = b; }
+                marks.push_back({m.string, m.fret, m.midi, m.likely});
+            }
+        }
+        if (mx < 0) mn = mx = 1;
+        lo = mn <= 4 ? 1 : mn - 1;
+        hi = std::min(24, std::max(lo + 4, mx + 1));
+
+        // The open-string column only when something is open, or a chord has "x" strings to mark.
+        bool open = lo == 1 || chord;
+        for (const auto& d : dots) open = open || d.fret == 0;
+        for (const auto& m : marks) open = open || m.fret == 0;
+        gap = (chord ? 24 : 20) * s;
+        rad = (chord ? 11.5f : 14) * s;
+        cell = std::max(34.0f, 276.0f / std::max(6, hi - lo + 1)) * s;  // 6 frets or fewer: 46
+        nameW = 20 * s;
+        openW = (open ? 30 : 8) * s;
+        tailW = (chord ? 34 : 30) * s;  // chords: a column with each string's note name; notes: the name tag
+        top = rad + 4 * s;
+        w = nameW + openW + (hi - lo + 1) * cell + tailW;
+        h = top + (n - 1) * gap + 10 * s + 22 * s;  // + the fret numbers
+    }
+
+    // Centre x of fret f (0 = the open column), before mirroring.
+    float FretX(float x0, int f) const {
+        if (f == 0) return x0 + nameW + openW * 0.5f;
+        return x0 + nameW + openW + (f - lo + 0.5f) * cell;
+    }
+
+    void Draw(ImDrawList* dl, const Settings& st, ImVec2 p0) const {
+        const bool mir = st.tabMirror;
+        auto X = [&](float x) { return mir ? p0.x + p0.x + w - x : x; };  // left-handed: frets go left
+        auto Y = [&](int str) { return p0.y + top + MiniTabRow(st, str, n) * gap; };
+        const float neckL = p0.x + nameW + openW, neckR = neckL + (hi - lo + 1) * cell;
+        const float yTop = Y(st.tabThickTop ? 0 : n - 1), yBot = Y(st.tabThickTop ? n - 1 : 0);
+        const float tiny = 18 * s, label = 20 * s;
+
+        // Wood, inlays, fret wires, the nut (or a faint edge when the window starts higher up).
+        const ImVec2 w0(std::min(X(neckL), X(neckR)), yTop - 9 * s), w1(std::max(X(neckL), X(neckR)), yBot + 9 * s);
+        dl->AddRectFilled(w0, w1, IM_COL32(0, 0, 0, 90), 4 * s);
+        const float midY = (yTop + yBot) * 0.5f;
+        for (int f = lo; f <= hi; ++f) {
+            const int k = f % 12;
+            const ImU32 inlay = IM_COL32(255, 255, 255, 38);
+            if (k == 0) {
+                dl->AddCircleFilled(ImVec2(X(FretX(p0.x, f)), midY - gap), 4.5f * s, inlay);
+                dl->AddCircleFilled(ImVec2(X(FretX(p0.x, f)), midY + gap), 4.5f * s, inlay);
+            } else if (k == 3 || k == 5 || k == 7 || k == 9) {
+                dl->AddCircleFilled(ImVec2(X(FretX(p0.x, f)), midY), 4.5f * s, inlay);
+            }
+            const float fx = X(neckL + (f - lo + 1) * cell);
+            dl->AddLine(ImVec2(fx, yTop - 9 * s), ImVec2(fx, yBot + 9 * s), Col(theme::kTextDim, 130), 1.6f * s);
+        }
+        if (lo == 1) dl->AddLine(ImVec2(X(neckL), yTop - 9 * s), ImVec2(X(neckL), yBot + 9 * s), Col(theme::kText, 220), 5 * s);
+        else dl->AddLine(ImVec2(X(neckL), yTop - 9 * s), ImVec2(X(neckL), yBot + 9 * s), Col(theme::kTextDim, 90), 1.6f * s);
+
+        // Strings in their colours (thicker for the low ones), names at the side.
+        auto used = [&](int str) {
+            for (const auto& d : dots) if (d.string == str) return true;
+            for (const auto& m : marks) if (m.string == str) return true;
+            return false;
+        };
+        for (int str = 0; str < n; ++str) {
+            const float y = Y(str);
+            const bool on = used(str);
+            const ImU32 c = on ? kStringColor[str] : ((kStringColor[str] & 0x00FFFFFF) | (120u << 24));
+            dl->AddLine(ImVec2(X(neckL - openW * 0.55f), y), ImVec2(X(neckR), y), c, (1.3f + 0.45f * (n - 1 - str)) * s);
+            const char* name = kStringName[str];
+            const ImVec2 ns = g_fontUi->CalcTextSizeA(tiny, FLT_MAX, 0, name);
+            dl->AddText(g_fontUi, tiny, ImVec2(X(p0.x + nameW * 0.5f) - ns.x * 0.5f, y - ns.y * 0.5f), c, name);
+        }
+
+        // Fret numbers under the neck; the ones in use brighter.
+        const float numY = yBot + 11 * s;
+        auto number = [&](int f, bool bright) {
+            const std::string t = std::to_string(f);
+            const ImVec2 ts = g_fontUi->CalcTextSizeA(tiny, FLT_MAX, 0, t.c_str());
+            dl->AddText(bright ? g_fontBold : g_fontUi, tiny, ImVec2(X(FretX(p0.x, f)) - ts.x * 0.5f, numY), bright ? Col(theme::kText) : Col(theme::kTextDim, 170), t.c_str());
+        };
+        bool anyOpen = false;
+        for (const auto& d : dots) anyOpen = anyOpen || d.fret == 0;
+        for (int f = lo; f <= hi; ++f) {
+            bool bright = false;
+            for (const auto& d : dots) bright = bright || d.fret == f;
+            number(f, bright);
+        }
+        if (anyOpen) number(0, true);
+
+        // A small name tag ("G#") beside a dot, on a dark background so it reads over the strings.
+        auto tag = [&](ImVec2 c, bool left, const std::string& t, ImU32 col) {
+            const ImVec2 ts = g_fontBold->CalcTextSizeA(label, FLT_MAX, 0, t.c_str());
+            const float x = left ? c.x - rad - 12 * s - ts.x : c.x + rad + 12 * s;
+            const ImVec2 a(x - 5 * s, c.y - ts.y * 0.5f - 1 * s), b(x + ts.x + 5 * s, c.y + ts.y * 0.5f + 1 * s);
+            dl->AddRectFilled(a, b, Col(theme::kPanel, 240), 6 * s);
+            dl->AddRect(a, b, col, 6 * s, 0, 1.5f * s);
+            dl->AddText(g_fontBold, label, ImVec2(x, c.y - ts.y * 0.5f), col, t.c_str());
+        };
+
+        // The wrong notes first (under the dots), fading in; an arrow from each to the right spot.
+        const float ma = MarksAlpha();
+        const ImU32 red = Col(theme::kWarning, (int)(255 * ma));
+        for (const auto& m : marks) {
+            if (dots.empty()) break;
+            const ImVec2 c(X(FretX(p0.x, m.fret)), Y(m.string));
+            if (!m.likely) {  // the same note elsewhere: a faint X, no name or arrow
+                const ImU32 faint = Col(theme::kWarning, (int)(150 * ma));
+                dl->AddCircleFilled(c, rad * 0.75f, Col(theme::kPanel, (int)(200 * ma)));
+                dl->AddCircle(c, rad * 0.75f, faint, 0, 1.8f * s);
+                const float k = rad * 0.35f;
+                dl->AddLine(ImVec2(c.x - k, c.y - k), ImVec2(c.x + k, c.y + k), faint, 2.5f * s);
+                dl->AddLine(ImVec2(c.x - k, c.y + k), ImVec2(c.x + k, c.y - k), faint, 2.5f * s);
+                continue;
+            }
+            // The dot it should have been: the one on the same string (chord), or the note.
+            const Dot* to = &dots[0];
+            for (const auto& d : dots) if (d.string == m.string) to = &d;
+            const ImVec2 t(X(FretX(p0.x, to->fret)), Y(to->string));
+            const float dx = t.x - c.x, dy = t.y - c.y, len = std::sqrt(dx * dx + dy * dy);
+            if (len > rad * 2.2f) {
+                const ImVec2 u(dx / len, dy / len);
+                const ImVec2 a(c.x + u.x * (rad + 3 * s), c.y + u.y * (rad + 3 * s));
+                const ImVec2 b(t.x - u.x * (rad + 4 * s), t.y - u.y * (rad + 4 * s));
+                const ImU32 ac = Col(theme::kText, (int)(210 * ma));
+                const float hl = 9 * s;
+                dl->AddLine(a, ImVec2(b.x - u.x * hl * 0.8f, b.y - u.y * hl * 0.8f), ac, 2.5f * s);
+                dl->AddTriangleFilled(b, ImVec2(b.x - u.x * hl - u.y * hl * 0.6f, b.y - u.y * hl + u.x * hl * 0.6f),
+                                      ImVec2(b.x - u.x * hl + u.y * hl * 0.6f, b.y - u.y * hl - u.x * hl * 0.6f), ac);
+            }
+            dl->AddCircleFilled(c, rad * 0.9f, Col(theme::kPanel, (int)(235 * ma)));
+            dl->AddCircle(c, rad * 0.9f, red, 0, 2.5f * s);
+            const float k = rad * 0.45f;
+            dl->AddLine(ImVec2(c.x - k, c.y - k), ImVec2(c.x + k, c.y + k), red, 3.5f * s);
+            dl->AddLine(ImVec2(c.x - k, c.y + k), ImVec2(c.x + k, c.y - k), red, 3.5f * s);
+            // Its name on the side away from the arrow (single notes; chords name the notes at the end).
+            if (!chord && m.midi >= 0) tag(c, dx > 0, music::NoteName(m.midi, flats), red);
+        }
+
+        // The notes to play: a dot in the string's colour with the fret number, like tab.
+        const float fs = (chord ? 19 : 23) * s;
+        for (const auto& d : dots) {
+            const ImVec2 c(X(FretX(p0.x, d.fret)), Y(d.string));
+            const ImU32 sc = kStringColor[d.string];
+            dl->AddCircleFilled(c, rad + 3 * s, (sc & 0x00FFFFFF) | (70u << 24));  // soft glow (steady)
+            dl->AddCircleFilled(c, rad, sc);
+            const std::string t = std::to_string(d.fret);
+            const ImVec2 ts = g_fontBold->CalcTextSizeA(fs, FLT_MAX, 0, t.c_str());
+            // Dark digits on the light string colours (yellow, green, orange), white on the others.
+            const bool light = d.string == 1 || d.string == 3 || d.string == 4;
+            dl->AddText(g_fontBold, fs, ImVec2(c.x - ts.x * 0.5f, c.y - ts.y * 0.5f), light ? IM_COL32(20, 20, 24, 255) : IM_COL32(255, 255, 255, 255), t.c_str());
+            if (!chord && d.midi >= 0) {
+                // Name tag on the right, unless a wrong note sits there on the same string.
+                bool busyRight = false;
+                for (const auto& m : marks) busyRight = busyRight || (m.string == d.string && X(FretX(p0.x, m.fret)) > c.x);
+                tag(c, busyRight, music::NoteName(d.midi), sc);
+            }
+        }
+        // Chords: each string's note name in a column after the neck; "x" at the nut = don't play it.
+        if (chord) {
+            for (int str = 0; str < n; ++str) {
+                const float y = Y(str);
+                const Dot* d = nullptr;
+                for (const auto& dd : dots) if (dd.string == str) d = &dd;
+                if (!d) {
+                    const ImVec2 xs = g_fontBold->CalcTextSizeA(label, FLT_MAX, 0, "x");
+                    dl->AddText(g_fontBold, label, ImVec2(X(FretX(p0.x, 0)) - xs.x * 0.5f, y - xs.y * 0.5f), Col(theme::kTextDim), "x");
+                    continue;
+                }
+                if (d->midi < 0) continue;
+                const std::string t = music::NoteName(d->midi, flats);
+                const ImVec2 ts = g_fontBold->CalcTextSizeA(label, FLT_MAX, 0, t.c_str());
+                dl->AddText(g_fontBold, label, ImVec2(X(neckR + tailW * 0.55f) - ts.x * 0.5f, y - ts.y * 0.5f), kStringColor[str], t.c_str());
+            }
+        }
+    }
+
+    // The red X's fade in (0.2 s) each time they change, so a new wrong note never pops in.
+    float MarksAlpha() const {
+        static std::string s_key;
+        static double s_since = 0;
+        std::string key;
+        for (const auto& m : marks) key += std::to_string(m.string) + "," + std::to_string(m.fret) + "," + std::to_string(m.midi) + ";";
+        const double now = ImGui::GetTime();
+        if (key != s_key) {
+            s_key = key;
+            s_since = now;
+        }
+        return (float)std::min(1.0, (now - s_since) / 0.2);
+    }
+};
+
+// The "waiting" banner: what to play in words (+ colour), and as a piece of fretboard or a tiny tab.
 // S = screen scale (height / 1080); sizes also follow the player's banner size.
 void DrawBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 ds) {
     const float s = S * st.bannerSize / 100.0f;
@@ -238,12 +467,14 @@ void DrawBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVe
                                   SegsWidth(g_fontUi, mid, lineH), SegsWidth(g_fontUi, tiny, line3)});
     const float textH = big + 8 * s + mid + 10 * s + (lineH.empty() ? 0 : mid + 10 * s) + tiny;
 
-    // Tab picture: thinnest string on top, like tab and sheet music.
+    // Picture: a piece of fretboard, or a small tab (thinnest string on top, like tab and sheet music).
     const float gap = 17 * s, tabW = 190 * s, labelW = 22 * s;
     const float tabH = gap * (n - 1);
     const float pad = 24 * s, sep = 34 * s;
-    const float w = pad + textW + sep + labelW + tabW + pad;
-    const float h = pad + std::max(textH, tabH + 16 * s) + pad;
+    const NeckPic neck(v, s);
+    const float picW = st.bannerNeck ? neck.w : labelW + tabW, picH = st.bannerNeck ? neck.h : tabH + 16 * s;
+    const float w = pad + textW + sep + picW + pad;
+    const float h = pad + std::max(textH, picH) + pad;
     const ImVec2 p0 = BannerPlace(st, S, w, h, ds);
     const ImVec2 p1(p0.x + w, p0.y + h);
     g_box[kBanner] = {p0, p1, true};
@@ -264,6 +495,10 @@ void DrawBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVe
     DrawSegs(dl, g_fontUi, tiny, t, line3);
 
     const float tx = p0.x + pad + textW + sep, ty = p0.y + (h - tabH) * 0.5f;
+    if (st.bannerNeck) {
+        neck.Draw(dl, st, ImVec2(tx, p0.y + (h - neck.h) * 0.5f));
+        return;
+    }
     const MiniTab mt(st, tx, labelW, tabW, s);
     for (int str = 0; str < n; ++str) {
         const float y = ty + MiniTabRow(st, str, n) * gap;
@@ -328,8 +563,10 @@ void DrawChordBanner(ImDrawList* dl, const View& v, const Settings& st, float S,
     const float gap = 34 * s, tabW = 150 * s, labelW = 22 * s;
     const float tabH = gap * (n - 1);
     const float pad = 24 * s, sep = 34 * s;
-    const float w = pad + textW + sep + labelW + tabW + pad;
-    const float h = pad + std::max(textH, tabH + 30 * s) + pad;
+    const NeckPic neck(v, s);
+    const float picW = st.bannerNeck ? neck.w : labelW + tabW, picH = st.bannerNeck ? neck.h : tabH + 30 * s;
+    const float w = pad + textW + sep + picW + pad;
+    const float h = pad + std::max(textH, picH) + pad;
     const ImVec2 p0 = BannerPlace(st, S, w, h, ds);
     const ImVec2 p1(p0.x + w, p0.y + h);
     g_box[kBanner] = {p0, p1, true};
@@ -354,6 +591,10 @@ void DrawChordBanner(ImDrawList* dl, const View& v, const Settings& st, float S,
     DrawSegs(dl, g_fontUi, tiny, t, line3);
 
     const float tx = p0.x + pad + textW + sep, ty = p0.y + (h - tabH) * 0.5f;
+    if (st.bannerNeck) {
+        neck.Draw(dl, st, ImVec2(tx, p0.y + (h - neck.h) * 0.5f));
+        return;
+    }
     const MiniTab mt(st, tx, labelW, tabW, s);
     const float bx = mt.lineL + tabW * 0.5f, fs = 20 * s;
     for (int str = 0; str < n; ++str) {
@@ -399,6 +640,7 @@ bool DrawCalmBanner(ImDrawList* dl, const View& v, const Settings& st, bool on, 
         std::copy(std::begin(v.frets), std::end(v.frets), s_note.frets);
         std::copy(std::begin(v.notes), std::end(v.notes), s_note.notes);
         s_note.hint = v.hint;
+        s_note.heardAt = v.heardAt;
         s_have = true;
         s_lastWanted = now;
     }
@@ -845,7 +1087,7 @@ void DrawFretBox(const TabStaff& tab, const TabShow& sh, const TabItem& it, int 
     if (run.empty()) {
         tab.dl->AddText(g_fontBold, tab.fs, ImVec2(x - ls.x * 0.5f, y - ls.y * 0.5f), Col(theme::kText, (int)(255 * a)),
                       label.c_str());
-    } else {  // "12" then a small, dimmer "x8"
+    } else {  // "12" then a label, dimmer "x8"
         const float rs = tab.tiny * 0.85f * nsz;
         const ImVec2 es = g_fontUi->CalcTextSizeA(rs, FLT_MAX, 0, run.c_str());
         const float lx = x - (ls.x + 3 * s * nsz + es.x) * 0.5f;
@@ -1220,7 +1462,8 @@ void MenuPlaying(Settings& e) {
           "Useful if you play a riff in another position. Off is stricter: string and fret must match.");
     ImGui::SeparatorText("Timing");
     SliderRow("Stop before the note", "##lead", &e.leadMs, 0, 500, "%d ms",
-              "The song stops this long before the note reaches the line, to give you time to see it.");
+              "The song stops this long before the note reaches the line, to give you time to see it. "
+              "Keep at least a little (30 ms): stopped right on the note, the game counts it as already passed.");
     SliderRow("Early notes count", "##early", &e.earlyMs, 0, 1000, "up to %d ms",
               "A right note played up to this early counts, and the song doesn't stop for it.");
 }
@@ -1284,6 +1527,11 @@ void MenuScreen(Settings& e) {
     ImGui::SeparatorText("Show");
     Check("What to play while the song waits", &e.showBanner,
           "The banner: string, fret and a small tab (for chords: name and shape), and how to fix a wrong note.");
+    ImGui::BeginDisabled(!e.showBanner);
+    Check("   Show it on a fretboard", &e.bannerNeck,
+          "The banner's picture is a piece of the neck: the note is a dot in its string's colour with the fret "
+          "number, and after a wrong note a red X shows where you probably played it. Off = a small tab.");
+    ImGui::EndDisabled();
     Check("Song time", &e.showClock, "A small clock, \"1:23 / 4:28\", top-left by default.");
     ImGui::SeparatorText("Arrange");
     ImGui::TextWrapped("While this menu is open, drag the banner, the clock or the tab to move it, and drag its "

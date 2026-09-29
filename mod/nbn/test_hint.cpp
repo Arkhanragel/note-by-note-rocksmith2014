@@ -43,6 +43,34 @@ int main() {
     check("Em, strings not sounding", nbn::hint::ForChord(gtr, emf, emn, {40, 52, 64}, {}, 1, 2),
           "Fix:  not sounding: YELLOW string (fret 2), ORANGE string (open), GREEN string (open) - press firmly and strum every string");
 
+    // Where the wrong note was probably played (the red X of the banner's fretboard).
+    auto at = [&](const char* what, nbn::hint::Mark m, int string, int fret, int midi) {
+        const bool ok = m.string == string && m.fret == fret && m.midi == midi;
+        fails += !ok;
+        std::printf("%s  %-28s -> string %d fret %d midi %d", ok ? "ok  " : "FAIL", what, m.string, m.fret, m.midi);
+        if (!ok) std::printf("\n      wanted string %d fret %d midi %d", string, fret, midi);
+        std::printf("\n");
+    };
+    nbn::hint::Mark m;
+    nbn::hint::ForNote(gtr, 2, 5, 55, 57, &m);
+    at("X: 2 frets too high", m, 2, 7, 57);
+    nbn::hint::ForNote(gtr, 2, 5, 55, 60, &m);
+    at("X: string below", m, 3, 5, 60);
+    nbn::hint::ForNote(gtr, 0, 0, 40, 42, &m);
+    at("X: open string pressed", m, 0, 2, 42);
+    nbn::hint::ForNote(gtr, 2, 5, 55, 67, &m);
+    at("X: octave", m, 4, 8, 67);
+    nbn::hint::ForNote(capo2, 1, 0, 47, 48, &m);
+    at("X: capo", m, 1, 3, 48);
+    nbn::hint::ForNote(gtr, 2, 5, 55, 55, &m);
+    at("X: right note = none", m, -1, -1, -1);
+    std::vector<nbn::hint::Mark> ms = nbn::hint::SameNoteElsewhere(gtr, {1, 8, 53});  // F3 at A8, as in a real test
+    at("same F3: low E 13", ms.size() == 2 ? ms[0] : nbn::hint::Mark{}, 0, 13, 53);
+    at("same F3: D 3", ms.size() == 2 ? ms[1] : nbn::hint::Mark{}, 2, 3, 53);
+    ms.clear();
+    nbn::hint::ForChord(gtr, a5f, a5n, {45, 53}, {5}, 1, 2, &ms);
+    at("X: A5 finger high", ms.size() == 1 ? ms[0] : nbn::hint::Mark{}, 2, 3, 53);
+
     std::printf("%s\n", fails ? "FAILED" : "all passed");
     return fails ? 1 : 0;
 }

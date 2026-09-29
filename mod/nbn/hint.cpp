@@ -21,6 +21,22 @@ Seg StringSeg(int s) { return {std::string(kColorName[s]) + " string", s}; }
 // Chart fret -> the fret that actually sounds (with a capo, "open" sounds at the capo).
 int Sounding(const Neck& n, int fret) { return (fret == 0 && n.capo > 0) ? n.capo : fret; }
 bool Playable(const Neck& n, int sounding) { return sounding >= n.capo && sounding <= kMaxFret; }
+// And back: with a capo, the capo's fret is the chart's "open".
+int ChartFret(const Neck& n, int sounding) { return (n.capo > 0 && sounding == n.capo) ? 0 : sounding; }
+
+// The spot of pitch `midi` nearest to fret `ef` on `string` (a string away counts like 3 frets), for
+// the picture when the advice itself can't say where the note was played. string -1 = not on the neck.
+Mark NearestSpot(const Neck& n, int midi, int string, int ef, int heard) {
+    Mark m;
+    int best = 999;
+    for (int s = 0; s < n.strings && s < 6; ++s) {
+        const int sf = midi - n.open[s];
+        if (!Playable(n, sf)) continue;
+        const int cost = std::abs(sf - ef) + 3 * std::abs(s - string);
+        if (cost < best) { best = cost; m = {s, ChartFret(n, sf), heard}; }
+    }
+    return m;
+}
 
 // "fret 5 on the BLUE string" / "the BLUE string open"
 void AddWhere(Line* l, int s, int fret) {
@@ -36,7 +52,10 @@ void AddWhere(Line* l, int s, int fret) {
 
 }  // namespace
 
-Line ForNote(const Neck& neck, int string, int fret, int want, int heard) {
+Line ForNote(const Neck& neck, int string, int fret, int want, int heard, Mark* where) {
+    Mark unused;
+    Mark& at = where ? *where : unused;
+    at = Mark{};
     if (string < 0 || string >= neck.strings) return {};
     int d = heard - want;
     if (neck.bassUnsure && d <= -7) d += 12;  // maybe a bass chart: it sounds an octave lower
@@ -46,6 +65,7 @@ Line ForNote(const Neck& neck, int string, int fret, int want, int heard) {
     Line l = {{"You played " + music::NoteName(heard) + "  -  ", kGrey}};
 
     if (d % 12 == 0) {  // the right note in another place of the neck
+        at = NearestSpot(neck, got, string, ef, heard);
         l.push_back({std::string("right note, but an octave too ") + (d > 0 ? "high" : "low") + ": play ", kWhite});
         AddWhere(&l, string, fret);
         return l;
@@ -65,6 +85,7 @@ Line ForNote(const Neck& neck, int string, int fret, int want, int heard) {
         }
     }
     auto wrongString = [&]() {
+        at = {other, ChartFret(neck, got - neck.open[other]), heard};
         l.push_back({"that's the ", kWhite});
         l.push_back(StringSeg(other));
         l.push_back({", use ", kWhite});
@@ -74,6 +95,7 @@ Line ForNote(const Neck& neck, int string, int fret, int want, int heard) {
     // Or the right string, a few frets off.
     const int nf = ef + d;
     auto moveFrets = [&]() {
+        at = {string, ChartFret(neck, nf), heard};
         if (fret == 0) {  // wanted open: no finger at all
             l.push_back({"don't press any fret: play ", kWhite});
             AddWhere(&l, string, 0);
@@ -90,6 +112,7 @@ Line ForNote(const Neck& neck, int string, int fret, int want, int heard) {
     if (sameOk && std::abs(d) <= 4) return moveFrets();
     if (other >= 0 && otherDiff <= 2) return wrongString();
     if (sameOk && std::abs(d) <= 7) return moveFrets();
+    at = NearestSpot(neck, got, string, ef, heard);
     l.push_back({std::string("too ") + (d > 0 ? "high" : "low") + ": play ", kWhite});
     AddWhere(&l, string, fret);
     return l;
@@ -154,7 +177,8 @@ Line NotSounding(const Neck& neck, const int frets[6], const ChordStrings& cs) {
 }  // namespace
 
 Line ForChord(const Neck& neck, const int frets[6], const int notes[6], const std::vector<int>& heard,
-              const std::vector<int>& extraPcs, int hits, int needed) {
+              const std::vector<int>& extraPcs, int hits, int needed, std::vector<Mark>* where) {
+    if (where) where->clear();
     bool got[12] = {};
     for (int m : heard) got[Pc(m)] = true;
     ChordStrings cs;
@@ -178,6 +202,7 @@ Line ForChord(const Neck& neck, const int frets[6], const int notes[6], const st
         cs.advised[best] = true;
         cs.missing[best] = false;
         advice.push_back(WrongFret(best, frets[best], d));
+        if (where) where->push_back({best, ChartFret(neck, Sounding(neck, frets[best]) + d), notes[best] + d});
     }
     if (!unexplained.empty()) advice.push_back(Ringing(unexplained, cs.muted));
     if (hits < needed) {
@@ -191,6 +216,18 @@ Line ForChord(const Neck& neck, const int frets[6], const int notes[6], const st
         out.insert(out.end(), advice[i].begin(), advice[i].end());
     }
     if (!out.empty()) out.insert(out.begin(), {"Fix:  ", kGrey});
+    return out;
+}
+
+std::vector<Mark> SameNoteElsewhere(const Neck& neck, const Mark& at) {
+    std::vector<Mark> out;
+    if (at.string < 0 || at.string >= neck.strings) return out;
+    const int pitch = neck.open[at.string] + Sounding(neck, at.fret);
+    for (int s = 0; s < neck.strings && s < 6; ++s) {
+        const int sf = pitch - neck.open[s];
+        if (s == at.string || !Playable(neck, sf)) continue;
+        out.push_back({s, ChartFret(neck, sf), at.midi, false});
+    }
     return out;
 }
 
