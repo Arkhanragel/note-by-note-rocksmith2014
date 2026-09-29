@@ -12,7 +12,7 @@ A free, fan-made mod for **Rocksmith 2014 Edition - Remastered** (PC, Steam): th
 
 - **Waits for you.** When a note reaches the strike line and you haven't played it, the song pauses (music and highway together) until you play the right note. Notes played on time don't stop anything.
 - **Tells you what to play** while it waits: the string (by its highway colour) and fret, a small tab, and for chords the name and shape. After a wrong note it says how to fix it ("move up 2 frets", "that's the orange string").
-- **Shows the music coming up** as guitar tab, with bar lines, beats and rhythm (stems and beams). It can scroll, turn pages, or use up to four rows (the next pages wait in the rows below, each starting with a dimmed bit of the page before).
+- **Shows the music coming up** as guitar tab, with bar lines, beats and rhythm (stems and beams). It can scroll past a fixed line, or show pages that stand still while a cursor moves over them. With pages you can use up to **four rows**: the next pages already wait in the rows below, so there's no page turn to wait for. Each new page starts by repeating the end of the page before it (how much is up to you), dimmed, and while the cursor plays that part a dimmed copy of the cursor shows on the next row too, so your eyes can move down in time. The cursor stops exactly on the note the song waits for, and the note to play is highlighted.
 - **Follows the game.** It uses the difficulty (Dynamic Difficulty) you are playing at. Tested mostly with guitar in Learn a Song; Riff Repeater and bass are supported, but less tested.
 - **In-game menu (F8):** switch the mode on/off, wait for chords too or only single notes, timing, and tab and display options. You can drag and resize everything with the mouse while the menu is open. Colour themes (Default, High contrast, Midnight, Vintage, Paper), and any colour can be changed with a colour wheel or a hex code; the string colours stay the game's. F9 skips the note it's waiting for.
 - Extras: optionally closes the Ubisoft login popups at start-up, plays the start-up logos faster, and works around one of the game's own random crashes.
@@ -87,7 +87,7 @@ Thank you!
 - **Waiting:** the song is paused by calling the game's audio engine (Wwise) to pause the music event, and holding the song clock. Nothing is seeked, so music and highway stay in sync. The game's code is never modified: it's protected, and the mod only reads and writes data and calls existing functions.
 - **Drawing:** a Direct3D 9 hook with [Dear ImGui](https://github.com/ocornut/imgui) draws the banner, tab, clock and menu ([mod/nbn/overlay.cpp](mod/nbn/overlay.cpp)).
 
-The development log with all the reverse-engineering notes is in [BITACORA.md](BITACORA.md).
+**For modders:** [docs/TECHNICAL.md](docs/TECHNICAL.md) has the details: addresses and object layouts for the current build, how the song clock works, how the song is paused without the pause screen, the chart and Dynamic Difficulty in memory, the guitar tap's shared-memory format, the overlay hooks, the start-up helpers, the fix for the game's own random crash, and what RSMods would need to host Note-by-Note. The day-by-day development log, with the dead ends, is [BITACORA.md](BITACORA.md).
 
 ## Building from source
 
