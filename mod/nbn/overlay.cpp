@@ -437,6 +437,10 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
     // exactly the note it waits for (the clock stops a few ms past it, sometimes more than 20 ms, which
     // made the note AFTER it look "next"); while playing, the first one not yet past.
     const double nextFrom = v.waiting && v.waitTime >= 0 ? v.waitTime - 0.002 : now - 0.02;
+    // Where the cursor ("now" line) is drawn: while waiting, ON the waited note. The song stops a
+    // little past it (chords: up to 200 ms while the chord detector decides), which put the line
+    // visibly to the right of the note it was waiting for.
+    const double cursorT = v.waiting && v.waitTime >= 0 ? v.waitTime : now;
 
     // What gets drawn: one item per note or chord. With "spread" on, a fast repeat of the same fret
     // on the same string (4+ notes, each within kRunGap of the previous one) becomes ONE item drawn
@@ -506,7 +510,7 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
     auto shrinkFor = [&](double need) { return std::max(kMinNote, std::min(1.0, 1.0 / need)); };
     auto zoomFor = [&](double need) { return std::max(1.0, need * shrinkFor(need)); };
     static double s_zoom = 1.0;  // the zoom need being shown (smoothed)
-    double originT = now;        // time -> x: x = originX + (t - originT) * pxPerS * zoom
+    double originT = cursorT;    // time -> x: x = originX + (t - originT) * pxPerS * zoom
     float originX = nowX;
     // Two rows: the row the cursor is on (current page) and the other one (the next page).
     double nextT = 0, nextNeed = 1.0;  // the next page: song time at its left edge, its zoom need
@@ -598,7 +602,7 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
             dl->AddText(g_fontUi, tiny, ImVec2(labelX, y - ns.y * 0.5f), c, kStringName[str]);
             dl->AddLine(ImVec2(lineL, y), ImVec2(lineR, y), c, 1.5f * s);
         }
-        const float cursorX = timeX(now);  // the "now" line (fixed while scrolling, moving on pages)
+        const float cursorX = timeX(cursorT);  // the "now" line (fixed while scrolling, moving on pages)
         const float staffTop = staffTopY() - 8 * s, staffBottom = staffBotY() + 8 * s;
         dl->PushClipRect(ImVec2(lineL - 4 * s, staffY), ImVec2(lineR + 4 * s, staffY + rowH), true);
 
