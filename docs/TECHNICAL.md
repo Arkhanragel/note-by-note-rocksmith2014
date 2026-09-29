@@ -1,6 +1,6 @@
 # Note-by-Note: technical notes
 
-What Note-by-Note found out about Rocksmith 2014 Remastered and how the mod uses it. Written for other modders, especially the [RSMods](https://github.com/Lovrom8/RSMods) community, whose research this project built on. Everything here was checked on the running game. The full day-by-day log, with the dead ends, is [BITACORA.md](../BITACORA.md).
+What Note-by-Note found out about Rocksmith 2014 Remastered and how the mod uses it. Written for other modders, especially the [RSMods](https://github.com/Lovrom8/RSMods) community, whose research this project built on. Everything here was checked on the running game.
 
 - Game build: **Learn & Play** (Steam, December 2024 onwards, RSMods `LPDecember2024`), PE checksum `0x0176EC34`, link time `0x67497D00`, 24,514,584 bytes. The older Remastered build (Sept 2022, `0x00B13D7C`) is in testing, see [Game builds](#game-builds-and-where-addresses-live).
 - All addresses are **RVAs** (add the exe's load address; the L&P exe uses ASLR). Offsets are hex bytes.

@@ -1,6 +1,6 @@
 // detector.h: note detection for the Note-by-Note mod.
 // A C++ port of tools/detector/pitch.py + tracker.py, with the same algorithms and parameters
-// (tuned on real recordings; see BITACORA.md). Keep both versions in sync.
+// (tuned on real recordings). Keep both versions in sync.
 //
 //   Yin()           monophonic pitch (YIN with an octave-error guard)
 //   OnsetDetector   "a new pick attack happened" (energy jump over the recent minimum)

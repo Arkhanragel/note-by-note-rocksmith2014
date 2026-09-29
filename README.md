@@ -87,7 +87,7 @@ Thank you!
 - **Waiting:** the song is paused by calling the game's audio engine (Wwise) to pause the music event, and holding the song clock. Nothing is seeked, so music and highway stay in sync. The game's code is never modified: it's protected, and the mod only reads and writes data and calls existing functions.
 - **Drawing:** a Direct3D 9 hook with [Dear ImGui](https://github.com/ocornut/imgui) draws the banner, tab, clock and menu ([mod/nbn/overlay.cpp](mod/nbn/overlay.cpp)).
 
-**For modders:** [docs/TECHNICAL.md](docs/TECHNICAL.md) has the details: addresses and object layouts for the current build, how the song clock works, how the song is paused without the pause screen, the chart and Dynamic Difficulty in memory, the guitar tap's shared-memory format, the overlay hooks, the start-up helpers, the fix for the game's own random crash, and what RSMods would need to host Note-by-Note. The day-by-day development log, with the dead ends, is [BITACORA.md](BITACORA.md).
+**For modders:** [docs/TECHNICAL.md](docs/TECHNICAL.md) has the details: addresses and object layouts for the current build, how the song clock works, how the song is paused without the pause screen, the chart and Dynamic Difficulty in memory, the guitar tap's shared-memory format, the overlay hooks, the start-up helpers, the fix for the game's own random crash, and what RSMods would need to host Note-by-Note.
 
 ## Building from source
 
@@ -114,7 +114,7 @@ Everything is 32-bit (the game is a 32-bit program). Layout:
 
 ## Plans
 
-Left-handed tab options, theme files for sharing skins, capo-free play together with pitch-shifting mods, working alongside (or inside) [RSMods](https://github.com/Lovrom8/RSMods), and an audio-to-CDLC tool. See the "Feature backlog" in [BITACORA.md](BITACORA.md).
+Left-handed tab options, theme files for sharing skins, capo-free play together with pitch-shifting mods, working alongside (or inside) [RSMods](https://github.com/Lovrom8/RSMods), and an audio-to-CDLC tool.
 
 ## Credits
 

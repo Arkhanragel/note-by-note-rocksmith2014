@@ -14,7 +14,7 @@
 //       F12 = switch off the probe's hooks (safety switch)
 //
 // BACKGROUND
-// - Addresses: RSMods' research for the "LPDecember2024" build (see BITACORA.md). They're
+// - Addresses: RSMods' research for the "LPDecember2024" build (see docs/TECHNICAL.md). They're
 //   relative to the exe's load address ("base"), which is why we add GetModuleHandle(NULL).
 // - A "pointer chain" means: start at base+X, read the pointer stored there, add an
 //   offset, read again... The game allocates its objects dynamically, so the only fixed

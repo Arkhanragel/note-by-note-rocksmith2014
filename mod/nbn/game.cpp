@@ -78,7 +78,7 @@ struct Layout {
                                 // few seconds with those notes greyed). RSMods' ptr_greyOutNoteTimer
 };
 
-// Learn & Play, all verified (BITACORA: "the freeze mechanism", "Song data", test 24). Other
+// Learn & Play, all verified (docs/TECHNICAL.md: "Object layouts", "Pausing the song..."). Other
 // builds start from these until their report says otherwise.
 constexpr Layout kLayoutLearnAndPlay = {
     {0x28, 0x8C, 0x0}, {0x28, 0x8C}, {0xBC, 0x0},
@@ -100,7 +100,7 @@ struct Build {
 };
 
 constexpr Build kBuilds[] = {
-    // Ours: every address verified by disassembly (BITACORA "the freeze mechanism").
+    // Ours: every address verified by disassembly (docs/TECHNICAL.md, "Pausing the song without a pause screen").
     {"Learn & Play (December 2024)", 0x0176EC34, 0x67497D00, true,
      {0x00F6062C, 0x00F60514, 0x00DA0E70, 0x00AC4870, 0x00AC4900, 0x00ABFE80},
      kLayoutLearnAndPlay},

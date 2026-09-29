@@ -5,7 +5,7 @@
 // file, see Rocksmith2014.NET's NoteMask) plus a few fields for the technique's details. In game
 // memory (Dec 2024 build) those are at: +0x0 mask, +0x34 slide-to fret (int8, -1 = none), +0x35
 // unpitched-slide-to fret, +0x40 the largest bend (float, in steps: 0.5 = a half step, 1 = a whole
-// step), found 2026-09-29 by dumping the slide/bend notes of Ode to Joy (tools, BITACORA).
+// step), found 2026-09-29 by dumping the slide/bend notes of a song from memory.
 //
 // Sequences: a note marked "parent" flows into the next note on the same string ("child") without
 // picking again (a vibrato that ends in a slide, a slide into a pull-off...). Sequence() puts the

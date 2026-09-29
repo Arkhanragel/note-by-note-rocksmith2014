@@ -1,7 +1,7 @@
 """memread.py: read Rocksmith2014.exe memory from OUTSIDE the game (dev tool, like Cheat Engine).
 
 Uses OpenProcess + ReadProcessMemory, so nothing is injected. All addresses are RVAs of the exe
-(see BITACORA.md). Run with the 32-bit or 64-bit Python in .venv:
+(see docs/TECHNICAL.md). Run with the 32-bit or 64-bit Python in .venv:
 
     python tools/memread.py song        # song object + song data header, while a song is playing
     python tools/memread.py hex <addr> <n>

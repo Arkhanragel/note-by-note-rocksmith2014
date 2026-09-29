@@ -2,7 +2,7 @@
 //
 // Verified build: Steam "Learn & Play" (December 2024, RSMods "LPDecember2024"): every address was
 // checked by disassembling a memory dump of the running game (the exe is encrypted on disk and
-// protected by VMProtect; see BITACORA.md, "the freeze mechanism"). Other builds (the older
+// protected by VMProtect; see docs/TECHNICAL.md, "Pausing the song without a pause screen"). Other builds (the older
 // Remastered of September 2022) are handled by finding the same addresses by byte pattern; they
 // only run in test mode until verified, and NoteByNote_report.txt says what was found.
 // Nothing here modifies game CODE: we only read/write game DATA and call game functions.
