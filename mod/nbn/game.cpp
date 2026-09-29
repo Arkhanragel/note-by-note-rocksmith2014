@@ -406,9 +406,13 @@ bool Init(bool allowUnverified, bool patternsOnly) {
     g_imageSize = nt->OptionalHeader.SizeOfImage;
     WIN32_FILE_ATTRIBUTE_DATA fa{};
     GetFileAttributesExA(exe, GetFileExInfoStandard, &fa);
-    Log("game: %s base=0x%08X checksum=0x%08X header=0x%08X time=0x%08X size=%lu", exe, (unsigned)g_base, checksum,
+    // Only the file name goes into the log and the report (testers send them): the folder path can
+    // hold the player's user name, and the version is told by the numbers, not by where it is.
+    const char* slash = std::strrchr(exe, '\\');
+    const char* exeName = slash ? slash + 1 : exe;
+    Log("game: %s base=0x%08X checksum=0x%08X header=0x%08X time=0x%08X size=%lu", exeName, (unsigned)g_base, checksum,
         headerSum, timestamp, fa.nFileSizeLow);
-    report::Line("Game: %s", exe);
+    report::Line("Game: %s", exeName);
     report::Line("Exe: checksum 0x%08X, header checksum 0x%08X, link time 0x%08X, %lu bytes, loaded at 0x%08X",
                  checksum, headerSum, timestamp, fa.nFileSizeLow, (unsigned)g_base);
 

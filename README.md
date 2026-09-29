@@ -74,7 +74,7 @@ Many players still run the **older Rocksmith 2014 Remastered** (September 2022; 
 
    **Where:** open an [issue](../../issues/new) called *"Older version report"*, say what you saw on screen (did the song stop? was the banner and tab shown? anything strange?), and attach both files.
 
-**Before you post:** the files contain no personal data: only the game's version numbers, the names of the songs you opened and your game folder's path (for example `C:\Program Files (x86)\Steam\...`); if that path has your name in it, feel free to replace it. The files never contain game files, songs or charts.
+**Before you post:** the files contain no personal data: only the game's version numbers, the names of the songs you opened and what the mod found. No folder paths, and never game files, songs or charts. Have a look at them in Notepad if you like.
 
 **Afterwards:** set both lines back to `0`, or uninstall (run the setup again and press **Uninstall**: every game file it changed is put back as it was; your `NoteByNote.ini` and the log stay unless you delete them). If the report shows everything works, the next version will switch the older game version on for everyone, and you'll be credited as a tester (tell me if you'd rather not be).
 

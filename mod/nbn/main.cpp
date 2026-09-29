@@ -356,7 +356,7 @@ public:
             std::fwrite(&s, 2, 1, f);
         }
         std::fclose(f);
-        Log("  (saved the audio of this wait: %s)", Narrow(dir + name).c_str());
+        Log("  (saved the audio of this wait: NoteByNote_debug\\%s)", Narrow(name).c_str());  // no folder path in the log
     }
 
 private:
