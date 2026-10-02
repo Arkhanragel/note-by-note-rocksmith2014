@@ -842,6 +842,38 @@ NeckPic FitNeck(const View& v, const Settings& st, float s, const BannerBox& b) 
     return f < 1 ? NeckPic(v, st, s * f, true) : neck;
 }
 
+// "870 ms": a hold time for the banner.
+std::string Millis(double s) { return std::to_string((int)std::lround(std::max(0.0, s) * 1000.0)) + " ms"; }
+
+// The banner's line about holding the note ("Hold:  let it ring for 870 ms"); empty for a short note.
+std::vector<Seg> HoldWords(const View& v) {
+    if (v.sustain < kHoldMinS) return {};
+    return {{"Hold:  ", Col(theme::kChord)}, {"let it ring for ", Col(theme::kText)}, {Millis(v.sustain), Col(theme::kHighlight)}};
+}
+
+// The countdown of a held note just played, on the banner's last line instead of the keys: "Keep
+// holding fret 9", a bar that empties, "540 ms". Runs on the song's clock (it stops when the song
+// does). Returns false when no note is being held now.
+bool DrawHoldCountdown(ImDrawList* dl, const View& v, const Settings& st, ImVec2 pos, float size, float s) {
+    if (v.holdFrom < 0 || v.holdLen < kHoldMinS || v.songTime < v.holdFrom - 0.05) return false;
+    const double left = v.holdFrom + v.holdLen - v.songTime;
+    if (left <= 0) return false;
+    const int n = v.bass ? 4 : 6;
+    const int str = std::max(0, std::min(n - 1, v.holdString));
+    const ImU32 col = v.holdName.empty() ? kStringColor[str] : Col(theme::kChord);
+    std::vector<Seg> label = {{"Keep holding ", Col(theme::kText)}};
+    if (!v.holdName.empty()) label.push_back({v.holdName, col});
+    else label.push_back({v.holdFret == 0 ? StringLabel(st, str, n) + " open" : "fret " + std::to_string(v.holdFret), col});
+    DrawSegs(dl, g_fontUi, size, pos, label);
+    const float x0 = pos.x + SegsWidth(g_fontUi, size, label) + 12 * s, barW = 150 * s, h = size * 0.5f;
+    const float y0 = pos.y + size * 0.3f, f = (float)std::min(1.0, left / v.holdLen);
+    dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x0 + barW, y0 + h), Col(theme::kPanel, 255), h * 0.5f);
+    dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x0 + barW * f, y0 + h), col, h * 0.5f);
+    dl->AddRect(ImVec2(x0, y0), ImVec2(x0 + barW, y0 + h), Col(theme::kTextDim, 160), h * 0.5f, 0, 1 * s);
+    dl->AddText(g_fontBold, size, ImVec2(x0 + barW + 10 * s, pos.y), Col(theme::kText), Millis(left).c_str());
+    return true;
+}
+
 // The "waiting" banner: what to play in words (+ colour), and as a piece of fretboard or a tiny tab.
 // S = screen scale (height / 1080); sizes also follow the player's banner size.
 void DrawBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 ds) {
@@ -851,11 +883,19 @@ void DrawBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVe
     const ImU32 col = kStringColor[i];
     const float big = 46 * s, mid = 26 * s, tiny = 20 * s;
 
+    // How to play it (slide, bend, hammer-on...), from the song: "Slide: then slide UP to fret 9 ..."
+    // Several steps (a note linked into the next ones: a vibrato that ends in a slide) are numbered.
+    const auto steps = v.chain.empty() ? technique::Describe(v.tech, v.fret) : technique::Sequence(v.chain);
+    // The first line starts with what to do: the first technique ("Slide fret 9 on string 3"), "Hold" for a
+    // long plain note, else "Play".
+    std::string verb = "Play ";
+    if (!steps.empty()) verb = (steps[0].name == "Muted" ? std::string("Mute") : steps[0].name) + " ";
+    else if (v.sustain >= kHoldMinS) verb = "Hold ";
     char fret[32];
     std::snprintf(fret, sizeof(fret), "fret %d", v.fret);
     std::vector<Seg> line1;
-    if (v.fret == 0) line1 = {{"Play ", Col(theme::kText)}, {StringLabel(st, i, n), col}, {" open", Col(theme::kText)}};
-    else line1 = {{"Play ", Col(theme::kText)}, {fret, Col(theme::kText)}, {" on ", Col(theme::kText)}, {StringLabel(st, i, n), col}};
+    if (v.fret == 0) line1 = {{verb, Col(theme::kText)}, {StringLabel(st, i, n), col}, {" open", Col(theme::kText)}};
+    else line1 = {{verb, Col(theme::kText)}, {fret, Col(theme::kText)}, {" on ", Col(theme::kText)}, {StringLabel(st, i, n), col}};
 
     // The note's name, only with the small tab (the fretboard's dot has it in a tag).
     std::vector<Seg> line2;
@@ -865,11 +905,11 @@ void DrawBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVe
     // How to play it (slide, bend, hammer-on...), from the song: "Slide: then slide UP to fret 9 ..."
     // Several steps (a note linked into the next ones: a vibrato that ends in a slide) are numbered.
     std::vector<std::vector<Seg>> linesT = HandLines(v, st);
-    const auto steps = v.chain.empty() ? technique::Describe(v.tech, v.fret) : technique::Sequence(v.chain);
     for (size_t k = 0; k < steps.size(); ++k) {
         const std::string num = steps.size() > 1 ? std::to_string(k + 1) + ".  " : "";
         linesT.push_back({{num + steps[k].name + ":  ", Col(theme::kChord)}, {steps[k].how, Col(theme::kText)}});
     }
+    if (const auto hold = HoldWords(v); !hold.empty()) linesT.push_back(hold);
     linesT = WrapLines(g_fontUi, mid, linesT, kBannerTextW * s);  // a long one takes two lines (the box has room)
 
     // A quick repeat of this note: "x5" after the first line, counting down as they're played. Room is
@@ -913,7 +953,7 @@ void DrawBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVe
         DrawSegs(dl, g_fontUi, mid * k, t, lh);
         t.y += (mid + 10 * s) * k;
     }
-    DrawSegs(dl, g_fontUi, tiny * k, ImVec2(t.x, b.keysY), line3);
+    if (!DrawHoldCountdown(dl, v, st, ImVec2(t.x, b.keysY), tiny * k, ks)) DrawSegs(dl, g_fontUi, tiny * k, ImVec2(t.x, b.keysY), line3);
 
     // Picture: a piece of fretboard, or a small tab (thinnest string on top, like tab and sheet music),
     // centred in its slot.
@@ -995,6 +1035,7 @@ void DrawChordBanner(ImDrawList* dl, const View& v, const Settings& st, float S,
         const std::string num = steps.size() > 1 ? std::to_string(k + 1) + ".  " : "";
         linesT.push_back({{num + steps[k].name + ":  ", gold}, {steps[k].how, Col(theme::kText)}});
     }
+    if (const auto hold = HoldWords(v); !hold.empty()) linesT.push_back(hold);
     linesT = WrapLines(g_fontUi, mid, linesT, kBannerTextW * s);
 
     // A quick repeat of this chord (a power chord strummed again and again): "x5" after the first line,
@@ -1043,7 +1084,7 @@ void DrawChordBanner(ImDrawList* dl, const View& v, const Settings& st, float S,
         DrawSegs(dl, g_fontUi, mid * k, t, lh);
         t.y += (mid + 10 * s) * k;
     }
-    DrawSegs(dl, g_fontUi, tiny * k, ImVec2(t.x, b.keysY), line3);
+    if (!DrawHoldCountdown(dl, v, st, ImVec2(t.x, b.keysY), tiny * k, s * k)) DrawSegs(dl, g_fontUi, tiny * k, ImVec2(t.x, b.keysY), line3);
 
     // Picture, centred in its slot.
     if (st.bannerNeck) {
@@ -1206,6 +1247,7 @@ bool DrawCalmBanner(ImDrawList* dl, const View& v, const Settings& st, bool on, 
         s_note.string = v.string;
         s_note.fret = v.fret;
         s_note.midi = v.midi;
+        s_note.sustain = v.sustain;
         s_note.repeatLeft = v.repeatLeft;
         s_note.repeatTotal = v.repeatTotal;
         s_note.tech = v.tech;
@@ -1224,6 +1266,14 @@ bool DrawCalmBanner(ImDrawList* dl, const View& v, const Settings& st, bool on, 
         s_note.heardAt = v.heardAt;
         s_have = true;
         s_lastWanted = now;
+    }
+    {  // the hold countdown runs on the song's clock, whatever the banner shows
+        s_note.songTime = v.songTime;
+        s_note.holdFrom = v.holdFrom;
+        s_note.holdLen = v.holdLen;
+        s_note.holdFret = v.holdFret;
+        s_note.holdString = v.holdString;
+        s_note.holdName = v.holdName;
     }
     const bool keep = on && v.inSong && s_have && now - s_lastWanted < kBridgeMs;
     s_fade.Step(want || keep, ImGui::GetIO().DeltaTime, 0.2f, 0.4f);
@@ -1890,6 +1940,20 @@ void DrawFretBox(const TabStaff& tab, const TabShow& sh, const TabItem& it, int 
     if (next) tab.dl->AddRect(ImVec2(x - bw - 2 * s, y - bh - 2 * s), ImVec2(x + bw + 2 * s, y + bh + 2 * s),
                             Col(theme::kHighlight, (int)(255 * sh.pulse * sh.highlight)), 6 * s, 0, 2.5f * s);
     else tab.dl->AddRect(ImVec2(x - bw, y - bh), ImVec2(x + bw, y + bh), col, 5 * s, 0, 2 * s);
+    if (it.note->streak >= 0 && it.note->need > 0) {
+        // A trouble spot's note: one dot per good try needed, filled green for each time it was played on
+        // time in a row since it went wrong (all filled = cleared).
+        const int need = std::min(it.note->need, 10), got = std::min(it.note->streak, need);
+        const float z = std::max(0.9f, tab.nsz), r = 3.8f * s * z, step = 10.5f * s * z, dy = y + bh + r + 3 * s;
+        const float dx0 = x - (need - 1) * step * 0.5f;
+        const float da = std::max(a, 0.6f);
+        for (int k = 0; k < need; ++k) {
+            const ImVec2 c(dx0 + k * step, dy);
+            tab.dl->AddCircleFilled(c, r + 1.2f * s, Col(theme::kPanel, (int)(230 * da)));
+            if (k < got) tab.dl->AddCircleFilled(c, r, IM_COL32(70, 200, 100, (int)(255 * da)));
+            else tab.dl->AddCircle(c, r - 0.4f * s, Col(theme::kText, (int)(200 * da)), 0, 1.6f * s);
+        }
+    }
     if (run.empty()) {
         tab.dl->AddText(g_fontBold, tab.fs, ImVec2(x - ls.x * 0.5f, y - ls.y * 0.5f), Col(theme::kText, (int)(255 * a)),
                       label.c_str());
@@ -2548,7 +2612,8 @@ void MenuPractice(Settings& e, const View& v, float s, bool* forget) {
                             "places where the song had to wait for you, longer waits and skipped notes counting more.");
     } else {
         ImGui::TextUnformatted("Where the song waited for you most (red on the practice bar, on the game's progress "
-                               "bar). A note you play on time often enough in a row (below) is taken off.");
+                               "bar). A note you play on time often enough in a row (below) is cleared; on the tab, the "
+                               "dots under a note fill up green each time you play it right.");
         for (size_t i : spots) {
             const Range r = phrase(i);
             ImGui::PushID((int)i);
@@ -2559,6 +2624,10 @@ void MenuPractice(Settings& e, const View& v, float s, bool* forget) {
             ImGui::ProgressBar(v.phraseHeat[i], ImVec2(220 * s, ImGui::GetFrameHeight() * 0.5f), "");
             ImGui::PopStyleColor();
             ImGui::SameLine();
+            if (i < v.phraseCleared.size() && v.phraseCleared[i].second > 0) {
+                ImGui::TextDisabled("%d of %d notes cleared", v.phraseCleared[i].first, v.phraseCleared[i].second);
+                ImGui::SameLine();
+            }
             if (ImGui::SmallButton("Practise")) SetPracticeParts({r});
             ImGui::PopID();
         }

@@ -42,10 +42,10 @@ int main() {
     st.Open(dir, name + "_x");
     st.Open(dir, name);
     // Phrases 0-10, 10-20, 20-30. A skip in the first, two waits in the second, on time in the third.
-    st.Record(1.0, Result::kSkipped, 0, false);
-    st.Record(12.0, Result::kWaited, 2, false);
-    st.Record(13.0, Result::kWaited, 0, false);
-    st.Record(25.0, Result::kOnTime, 0, false);
+    st.Record(1.0, Result::kSkipped, 0, false, 2);
+    st.Record(12.0, Result::kWaited, 2, false, 2);
+    st.Record(13.0, Result::kWaited, 0, false, 2);
+    st.Record(25.0, Result::kOnTime, 0, false, 2);
     const std::vector<std::pair<double, double>> phrases{{0, 10}, {10, 20}, {20, 30}};
     auto spots = st.Spots(phrases, 2);
     expect("phrase 1 is the hardest", spots[0].heat, 1);
@@ -56,19 +56,27 @@ int main() {
     expect("this time: longest wait", st.ThisRun().longestWait, 2);
 
     // Playing the skipped note on time: it fades, and is cleared after "clear after" times in a row.
-    st.Record(1.0, Result::kOnTime, 0, false);
+    st.Record(1.0, Result::kOnTime, 0, false, 2);
     expect("skipped note, 1 of 2 good tries", st.Spots(phrases, 2)[0].score, 0.5);
     expect("skipped note, 1 of 3 good tries", st.Spots(phrases, 3)[0].score, 2.0 / 3.0);
-    st.Record(1.0, Result::kOnTime, 0, false);
+    st.Record(1.0, Result::kOnTime, 0, false, 2);
     spots = st.Spots(phrases, 2);
     expect("skipped note after 2 of 2: cleared", spots[0].score, 0);
     expect("now phrase 2 is the hardest", spots[1].heat, 1);
+    expect("phrase 1: 1 of 1 notes cleared", spots[0].cleared, 1);
+    expect("phrase 2: 0 of 2 notes cleared", spots[1].troubled - spots[1].cleared, 2);
+    expect("this time: 1 note cleared", st.ThisRun().cleared, 1);
+    int streak = -1;
+    expect("progress of the cleared note", st.Progress(1.0, &streak) && streak == 2, 1);
+    expect("no progress for a note never wrong", st.Progress(25.0, &streak), 0);
+    expect("but its streak: 1", st.Streak(25.0), 1);
+    expect("streak of a note not in the record", st.Streak(99.0), 0);
     expect("with 3 needed: a third left", st.Spots(phrases, 3)[0].score, 1.0 / 3.0);
     // Going wrong again starts the count over.
-    st.Record(1.0, Result::kWaited, 0, false);
+    st.Record(1.0, Result::kWaited, 0, false, 2);
     expect("wrong again: 0.5 x 1 + 0.5 x 0.25", st.Spots(phrases, 2)[0].score, 0.625);
-    st.Record(1.0, Result::kOnTime, 0, false);
-    st.Record(1.0, Result::kOnTime, 0, false);
+    st.Record(1.0, Result::kOnTime, 0, false, 2);
+    st.Record(1.0, Result::kOnTime, 0, false, 2);
 
     // Saved and loaded again.
     st.Save();

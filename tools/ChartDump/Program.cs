@@ -70,6 +70,26 @@ static class Program
                 Scan(args[1]);
                 return 0;
 
+            case "notes": // notes <psarc> <sng> <level> <from s> <to s>: every field of the notes of one level
+                using (var psarc = OpenPsarc(args[1]))
+                {
+                    var name = psarc.Manifest.First(n => n.EndsWith(".sng") && n.Contains(args[2], StringComparison.OrdinalIgnoreCase));
+                    var sng = ReadSng(psarc, name);
+                    int want = int.Parse(args[3]);
+                    double from = double.Parse(args[4], System.Globalization.CultureInfo.InvariantCulture);
+                    double to = double.Parse(args[5], System.Globalization.CultureInfo.InvariantCulture);
+                    var lv = sng.Levels.First(l => l.Difficulty == want);
+                    var inv = System.Globalization.CultureInfo.InvariantCulture;
+                    foreach (var n in lv.Notes.Where(n => n.Time >= from && n.Time <= to))
+                        Console.WriteLine(string.Format(inv,
+                            "{0:F3} s{1} f{2} sus={3:F3} slideTo={4} unpitchTo={5} parentPrev={6} next={7} prev={8} " +
+                            "anchor={9}/{10} lh={11} bend={12} pick={13} mask=[{14}]",
+                            n.Time, n.StringIndex, n.Fret, n.Sustain, n.SlideTo, n.SlideUnpitchTo, n.ParentPrevNote,
+                            n.NextIterNote, n.PrevIterNote, n.AnchorFret, n.AnchorWidth, n.LeftHand, n.MaxBend,
+                            n.PickDirection, n.Mask));
+                }
+                return 0;
+
             case "levels": // levels <psarc> <sng>: phrases, phrase iterations and notes per difficulty level
                 using (var psarc = OpenPsarc(args[1]))
                 {

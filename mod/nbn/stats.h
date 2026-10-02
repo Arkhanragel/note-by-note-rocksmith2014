@@ -30,6 +30,8 @@ struct Spot {
     double start = 0, end = 0;  // song seconds
     float heat = 0;             // 0..1, relative to the hardest phrase of the song (1 = the hardest)
     float score = 0;            // the sum of its notes' trouble
+    int troubled = 0;           // its notes that ever went wrong, and how many of them are cleared
+    int cleared = 0;            // (played on time clearAfter times in a row since)
 };
 
 class SongStats {
@@ -37,7 +39,15 @@ public:
     // Loads the record of a song (file = dir + name + ".txt"); a new song starts empty. Saves the
     // previous song first if it changed.
     void Open(const std::wstring& dir, const std::string& name);
-    void Record(double t, Result r, double waitS, bool wrongNote);
+    // Returns true when this try cleared the note (its clearAfter-th time on time in a row after going
+    // wrong).
+    bool Record(double t, Result r, double waitS, bool wrongNote, int clearAfter);
+
+    // A note that went wrong before: true, and how many times in a row it was played on time since.
+    // False for a note that never went wrong (or isn't in the record).
+    bool Progress(double t, int* streak) const;
+    // Times in a row any note was played on time (0 = not in the record yet, or it just went wrong).
+    int Streak(double t) const;
     void Save();            // if anything changed since the last save
     void Forget();          // this song's record is deleted
     bool Empty() const { return notes_.empty(); }
@@ -50,6 +60,7 @@ public:
     // This time in the song (since Open or ResetRun): stops, skips, longest wait and where.
     struct Run {
         int stops = 0, skips = 0, onTime = 0, missed = 0;
+        int cleared = 0;  // notes that reached "cleared" this time
         double longestWait = 0, longestAt = -1;
     };
     const Run& ThisRun() const { return run_; }

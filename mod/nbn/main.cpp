@@ -28,6 +28,7 @@
 #include <cmath>
 #include <cstdint>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -605,9 +606,13 @@ struct MainLoop {
     const std::wstring statsDir = DllDir() + L"NoteByNote_stats\\";
     stats::SongStats songStats;
     std::vector<float> phraseHeat;    // per phrase iteration (chart.pis), from songStats
+    std::vector<std::pair<int, int>> phraseCleared;  // and its notes cleared, of those that went wrong
     std::string runSummary;           // this time in the song, for the menu
     bool statsChanged = true;         // phraseHeat / runSummary must be worked out again
     std::map<int, int> noteMarks;     // how each note went this time (ms -> TabNote::mark), for the tab
+    std::set<int> clearedNow;         // notes cleared this time (ms): the tab keeps their dots, all filled
+    Target held;                      // the last note played that rings at least overlay::kHoldMinS (the
+    bool holding = false;             // banner counts its sustain down: "Keep holding fret 9 ... 540 ms")
     DWORD lastHeardTick = 0;          // when the guitar last gave a note (a miss counts only while playing)
 
     explicit MainLoop(const Config& c) : cfg(c), st(c.initial) {
@@ -709,13 +714,26 @@ struct MainLoop {
 
     // A note went one way or another (stats.h): kept for the trouble spots.
     void RecordNote(double t, stats::Result r, double waitS = 0, bool wrongNote = false) {
-        songStats.Record(t, r, waitS, wrongNote);
+        if (songStats.Record(t, r, waitS, wrongNote, st.troubleClear)) {
+            Log("trouble spots: %.3f cleared (%d times on time in a row)", t, st.troubleClear);
+            clearedNow.insert((int)std::lround(t * 1000.0));
+        }
         statsChanged = true;
         noteMarks[(int)std::lround(t * 1000.0)] = r == stats::Result::kOnTime ? 1 : r == stats::Result::kWaited ? 2 : 3;
     }
 
+    // A note was played: if it rings long enough, the banner counts its sustain down.
+    void StartHold(const Target& x) {
+        if (!LongNote(x)) return;
+        held = x;
+        holding = true;
+    }
+
     // The song went back (a loop starting over, a rewind): the notes from there on are to be played again.
-    void ForgetMarksFrom(double t) { noteMarks.erase(noteMarks.lower_bound((int)std::lround(t * 1000.0)), noteMarks.end()); }
+    void ForgetMarksFrom(double t) {
+        noteMarks.erase(noteMarks.lower_bound((int)std::lround(t * 1000.0)), noteMarks.end());
+        if (holding && held.time >= t) holding = false;
+    }
 
     // The trouble per phrase (the practice bar's red) and the menu's "this time" line, worked out again
     // only after something changed.
@@ -726,7 +744,11 @@ struct MainLoop {
         if (chartOk)
             for (const auto& p : chart.pis) phrases.emplace_back(p.start, p.end);
         phraseHeat.clear();
-        for (const auto& sp : songStats.Spots(phrases, st.troubleClear)) phraseHeat.push_back(sp.heat);
+        phraseCleared.clear();
+        for (const auto& sp : songStats.Spots(phrases, st.troubleClear)) {
+            phraseHeat.push_back(sp.heat);
+            phraseCleared.emplace_back(sp.cleared, sp.troubled);
+        }
         const auto& r = songStats.ThisRun();
         runSummary.clear();
         if (r.stops + r.skips + r.onTime + r.missed == 0) return;
@@ -734,6 +756,7 @@ struct MainLoop {
         std::snprintf(buf, sizeof(buf), "%d played on time, %d waited for, %d skipped", r.onTime, r.stops, r.skips);
         runSummary = buf;
         if (r.missed) runSummary += ", " + std::to_string(r.missed) + " not played";
+        if (r.cleared) runSummary += "; " + std::to_string(r.cleared) + (r.cleared == 1 ? " note" : " notes") + " cleared";
         if (r.longestAt >= 0) {
             const int at = (int)r.longestAt;
             std::snprintf(buf, sizeof(buf), "; the longest wait: %.1f s at %d:%02d", r.longestWait, at / 60, at % 60);
@@ -764,6 +787,14 @@ struct MainLoop {
         std::copy(std::begin(note.frets), std::end(note.frets), v.frets);
         std::copy(std::begin(note.notes), std::end(note.notes), v.notes);
         v.midi = (!note.chord && !note.midi.empty()) ? note.midi[0] : -1;
+        v.sustain = LongNote(note) ? note.sustain : 0;  // (the banner's "Hold" only for a long one)
+        if (holding) {
+            v.holdFrom = held.time;
+            v.holdLen = held.sustain;
+            v.holdFret = held.fret;
+            v.holdString = held.string;
+            v.holdName = held.chord ? (held.chordName.empty() ? std::string("the chord") : held.chordName) : "";
+        }
         v.tech = note.tech;
         v.techFret = note.techFret;
         for (int s = 0; s < 6; ++s) v.strings[s] = note.chord ? note.strings[s] : technique::Technique{};
@@ -792,6 +823,7 @@ struct MainLoop {
             for (const auto& p : chart.pis) v.phraseStarts.push_back(p.start);
         UpdateTroubleSpots();
         v.phraseHeat = phraseHeat;
+        v.phraseCleared = phraseCleared;
         v.runSummary = runSummary;
         // The count-in's number: beats left (3, 2, 1).
         v.countIn = (frozen && countInEnd && countInBeat) ? (int)((countInEnd - std::min(countInEnd, now) + countInBeat - 1) / countInBeat) : 0;
@@ -860,6 +892,16 @@ struct MainLoop {
             if (st.tabMarks) {
                 const auto m = noteMarks.find((int)std::lround(t->time * 1000.0));
                 if (m != noteMarks.end()) tn.mark = m->second;
+            }
+            // Progress dots: every note the mode waits for in a trouble spot (a red phrase), and any note that
+            // went wrong until it's cleared (and this time, after): its good tries in a row so far. (Only the
+            // notes that went wrong had them at first; the user missed them on the rest of the spot.)
+            int streak = 0;
+            const bool troubled = songStats.Progress(t->time, &streak);
+            const bool inSpot = t->pi >= 0 && t->pi < (int)phraseHeat.size() && phraseHeat[t->pi] > 0 && CanWait(*t);
+            if ((troubled && (streak < st.troubleClear || clearedNow.count((int)std::lround(t->time * 1000.0)))) || inSpot) {
+                tn.streak = troubled ? streak : songStats.Streak(t->time);
+                tn.need = st.troubleClear;
             }
             tabNotes.push_back(tn);
         }
@@ -1237,6 +1279,8 @@ struct MainLoop {
                 songStats.ResetRun();
                 statsChanged = true;
                 noteMarks.clear();
+                clearedNow.clear();
+                holding = false;
                 clockChecked = false;
                 clockStill = 0;
                 clockTick = 0;
@@ -1458,6 +1502,7 @@ struct MainLoop {
             Log("hit  %.3f %s on time (%+.0f ms, level %d)", after->time, Describe(chart, *after).c_str(),
                 (t - after->time) * 1000.0, after->level);
             RecordNote(after->time, stats::Result::kOnTime);
+            StartHold(*after);
             cursor = after->time;
         }
     }
@@ -1505,6 +1550,7 @@ struct MainLoop {
         Log("hit  %.3f %s on time (%+.0f ms, level %d)", next->time, Describe(chart, *next).c_str(),
             (t - next->time) * 1000.0, next->level);
         RecordNote(next->time, stats::Result::kOnTime);
+        StartHold(*next);
         cursor = next->time;
         return chart.NextTarget(cursor, levels);
     }
@@ -1556,6 +1602,7 @@ struct MainLoop {
         if (!HeardWaitedNote(now)) return;
         Log("HIT  %.3f %s after waiting %.2f s", waitFor.time, Describe(chart, waitFor).c_str(), (now - frozenTick) / 1000.0);
         RecordNote(waitFor.time, stats::Result::kWaited, (now - frozenTick) / 1000.0, waitWrong);
+        StartHold(waitFor);
         // Keep the audio of long waits, of waits with a wrong note (string identification), and of every
         // chord for now (to tune the detection offline).
         if (waitFor.chord || waitWrong || now - frozenTick > 3000) SaveWaitAudio();
@@ -1569,6 +1616,14 @@ struct MainLoop {
             return;
         }
         ReleaseWait();
+    }
+
+    // A note held longer than a usual pick: it rings at least about one beat of the song (a little less
+    // counts: a chart's tails end a bit before the beat), and at least overlay::kHoldMinS. The banner then
+    // says "Hold" and counts it down. (From 0.2 s, almost every note of a riff of eighth notes said "Hold"
+    // (user): those just ring until the next pick.)
+    bool LongNote(const Target& x) const {
+        return x.sustain >= std::max(overlay::kHoldMinS, 0.9 * BeatSeconds(x.time));
     }
 
     // One beat of the song around song time t (from the beat grid), for the count-in; 0.5 s if unknown.

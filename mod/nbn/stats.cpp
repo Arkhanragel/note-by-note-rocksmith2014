@@ -47,12 +47,15 @@ void SongStats::Open(const std::wstring& dir, const std::string& name) {
     }
 }
 
-void SongStats::Record(double t, Result r, double waitS, bool wrongNote) {
-    if (path_.empty()) return;
+bool SongStats::Record(double t, Result r, double waitS, bool wrongNote, int clearAfter) {
+    if (path_.empty()) return false;
     const float x = Trouble(r, waitS, wrongNote);
     Note& n = notes_[(int)std::lround(t * 1000.0)];
+    bool cleared = false;
     if (r == Result::kOnTime) {
         ++n.streak;
+        cleared = n.trouble > 0 && n.streak == std::max(1, clearAfter);
+        run_.cleared += cleared;
     } else {
         n.trouble = n.trouble <= 0 ? x : 0.5f * n.trouble + 0.5f * x;
         n.streak = 0;
@@ -67,6 +70,19 @@ void SongStats::Record(double t, Result r, double waitS, bool wrongNote) {
         run_.longestWait = waitS;
         run_.longestAt = t;
     }
+    return cleared;
+}
+
+int SongStats::Streak(double t) const {
+    const auto it = notes_.find((int)std::lround(t * 1000.0));
+    return it == notes_.end() ? 0 : it->second.streak;
+}
+
+bool SongStats::Progress(double t, int* streak) const {
+    const auto it = notes_.find((int)std::lround(t * 1000.0));
+    if (it == notes_.end() || it->second.trouble <= 0) return false;
+    *streak = it->second.streak;
+    return true;
 }
 
 void SongStats::Save() {
@@ -107,6 +123,10 @@ std::vector<Spot> SongStats::Spots(const std::vector<std::pair<double, double>>&
             const Note& n = it->second;
             const float left = 1.0f - (float)std::min(n.streak, clearAfter) / (float)clearAfter;  // 0 = cleared
             sp.score += n.trouble * left;
+            if (n.trouble > 0) {
+                ++sp.troubled;
+                sp.cleared += n.streak >= clearAfter;
+            }
         }
         best = std::max(best, sp.score);
         out.push_back(sp);

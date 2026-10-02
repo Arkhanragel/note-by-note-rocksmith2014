@@ -132,6 +132,11 @@ Settings WithDefaultLayout(Settings st);
 // The colour in use for a theme slot: the player's own, or else the theme's (0xRRGGBB).
 uint32_t Color(const Settings& st, theme::Slot slot);
 
+// A long note gets "Hold" on the banner: how long, and a countdown once it's played. The main loop sends
+// View::sustain only for a note ringing about a beat or more (MainLoop::LongNote), never under this (s).
+// (Shorter tails are just the note ringing until the next pick.)
+constexpr double kHoldMinS = 0.2;
+
 // One note or chord of the scrolling tab.
 struct TabNote {
     double time = 0;             // song time (s)
@@ -140,6 +145,8 @@ struct TabNote {
     int frets[6] = {-1, -1, -1, -1, -1, -1};  // per string (0 = thickest): -1 = not played
     std::string name;            // chord name ("A5"), empty for single notes / double stops
     double sustain = 0;          // seconds held: drawn as a tail after the fret number
+    int streak = -1;             // a trouble spot's note (it went wrong before): played on time this many times in
+    int need = 0;                // a row since, of `need` to clear it; -1 = not one (drawn as dots under the box)
     int mark = 0;                // how it went (setting tabMarks): 0 = not yet / not waited for, 1 = played
                                  // on time, 2 = the song waited for it, 3 = skipped or missed
     technique::Technique tech[6];  // per string: how it's played (slide, bend, hammer-on...), drawn in tab
@@ -169,6 +176,13 @@ struct View {
     int string = 0;              // 0 = thickest string (low E), like the charts
     int fret = 0;                // 0 = open string
     int midi = -1;               // the note (single notes), for its name ("C", "F#")
+    double sustain = 0;          // how long it rings (s, the tail on the highway); from kHoldMinS the banner
+                                 // says how long to hold it
+    double holdFrom = -1;        // the held note just played (from kHoldMinS): its song time and sustain, for
+    double holdLen = 0;          // the countdown on the banner's last line ("Keep holding fret 9 ... 540 ms");
+    int holdFret = 0;            // holdFrom -1 = none. Fret and string (single notes) or the chord's name
+    int holdString = 0;
+    std::string holdName;        // (chords; "" = a single note)
     int repeatLeft = 1;          // a quick repeat of this note (same string and fret, one right after the
     int repeatTotal = 1;         // other): how many are still to play, counting this one, and how many
                                  // the run has. The banner shows "x5" when the run has 2 or more
@@ -184,6 +198,7 @@ struct View {
     std::vector<float> phraseHeat;     // trouble spots, per phrase iteration (as phraseStarts): 0 = none .. 1 = the
                                        // song's hardest (stats.h); red on the practice bar, listed in the menu
     std::string runSummary;            // this time in the song ("12 played on time, 3 waited for..."), for the menu
+    std::vector<std::pair<int, int>> phraseCleared;  // per phrase iteration: its notes cleared, of those that went wrong
     std::vector<technique::Link> chain;  // the note and the notes linked after it (same string, not picked
                                          // again), for the banner's steps; empty = just `tech`
     bool chord = false;          // waiting for a chord: chordName + frets instead of string/fret
