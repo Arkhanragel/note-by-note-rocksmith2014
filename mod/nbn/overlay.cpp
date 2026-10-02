@@ -43,6 +43,7 @@ struct Shared {
     std::string toast;
     DWORD toastUntil = 0;
     bool skipRequest = false;
+    bool forgetRequest = false;  // the menu's "Forget this song's trouble spots"
     int calibrationRequest = 0;  // 1 = start, 2 = cancel (TakeCalibrationRequest)
     std::vector<Range> ranges;  // the practice parts (song seconds), sorted; empty = the whole song
 } g;
@@ -408,7 +409,7 @@ struct NeckPic {
         top = banner ? 18 * s : rad + 4 * s;
         w = nameW + openW + (hi - lo + 1) * cell + tailW;
         h = top + (n - 1) * gap + 10 * s + 22 * s;  // + the fret numbers
-        if (banner && hand) {
+        if (banner && hand && st.bannerFingers) {
             stripH = 40 * s;
             h += stripH;
         }
@@ -819,7 +820,7 @@ struct BannerBox {
 // textW, textH: the text block at its normal size (s = the banner's scale); keysH: its last line's
 // height (normal size).
 BannerBox BannerLayout(const Settings& st, float S, float s, float textW, float textH, float keysH, ImVec2 ds) {
-    const float tw = kBannerTextW * s, ih = (kBannerInnerH + (st.bannerNeck && st.bannerHand ? kBannerHandH : 0)) * s;
+    const float tw = kBannerTextW * s, ih = (kBannerInnerH + (st.bannerNeck && st.bannerHand && st.bannerFingers ? kBannerHandH : 0)) * s;
     const float pad = kBannerPad * s;
     BannerBox b;
     b.picW = kBannerPicW * s;
@@ -1305,6 +1306,19 @@ void DrawPracticeBar(ImDrawList* dl, const View& v, const Settings& st, float S,
     g_barB = (int)(gb.bottom / sy);
     const bool hover = mouse.x >= x0 - 4 && mouse.x <= x1 + 4 && mouse.y >= gb.top && mouse.y <= gb.bottom;
 
+    // The phrase at song time t: its start and end (the next phrase's start, or the song's end).
+    auto phraseAt = [&](double t) {
+        Range r(t0, t1);
+        for (size_t i = 0; i < v.phraseStarts.size(); ++i) {
+            if (v.phraseStarts[i] > t) break;
+            r.first = v.phraseStarts[i];
+            r.second = i + 1 < v.phraseStarts.size() ? v.phraseStarts[i + 1] : t1;
+        }
+        return r;
+    };
+    bool anyHeat = false;
+    for (float hgt : v.phraseHeat) anyHeat = anyHeat || hgt > 0;
+
     auto snap = [&](double t) {  // to a phrase start within 10 px
         double best = t;
         float bestD = 10 * S;
@@ -1351,6 +1365,7 @@ void DrawPracticeBar(ImDrawList* dl, const View& v, const Settings& st, float S,
     }
     if (!down && s_down) {
         if (!s_dragged && s_part >= 0 && s_end == 0) { parts.erase(parts.begin() + s_part); changed = true; }  // a click on a part
+        else if (!s_dragged && s_part < 0 && s_end == 0 && T(mouse.x) >= t0) parts.push_back(phraseAt(T(mouse.x)));  // on a phrase
         Tidy(&parts);
         changed = true;
         s_end = 0;
@@ -1376,8 +1391,15 @@ void DrawPracticeBar(ImDrawList* dl, const View& v, const Settings& st, float S,
             dl->AddLine(ImVec2(x, gb.top), ImVec2(x, gb.bottom), Col(theme::kPanel, 255), 1.2f * S);
         }
     }
-    if (hover || !parts.empty()) {
+    if (hover || !parts.empty() || anyHeat) {
         dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), Col(theme::kPanel, 170), h * 0.5f);
+        // Trouble spots: each phrase in red, stronger where the player stopped more (stats.h).
+        for (size_t i = 0; i < v.phraseHeat.size() && i < v.phraseStarts.size(); ++i) {
+            if (v.phraseHeat[i] <= 0) continue;
+            const double b = i + 1 < v.phraseStarts.size() ? v.phraseStarts[i + 1] : t1;
+            const int alpha = 70 + (int)(170 * v.phraseHeat[i]);
+            dl->AddRectFilled(ImVec2(X(v.phraseStarts[i]), y0), ImVec2(X(b), y1), IM_COL32(225, 60, 50, alpha));
+        }
         for (double p : v.phraseStarts) dl->AddLine(ImVec2(X(p), y0 + 2 * S), ImVec2(X(p), y1 - 2 * S), Col(theme::kTextDim, 120), 1 * S);
         dl->AddRectFilled(ImVec2(x0, y0), ImVec2(X(v.songTime), y1), Col(theme::kText, 50), h * 0.5f);
         dl->AddLine(ImVec2(X(v.songTime), y0 - 3 * S), ImVec2(X(v.songTime), y1 + 3 * S), Col(theme::kText, 230), 2 * S);
@@ -1393,7 +1415,10 @@ void DrawPracticeBar(ImDrawList* dl, const View& v, const Settings& st, float S,
     std::string text;
     if (parts.size() == 1) text = "practising " + mmss(parts[0].first) + " - " + mmss(parts[0].second);
     else if (parts.size() > 1) text = "practising " + std::to_string(parts.size()) + " parts";
-    if (hover) text += std::string(text.empty() ? "" : "   \xC2\xB7   ") + "drag: add a part   click a part: remove it   drag an end: change it";
+    if (hover)
+        text += std::string(text.empty() ? "" : "   \xC2\xB7   ") +
+                (anyHeat ? "red: where you stopped most   " : "") +
+                "click: practise a phrase   drag: add a part   click a part: remove it   drag an end: change it";
     if (!text.empty()) {
         const float fs = 17 * S;
         const ImVec2 ts = g_fontUi->CalcTextSizeA(fs, FLT_MAX, 0, text.c_str());
@@ -1857,6 +1882,11 @@ void DrawFretBox(const TabStaff& tab, const TabShow& sh, const TabItem& it, int 
     const float y = tab.RowY(str), bw = tab.BoxHalf(label, run), bh = tab.gap * 0.46f * std::max(0.7f, std::min(1.1f, nsz));
     const ImU32 col = (kStringColor[str] & 0x00FFFFFF) | ((ImU32)(255 * a) << 24);
     tab.dl->AddRectFilled(ImVec2(x - bw, y - bh), ImVec2(x + bw, y + bh), Col(theme::kPanel, (int)(255 * a)), 5 * s);
+    if (it.note->mark >= 1 && it.note->mark <= 3) {  // how it went: green = on time, amber = waited for, red = skipped / missed
+        static const ImU32 kMarkCol[] = {IM_COL32(60, 175, 90, 0), IM_COL32(225, 150, 40, 0), IM_COL32(215, 60, 50, 0)};
+        tab.dl->AddRectFilled(ImVec2(x - bw, y - bh), ImVec2(x + bw, y + bh),
+                              kMarkCol[it.note->mark - 1] | ((ImU32)(150 * a) << 24), 5 * s);
+    }
     if (next) tab.dl->AddRect(ImVec2(x - bw - 2 * s, y - bh - 2 * s), ImVec2(x + bw + 2 * s, y + bh + 2 * s),
                             Col(theme::kHighlight, (int)(255 * sh.pulse * sh.highlight)), 6 * s, 0, 2.5f * s);
     else tab.dl->AddRect(ImVec2(x - bw, y - bh), ImVec2(x + bw, y + bh), col, 5 * s, 0, 2 * s);
@@ -2342,11 +2372,19 @@ void MenuPlaying(Settings& e, const View& v, int* calibration) {
           "Useful if you play a riff in another position. Off is stricter: string and fret must match.");
     ImGui::SeparatorText("Timing");
     ImGui::BeginDisabled(!e.stopSong);  // (only for stops)
-    SliderRow("Stop before the note", "##lead", &e.leadMs, 0, 500, "%d ms",
-              "The song stops this long before the note reaches the line, to give you time to see it. "
-              "Keep at least a little (30 ms): stopped right on the note, the game counts it as already passed.");
     SliderRow("Early notes count", "##early", &e.earlyMs, 0, 1000, "up to %d ms",
               "A right note played up to this early counts, and the song doesn't stop for it.");
+    SliderRow("Late notes count", "##late", &e.lateMs, 0, 400, e.lateMs ? "up to %d ms" : "off",
+              "A right note played up to this late counts, and the song doesn't stop for it: the song stops only this "
+              "long after the note, if you haven't played it by then. A note played right on the beat is heard a "
+              "little after its time, so without this the song stops for a moment at every note. 0 = off: the song "
+              "stops just before the note (below).");
+    ImGui::BeginDisabled(e.lateMs > 0);  // (only without a late window)
+    SliderRow("Stop before the note", "##lead", &e.leadMs, 0, 500, "%d ms",
+              "With \"Late notes count\" off: the song stops this long before the note reaches the line, to give you "
+              "time to see it. Keep at least a little (30 ms): stopped right on the note, the game counts it as "
+              "already passed.");
+    ImGui::EndDisabled();
     SliderRow("Count-in after a wait", "##countin", &e.countInBeats, 0, 4, e.countInBeats ? "%d beats" : "off",
               "After a long wait (over 2 seconds) ends with the right note, the song counts this many beats at its own "
               "tempo (3, 2, 1 on screen) before it goes on, so you find the beat again. 0 = off.");
@@ -2408,6 +2446,9 @@ void MenuTab(Settings& e) {
     Check("Spread out fast notes", &e.tabSpread,
           "Fast passages get more room so every fret can be read, and a fast repeat of one fret shows once as \"12 x8\". "
           "Off: spacing exactly by time.");
+    Check("Colour the notes you played", &e.tabMarks,
+          "Once the song has passed a note, its box on the tab gets a colour: green = you played it on time, amber = the "
+          "song waited for it, red = skipped, or (in \"Show the notes\") not played.");
 
     ImGui::SeparatorText("Strings");
     Check("Thickest string on top", &e.tabThickTop,
@@ -2449,19 +2490,106 @@ void MenuScreen(Settings& e) {
     Check("Fingers and hand position", &e.bannerHand,
           "On the fretboard: which finger for each note (1 = index .. 4 = little finger), and the frets your hand "
           "covers, shaded. When the hand has to move, the banner says where: \"Hand: move UP to fret 7\".");
+    ImGui::BeginDisabled(!e.bannerNeck || !e.bannerHand);
+    ImGui::Indent();
+    Check("Draw the hand under the fretboard", &e.bannerFingers,
+          "Four fingers under the fretboard, over the frets they cover; the ones playing now in the string's colour. "
+          "Off: only the finger numbers on the dots (the banner gets a little shorter).");
+    ImGui::Unindent();
+    ImGui::EndDisabled();
     ImGui::Unindent();
     ImGui::EndDisabled();
     Check("Song time", &e.showClock, "A small clock, \"1:23 / 4:28\", top-left by default.");
     Check("Practice bar", &e.showPracticeBar,
-          "On the game's progress bar, with the mouse (no menu needed): drag to mark a part of the song; Note-by-Note "
-          "only waits inside the parts you mark, and the tab shades them. Drag a part's end to change it, click a part "
-          "to remove it.");
+          "On the game's progress bar, with the mouse (no menu needed): click a phrase or drag over a part of the song; "
+          "Note-by-Note only waits inside the parts you mark, and the tab shades them. Drag a part's end to change it, "
+          "click a part to remove it. Red phrases: where the song waited for you most (Practice page).");
     ImGui::SeparatorText("Arrange");
     ImGui::TextWrapped("While this menu is open, drag the banner, the wrong-note panel, the clock or the tab to move "
                        "it, and drag its bottom-right corner to resize it. The wrong-note panel follows the banner. "
                        "The menu itself moves by its title bar.");
     ImGui::Spacing();
     if (ImGui::Button("Reset positions and sizes")) e = WithDefaultLayout(e);
+}
+
+// The practice parts, set from the menu (render thread, like the practice bar's drags).
+void SetPracticeParts(std::vector<Range> parts) {
+    Tidy(&parts);
+    g_drawRanges = parts;
+    std::lock_guard<std::mutex> lk(g.m);
+    g.ranges = parts;
+}
+
+// Page "Practice": this song's trouble spots (the phrases where the song waited for the player most, red
+// on the practice bar) with a button to practise each, how it went this time, and the practice parts.
+void MenuPractice(Settings& e, const View& v, float s, bool* forget) {
+    auto mmss = [](double t) {
+        char b[16];
+        const int x = (int)std::max(0.0, t);
+        std::snprintf(b, sizeof(b), "%d:%02d", x / 60, x % 60);
+        return std::string(b);
+    };
+    const double songEnd = v.songLength > 0 ? v.songLength : (v.phraseStarts.empty() ? 0 : v.phraseStarts.back() + 10);
+    auto phrase = [&](size_t i) {
+        return Range(v.phraseStarts[i], i + 1 < v.phraseStarts.size() ? v.phraseStarts[i + 1] : songEnd);
+    };
+    std::vector<size_t> spots;  // the hardest first, at most 6
+    for (size_t i = 0; i < v.phraseHeat.size() && i < v.phraseStarts.size(); ++i)
+        if (v.phraseHeat[i] > 0) spots.push_back(i);
+    std::stable_sort(spots.begin(), spots.end(), [&](size_t a, size_t b) { return v.phraseHeat[a] > v.phraseHeat[b]; });
+    if (spots.size() > 6) spots.resize(6);
+
+    ImGui::SeparatorText("Trouble spots");
+    ImGui::PushTextWrapPos(0);
+    if (!v.chartOk) {
+        ImGui::TextDisabled("Play a song to see where you stop most.");
+    } else if (spots.empty()) {
+        ImGui::TextDisabled("None yet in this song. They show up as you play it with \"Wait for each note\": the "
+                            "places where the song had to wait for you, longer waits and skipped notes counting more.");
+    } else {
+        ImGui::TextUnformatted("Where the song waited for you most (red on the practice bar, on the game's progress "
+                               "bar). A note you play on time often enough in a row (below) is taken off.");
+        for (size_t i : spots) {
+            const Range r = phrase(i);
+            ImGui::PushID((int)i);
+            ImGui::AlignTextToFramePadding();
+            ImGui::Text("%s - %s", mmss(r.first).c_str(), mmss(r.second).c_str());
+            ImGui::SameLine(ImGui::GetFontSize() * 6.5f);
+            ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.88f, 0.24f, 0.2f, 1));
+            ImGui::ProgressBar(v.phraseHeat[i], ImVec2(220 * s, ImGui::GetFrameHeight() * 0.5f), "");
+            ImGui::PopStyleColor();
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Practise")) SetPracticeParts({r});
+            ImGui::PopID();
+        }
+        if (spots.size() > 1 && ImGui::Button("Practise all of them")) {
+            std::vector<Range> all;
+            for (size_t i : spots) all.push_back(phrase(i));
+            SetPracticeParts(all);
+        }
+    }
+    SliderRow("Clear a note after", "##troubleclear", &e.troubleClear, 1, 10,
+              e.troubleClear == 1 ? "1 good try" : "%d good tries in a row",
+              "How many times in a row you must play a note on time (without the song stopping) before it no longer "
+              "counts as trouble. On the way there it fades. Going wrong again starts the count over.");
+    ImGui::SeparatorText("This time");
+    if (v.runSummary.empty()) ImGui::TextDisabled("Nothing played yet.");
+    else ImGui::TextUnformatted(v.runSummary.c_str());
+    ImGui::SeparatorText("Practice parts");
+    if (g_drawRanges.empty()) {
+        ImGui::TextDisabled("The whole song. Click a phrase on the practice bar, or drag over it, to practise just a part.");
+    } else {
+        std::string list;
+        for (const auto& r : g_drawRanges) list += (list.empty() ? "" : ",  ") + mmss(r.first) + " - " + mmss(r.second);
+        ImGui::Text("Waiting only in %s", list.c_str());
+        if (ImGui::Button("Practise the whole song")) SetPracticeParts({});
+    }
+    ImGui::PopTextWrapPos();
+    ImGui::Spacing();
+    ImGui::BeginDisabled(!v.chartOk);
+    if (ImGui::Button("Forget this song's trouble spots")) *forget = true;
+    ImGui::EndDisabled();
+    Help("Starts this song's record again (it's kept per song and arrangement, in the NoteByNote_stats folder).");
 }
 
 // Page "Colours": a ready-made theme, and any of its colours changed by the player. Picking a theme
@@ -2536,7 +2664,7 @@ void DrawMenu(const View& v, const Settings& st, float s, ImVec2 ds) {
     ImGui::SetNextWindowPos(ImVec2(ds.x - 40 * s, ds.y * 0.5f), ImGuiCond_Once, ImVec2(1.0f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(680 * s, 0), ImGuiCond_Always);
     if (!g_menuWasOpen) ImGui::SetNextWindowFocus();
-    bool open = true, skip = false;
+    bool open = true, skip = false, forget = false;
     int calibration = 0;
     Settings e = st;
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings;
@@ -2572,15 +2700,16 @@ void DrawMenu(const View& v, const Settings& st, float s, ImVec2 ds) {
 
         // One tab per topic; every page gets the same height.
         if (ImGui::BeginTabBar("pages")) {
-            static const char* const kPages[] = {"Playing", "Tab", "Screen", "Colours", "Game"};
-            for (int p = 0; p < 5; ++p) {
+            static const char* const kPages[] = {"Playing", "Practice", "Tab", "Screen", "Colours", "Game"};
+            for (int p = 0; p < 6; ++p) {
                 if (!ImGui::BeginTabItem(kPages[p])) continue;
                 ImGui::BeginChild("page", ImVec2(0, 540 * s), ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
                 switch (p) {
                     case 0: MenuPlaying(e, v, &calibration); break;
-                    case 1: MenuTab(e); break;
-                    case 2: MenuScreen(e); break;
-                    case 3: MenuColours(e, s); break;
+                    case 1: MenuPractice(e, v, s, &forget); break;
+                    case 2: MenuTab(e); break;
+                    case 3: MenuScreen(e); break;
+                    case 4: MenuColours(e, s); break;
                     default: MenuGame(e); break;
                 }
                 ImGui::EndChild();
@@ -2611,6 +2740,7 @@ void DrawMenu(const View& v, const Settings& st, float s, ImVec2 ds) {
     std::lock_guard<std::mutex> lk(g.m);
     if (!(e == st)) g.settings = e;
     if (skip) g.skipRequest = true;
+    if (forget) g.forgetRequest = true;
     if (calibration) g.calibrationRequest = calibration;
     if (!open) g_menuOpen = false;
 }
@@ -3062,6 +3192,13 @@ bool TakeSkipRequest() {
     std::lock_guard<std::mutex> lk(g.m);
     const bool r = g.skipRequest;
     g.skipRequest = false;
+    return r;
+}
+
+bool TakeForgetRequest() {
+    std::lock_guard<std::mutex> lk(g.m);
+    const bool r = g.forgetRequest;
+    g.forgetRequest = false;
     return r;
 }
 

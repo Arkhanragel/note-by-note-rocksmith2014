@@ -27,6 +27,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -39,6 +40,7 @@
 #include "overlay.h"
 #include "report.h"
 #include "startup.h"
+#include "stats.h"
 #include "stringid.h"
 #include "tap.h"
 
@@ -112,6 +114,10 @@ Config LoadConfig() {
                 "LeadMs=30\n"
                 "; A correct note played up to this many milliseconds early counts without stopping\n"
                 "EarlyMs=300\n"
+                "; A correct note played up to this many milliseconds late counts without stopping: the song\n"
+                ";     stops only this long after the note if you haven't played it by then (0 = stop LeadMs\n"
+                ";     before the note instead)\n"
+                "LateMs=150\n"
                 "; After a long wait (over 2 s) ends with the note played, count this many beats (3-2-1 on\n"
                 ";     screen, at the song's tempo) before the song goes on; 0 = no count-in\n"
                 "CountInBeats=3\n"
@@ -129,6 +135,8 @@ Config LoadConfig() {
                 "BannerFretboard=1\n"
                 "; 1 = finger numbers on the fretboard, the hand's zone, and a hint when the hand has to move\n"
                 "BannerHand=1\n"
+                "; With BannerHand=1: 1 = also draw the hand under the fretboard, 0 = only the finger numbers\n"
+                "BannerFingers=1\n"
                 "; 0 = strings are numbered like in guitar books (high e = string 1), 1 = from the thickest\n"
                 ";     (low E = string 1)\n"
                 "StringsFromThickest=0\n"
@@ -145,6 +153,9 @@ Config LoadConfig() {
                 "ShowClock=1\n"
                 "; 1 = the practice bar under the game's progress bar (drag on it to practise a part of the song)\n"
                 "ShowPracticeBar=1\n"
+                "; Trouble spots (red on the practice bar): a note played on time this many times in a row\n"
+                ";     no longer counts as trouble (1..10)\n"
+                "TroubleClearAfter=3\n"
                 "; 1 = show the notes coming up as a scrolling tab (left of the highway, below the lyrics)\n"
                 "ShowTab=1\n"
                 "; 1 = bar lines (with bar numbers) and beat lines in the tab, to read the rhythm\n"
@@ -152,6 +163,9 @@ Config LoadConfig() {
                 "; 1 = rhythm under the tab, as in printed tab: a stem per note, beams = notes per beat\n"
                 ";     (no beam = 1, 1 beam = 2, 2 beams = 4, 3 beams = 8; a small 3 = triplets)\n"
                 "TabRhythm=1\n"
+                "; 1 = colour each note on the tab once the song has passed it: green = played on time,\n"
+                ";     amber = the song waited for it, red = skipped or not played\n"
+                "TabMarks=1\n"
                 "; Seconds of music the tab shows ahead (2..8)\n"
                 "TabSeconds=4\n"
                 "; 1 = in fast passages the tab spreads the notes out so every fret can be read (the tab\n"
@@ -236,6 +250,7 @@ Config LoadConfig() {
     c.skipKey = ParseKey(str(L"SkipKey", L"F9"), VK_F9);
     c.initial.leadMs = GetPrivateProfileIntW(L"NoteByNote", L"LeadMs", 30, ini.c_str());
     c.initial.earlyMs = GetPrivateProfileIntW(L"NoteByNote", L"EarlyMs", 300, ini.c_str());
+    c.initial.lateMs = std::max(0, std::min(400, (int)GetPrivateProfileIntW(L"NoteByNote", L"LateMs", 150, ini.c_str())));
     c.initial.countInBeats = std::max(0, std::min(4, (int)GetPrivateProfileIntW(L"NoteByNote", L"CountInBeats", 3, ini.c_str())));
     c.initial.acceptOctaves = GetPrivateProfileIntW(L"NoteByNote", L"AcceptOctaves", 0, ini.c_str()) != 0;
     c.initial.stringDetect = GetPrivateProfileIntW(L"NoteByNote", L"StringDetect", 1, ini.c_str()) != 0;
@@ -243,6 +258,8 @@ Config LoadConfig() {
     c.initial.showBanner = GetPrivateProfileIntW(L"NoteByNote", L"ShowBanner", 1, ini.c_str()) != 0;
     c.initial.bannerNeck = GetPrivateProfileIntW(L"NoteByNote", L"BannerFretboard", 1, ini.c_str()) != 0;
     c.initial.bannerHand = GetPrivateProfileIntW(L"NoteByNote", L"BannerHand", 1, ini.c_str()) != 0;
+    c.initial.bannerFingers = GetPrivateProfileIntW(L"NoteByNote", L"BannerFingers", 1, ini.c_str()) != 0;
+    c.initial.troubleClear = std::max(1, std::min(10, (int)GetPrivateProfileIntW(L"NoteByNote", L"TroubleClearAfter", 3, ini.c_str())));
     c.initial.stringsFromThick = GetPrivateProfileIntW(L"NoteByNote", L"StringsFromThickest", 0, ini.c_str()) != 0;
     c.initial.waitChords = GetPrivateProfileIntW(L"NoteByNote", L"WaitChords", 1, ini.c_str()) != 0;
     c.initial.showClock = GetPrivateProfileIntW(L"NoteByNote", L"ShowClock", 1, ini.c_str()) != 0;
@@ -251,6 +268,7 @@ Config LoadConfig() {
     c.initial.tabBeats = GetPrivateProfileIntW(L"NoteByNote", L"TabBeats", 1, ini.c_str()) != 0;
     c.initial.tabSeconds = std::max(2, std::min(8, (int)GetPrivateProfileIntW(L"NoteByNote", L"TabSeconds", 4, ini.c_str())));
     c.initial.tabRhythm = GetPrivateProfileIntW(L"NoteByNote", L"TabRhythm", 1, ini.c_str()) != 0;
+    c.initial.tabMarks = GetPrivateProfileIntW(L"NoteByNote", L"TabMarks", 1, ini.c_str()) != 0;
     c.initial.tabSpread = GetPrivateProfileIntW(L"NoteByNote", L"TabSpread", 1, ini.c_str()) != 0;
     c.initial.tabPage = GetPrivateProfileIntW(L"NoteByNote", L"TabPages", 1, ini.c_str()) != 0;
     // TabRows; older ini files have TabTwoRows=1 instead.
@@ -305,12 +323,15 @@ void SaveSettings(const overlay::Settings& st) {
     put(L"Enabled", st.enabled);
     put(L"LeadMs", st.leadMs);
     put(L"EarlyMs", st.earlyMs);
+    put(L"LateMs", st.lateMs);
     put(L"CountInBeats", st.countInBeats);
     put(L"AcceptOctaves", st.acceptOctaves);
     put(L"StringDetect", st.stringDetect);
     put(L"ShowBanner", st.showBanner);
     put(L"BannerFretboard", st.bannerNeck);
     put(L"BannerHand", st.bannerHand);
+    put(L"BannerFingers", st.bannerFingers);
+    put(L"TroubleClearAfter", st.troubleClear);
     put(L"StringsFromThickest", st.stringsFromThick);
     put(L"WaitChords", st.waitChords);
     put(L"SkipGreyedNotes", st.skipGreyed);
@@ -330,6 +351,7 @@ void SaveSettings(const overlay::Settings& st) {
     put(L"TabMirror", st.tabMirror);
     put(L"TabThickOnTop", st.tabThickTop);
     put(L"TabRhythm", st.tabRhythm);
+    put(L"TabMarks", st.tabMarks);
     const std::string themeName = theme::kThemes[st.theme >= 0 && st.theme < theme::kThemeCount ? st.theme : 0].name;
     WritePrivateProfileStringW(L"NoteByNote", L"Theme", std::wstring(themeName.begin(), themeName.end()).c_str(), ini.c_str());
     for (int i = 0; i < theme::kSlots; ++i) {  // own colours as "#RRGGBB"; the theme's = no key
@@ -579,6 +601,14 @@ struct MainLoop {
     DebugAudio debugAudio;
     long long waitAudioStart = 0;
     const std::wstring debugDir = DllDir() + L"NoteByNote_debug\\";
+    // Trouble spots (stats.h): how each note went, per song; the practice bar shades its phrases by it.
+    const std::wstring statsDir = DllDir() + L"NoteByNote_stats\\";
+    stats::SongStats songStats;
+    std::vector<float> phraseHeat;    // per phrase iteration (chart.pis), from songStats
+    std::string runSummary;           // this time in the song, for the menu
+    bool statsChanged = true;         // phraseHeat / runSummary must be worked out again
+    std::map<int, int> noteMarks;     // how each note went this time (ms -> TabNote::mark), for the tab
+    DWORD lastHeardTick = 0;          // when the guitar last gave a note (a miss counts only while playing)
 
     explicit MainLoop(const Config& c) : cfg(c), st(c.initial) {
         debugAudio.enabled = cfg.saveWaitAudio;
@@ -598,6 +628,11 @@ struct MainLoop {
             const bool skip = ReadKeys();  // 2.
             ApplySettings();
             HandleCalibrationRequest();
+            if (overlay::TakeForgetRequest()) {
+                songStats.Forget();
+                statsChanged = true;
+                Log("trouble spots: this song's record forgotten (menu)");
+            }
             if (UnloadRequested(now)) break;
             if (!UpdateScreen(now)) continue;  // 3. not (yet) in a song
             ReadChart(now);    // 4.
@@ -609,6 +644,7 @@ struct MainLoop {
             Follow(now, skip);  // 6.-8.
         }
         if (frozen || menuHold) game::Unfreeze();
+        songStats.Save();
     }
 
     // Stops waiting for the current note. If our menu is open, the song stays held until it closes.
@@ -671,6 +707,40 @@ struct MainLoop {
         return n;
     }
 
+    // A note went one way or another (stats.h): kept for the trouble spots.
+    void RecordNote(double t, stats::Result r, double waitS = 0, bool wrongNote = false) {
+        songStats.Record(t, r, waitS, wrongNote);
+        statsChanged = true;
+        noteMarks[(int)std::lround(t * 1000.0)] = r == stats::Result::kOnTime ? 1 : r == stats::Result::kWaited ? 2 : 3;
+    }
+
+    // The song went back (a loop starting over, a rewind): the notes from there on are to be played again.
+    void ForgetMarksFrom(double t) { noteMarks.erase(noteMarks.lower_bound((int)std::lround(t * 1000.0)), noteMarks.end()); }
+
+    // The trouble per phrase (the practice bar's red) and the menu's "this time" line, worked out again
+    // only after something changed.
+    void UpdateTroubleSpots() {
+        if (!statsChanged) return;
+        statsChanged = false;
+        std::vector<std::pair<double, double>> phrases;
+        if (chartOk)
+            for (const auto& p : chart.pis) phrases.emplace_back(p.start, p.end);
+        phraseHeat.clear();
+        for (const auto& sp : songStats.Spots(phrases, st.troubleClear)) phraseHeat.push_back(sp.heat);
+        const auto& r = songStats.ThisRun();
+        runSummary.clear();
+        if (r.stops + r.skips + r.onTime + r.missed == 0) return;
+        char buf[160];
+        std::snprintf(buf, sizeof(buf), "%d played on time, %d waited for, %d skipped", r.onTime, r.stops, r.skips);
+        runSummary = buf;
+        if (r.missed) runSummary += ", " + std::to_string(r.missed) + " not played";
+        if (r.longestAt >= 0) {
+            const int at = (int)r.longestAt;
+            std::snprintf(buf, sizeof(buf), "; the longest wait: %.1f s at %d:%02d", r.longestWait, at / 60, at % 60);
+            runSummary += buf;
+        }
+    }
+
     // ---- 0. what the overlay shows
     void PublishView(DWORD now) {
         overlay::View v;
@@ -720,6 +790,9 @@ struct MainLoop {
         v.phraseStarts.clear();
         if (chartOk)
             for (const auto& p : chart.pis) v.phraseStarts.push_back(p.start);
+        UpdateTroubleSpots();
+        v.phraseHeat = phraseHeat;
+        v.runSummary = runSummary;
         // The count-in's number: beats left (3, 2, 1).
         v.countIn = (frozen && countInEnd && countInBeat) ? (int)((countInEnd - std::min(countInEnd, now) + countInBeat - 1) / countInBeat) : 0;
         if (!note.chord) v.chain = LinkedChain(note);
@@ -784,6 +857,10 @@ struct MainLoop {
             }
             tn.name = t->chordName;
             tn.sustain = t->sustain;
+            if (st.tabMarks) {
+                const auto m = noteMarks.find((int)std::lround(t->time * 1000.0));
+                if (m != noteMarks.end()) tn.mark = m->second;
+            }
             tabNotes.push_back(tn);
         }
     }
@@ -816,6 +893,7 @@ struct MainLoop {
             if (chordDet.Process(&pending[used], expectChord, &cr)) chordResults.push_back(cr);
         }
         pending.erase(pending.begin(), pending.begin() + used);
+        if (!events.empty()) lastHeardTick = now;
         StringIdAudio();
     }
 
@@ -1056,10 +1134,11 @@ struct MainLoop {
             cursor = waitFor.time;
             ReleaseWait();
         }
+        if (newSt.troubleClear != st.troubleClear) statsChanged = true;
         st = newSt;
         SaveSettings(st);
-        Log("settings: enabled=%d lead=%dms early=%dms octaves=%d banner=%d chords=%d (saved)", st.enabled, st.leadMs,
-            st.earlyMs, st.acceptOctaves, st.showBanner, st.waitChords);
+        Log("settings: enabled=%d lead=%dms early=%dms late=%dms octaves=%d banner=%d chords=%d (saved)", st.enabled,
+            st.leadMs, st.earlyMs, st.lateMs, st.acceptOctaves, st.showBanner, st.waitChords);
     }
 
     // ---- dev: unload when the file NoteByNote.unload appears next to the DLL
@@ -1111,6 +1190,7 @@ struct MainLoop {
     void Heartbeat(DWORD now) {
         lastHeartbeat = now;
         crashfix::Tick();
+        songStats.Save();  // (only if something changed: a game crash or exit loses at most 5 s)
         double ht = -1;
         const bool tOk = game::GetSongTime(&ht);
         game::GetPhraseLevels(&levels);
@@ -1131,6 +1211,7 @@ struct MainLoop {
             frozen = menuHold = false;
             countInEnd = 0;
         }
+        songStats.Save();
         game::ResetSongCache();
         lastT = -1;
         announced = false;
@@ -1152,6 +1233,10 @@ struct MainLoop {
                 lastT = -1;
                 unplayedT = -1;
                 overlay::ClearRanges();  // a new song: no practice parts yet
+                songStats.Open(statsDir, stats::RecordName(lastKey, chart.arrangement, chart.levelCounts, chart.pis.size()));
+                songStats.ResetRun();
+                statsChanged = true;
+                noteMarks.clear();
                 clockChecked = false;
                 clockStill = 0;
                 clockTick = 0;
@@ -1294,6 +1379,7 @@ struct MainLoop {
                 if (lastT >= 0) Log("  (rewound to %.2f s)", lastT);
             } else {
                 cursor = std::min(cursor, t - 0.05);
+                ForgetMarksFrom(t - 0.05);
                 lastT = peakT = t;
                 upcomingChord.clear();
                 return;
@@ -1304,6 +1390,7 @@ struct MainLoop {
             if (lastT >= 0) Log("song position jumped %.2f -> %.2f s", back ? peakT : lastT, t);
             else Log("song position %.3f s: following from here", t);
             cursor = t - 0.05;
+            if (back) ForgetMarksFrom(t - 0.05);
             peakT = t;
             rewinding = back;
         }
@@ -1330,11 +1417,9 @@ struct MainLoop {
         if (!next || !CanWait(*next)) return;
         nextWaitT = next->time;  // the song stops here unless it's played (the tab's cursor won't pass it)
         if (nextTarget.time != next->time || nextTarget.level != next->level) nextTarget = *next;  // (copy once)
-        // Guide only (setting StopSong off): the song never stops. The banner shows this note (and the
-        // repeat counter counts down) until the song passes it, played or not; a note played on time is
-        // logged as a hit (CheckOnTime above).
+        // Guide only (setting StopSong off): the song never stops.
         if (!st.stopSong) {
-            if (t >= next->time) cursor = next->time;
+            GuideFollow(*next, t, now);
             return;
         }
         // A strum is checked 90 and 180 ms after its attack: while one is being checked, give it a
@@ -1342,7 +1427,58 @@ struct MainLoop {
         if (next->chord && chordDet.Pending() && t < next->time + 0.2) return;
 
         // ---- 8. reached the next note without it being played -> wait for it
-        if (t >= next->time - leadS && now >= nextFreezeTry) FreezeAt(*next, t, now);
+        // With a late window (LateMs) the song goes on a little past the note: a note played on the beat
+        // is heard some 50-150 ms after its time (the attack, the detector, the audio buffer), and
+        // stopping before it made on-beat playing stop-and-go. Otherwise it stops LeadMs before the note.
+        const double stopAt = st.lateMs > 0 ? next->time + st.lateMs / 1000.0 : next->time - leadS;
+        if (t >= stopAt && now >= nextFreezeTry) FreezeAt(*next, t, now);
+    }
+
+    // "Show the notes": the banner shows the note until its time, then already the note after it, while
+    // that one can still be played a little late (LateMs; a chord at least 0.2 s: its strum is checked
+    // 90 and 180 ms after it); a hit in that time is logged by CheckOnTime. Past that, or when the note
+    // after it is played, it wasn't played: a miss (only counted while the player is playing, so
+    // watching the notes go by doesn't fill the trouble spots).
+    void GuideFollow(const Target& note, double t, DWORD now) {
+        if (t < note.time) return;
+        const double late = std::max(st.lateMs / 1000.0, note.chord ? 0.2 : 0.0);
+        const Target* after = NextWaitable(note);
+        const bool movedOn = after && !after->chord && t >= after->time - st.earlyMs / 1000.0 && HeardNow(*after);
+        // From here on the tab's cursor and the banner go by the note after it. (Also on the loop that
+        // passes the note: left on the note, the tab's cursor, already past it, jumped back for a frame.)
+        nextWaitT = (after && !movedOn) ? after->time : -1;
+        if (after) nextTarget = *after;
+        if (t < note.time + late && !movedOn) return;
+        if (now - lastHeardTick < 2000) {
+            Log("miss %.3f %s", note.time, Describe(chart, note).c_str());
+            RecordNote(note.time, stats::Result::kMissed);
+        }
+        cursor = note.time;
+        if (movedOn) {  // (this loop's notes would be gone by the next one)
+            Log("hit  %.3f %s on time (%+.0f ms, level %d)", after->time, Describe(chart, *after).c_str(),
+                (t - after->time) * 1000.0, after->level);
+            RecordNote(after->time, stats::Result::kOnTime);
+            cursor = after->time;
+        }
+    }
+
+    // The next note the mode waits for after `x` (nullptr = none in the next 64).
+    const Target* NextWaitable(const Target& x) const {
+        const Target* c = chart.NextTarget(x.time, levels);
+        for (int i = 0; c && !CanWait(*c) && i < 64; ++i) c = chart.NextTarget(c->time, levels);
+        return (c && CanWait(*c)) ? c : nullptr;
+    }
+
+    // What the guitar gave in this loop is `x` (a chord: the chord check matched the chord expected).
+    bool HeardNow(const Target& x) const {
+        if (x.chord) {
+            for (const auto& cr : chordResults)
+                if (cr.match) return true;
+            return false;
+        }
+        for (const auto& ev : events)
+            if (Matches(st, chart, x, ev.midi)) return true;
+        return false;
     }
 
     // Next note on the highway (using the current level of each phrase), passing the ones not waited
@@ -1365,15 +1501,10 @@ struct MainLoop {
     // Played on time (or a little early): no need to stop there. Returns the note after it, or `next`.
     const Target* CheckOnTime(const Target* next, double t, double earlyS) {
         if (!CanWait(*next) || t < next->time - earlyS) return next;
-        bool hit = false;
-        if (next->chord) {
-            for (const auto& cr : chordResults) hit = hit || cr.match;
-        } else {
-            for (const auto& ev : events) hit = hit || Matches(st, chart, *next, ev.midi);
-        }
-        if (!hit) return next;
+        if (!HeardNow(*next)) return next;
         Log("hit  %.3f %s on time (%+.0f ms, level %d)", next->time, Describe(chart, *next).c_str(),
             (t - next->time) * 1000.0, next->level);
+        RecordNote(next->time, stats::Result::kOnTime);
         cursor = next->time;
         return chart.NextTarget(cursor, levels);
     }
@@ -1413,7 +1544,10 @@ struct MainLoop {
         if (skip || autoPass) {
             Log("%s %.3f %s after waiting %.2f s", skip ? "SKIP" : "AUTO-PASS (test)", waitFor.time,
                 Describe(chart, waitFor).c_str(), (now - frozenTick) / 1000.0);
-            if (skip) SaveWaitAudio();  // skipped = maybe not detected
+            if (skip) {
+                SaveWaitAudio();  // skipped = maybe not detected
+                RecordNote(waitFor.time, stats::Result::kSkipped);
+            }
             overlay::Toast(skip ? "Skipped" : "Test: passed by itself", 1200);
             cursor = waitFor.time;
             ReleaseWait();
@@ -1421,6 +1555,7 @@ struct MainLoop {
         }
         if (!HeardWaitedNote(now)) return;
         Log("HIT  %.3f %s after waiting %.2f s", waitFor.time, Describe(chart, waitFor).c_str(), (now - frozenTick) / 1000.0);
+        RecordNote(waitFor.time, stats::Result::kWaited, (now - frozenTick) / 1000.0, waitWrong);
         // Keep the audio of long waits, of waits with a wrong note (string identification), and of every
         // chord for now (to tune the detection offline).
         if (waitFor.chord || waitWrong || now - frozenTick > 3000) SaveWaitAudio();
@@ -1463,6 +1598,7 @@ struct MainLoop {
                 waitFor.time);
             ReleaseWait();
             cursor = t - 0.05;  // follow the rewind down (see Follow)
+            ForgetMarksFrom(cursor);
             lastT = peakT = t;
             rewinding = true;
             return false;
@@ -1556,8 +1692,9 @@ DWORD WINAPI MainThread(LPVOID) {
     report::Open(DllDir() + L"NoteByNote_report.txt");
     const Config cfg = LoadConfig();
     const overlay::Settings& st = cfg.initial;
-    Log("config: enabled=%d menuKey=0x%X skipKey=0x%X lead=%dms early=%dms octaves=%d banner=%d chords=%d", st.enabled,
-        cfg.menuKey, cfg.skipKey, st.leadMs, st.earlyMs, st.acceptOctaves, st.showBanner, st.waitChords);
+    Log("config: enabled=%d menuKey=0x%X skipKey=0x%X lead=%dms early=%dms late=%dms octaves=%d banner=%d chords=%d",
+        st.enabled, cfg.menuKey, cfg.skipKey, st.leadMs, st.earlyMs, st.lateMs, st.acceptOctaves, st.showBanner,
+        st.waitChords);
     crashfix::Start(st.fixCrash);    // first of all: the game can crash any moment until then
     fastintro::Start(st.fastIntro);  // then: the logos are already playing
     if (cfg.testUnverifiedGame || cfg.testAutoPassMs)

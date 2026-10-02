@@ -41,6 +41,10 @@ struct Settings {
                                  // its own pause screen it greys it out, and its fretboard already shows
                                  // the next chord)
     int earlyMs = 300;           // a correct note up to this early counts without stopping
+    int lateMs = 150;            // a correct note up to this LATE counts without stopping: the song stops only
+                                 // this long after the note (if it wasn't played by then), so playing on the
+                                 // beat doesn't stop it for a moment at every note. 0 = stop before the note
+                                 // (leadMs). (Stopped past the note, the game counts it as passed: see leadMs.)
     int countInBeats = 3;        // after a long wait (over 2 s) ends with the note played, count this many
                                  // beats of the song's tempo (3-2-1 on screen) before it goes on; 0 = off
     bool acceptOctaves = false;  // the same note one octave higher/lower also counts
@@ -50,6 +54,10 @@ struct Settings {
                                  // thickest (low E)
     bool bannerHand = true;      // fingers and hand position: finger numbers on the fretboard's dots, the
                                  // hand's zone shaded, and "Hand: move UP to fret 7" when it has to move
+    bool bannerFingers = true;   // with bannerHand: the hand drawn under the banner's fretboard (four fingers
+                                 // over the frets they cover); off = only the numbers on the dots
+    int troubleClear = 3;        // trouble spots: a note played on time this many times in a row is no trouble
+                                 // any more (1..10; stats.h)
     bool bannerNeck = true;      // the banner's picture is a piece of fretboard (the note as a dot in its
                                  // string's colour with the fret number, a red X where a wrong note was
                                  // played); off = the small tab
@@ -68,6 +76,8 @@ struct Settings {
     bool showTab = true;         // show the scrolling tab while playing
     bool tabBeats = true;        // bar lines (with bar numbers) and beat lines in the tab
     bool tabRhythm = true;       // rhythm under the tab: stems + beams (how many notes per beat)
+    bool tabMarks = true;        // a note's box is coloured once the song passed it: green = played on time,
+                                 // amber = the song waited for it, red = skipped or missed (TabNote::mark)
     int tabSeconds = 4;          // seconds of music ahead of the "now" line
     bool tabSpread = true;       // fast notes get a minimum gap (readable runs) and a fast repeat of
                                  // one fret is drawn once as "12 x8"; off = spacing exactly by time
@@ -130,6 +140,8 @@ struct TabNote {
     int frets[6] = {-1, -1, -1, -1, -1, -1};  // per string (0 = thickest): -1 = not played
     std::string name;            // chord name ("A5"), empty for single notes / double stops
     double sustain = 0;          // seconds held: drawn as a tail after the fret number
+    int mark = 0;                // how it went (setting tabMarks): 0 = not yet / not waited for, 1 = played
+                                 // on time, 2 = the song waited for it, 3 = skipped or missed
     technique::Technique tech[6];  // per string: how it's played (slide, bend, hammer-on...), drawn in tab
                                    // notation around the fret number ("7/", "12 ^1", "h", "PM", "~")
 };
@@ -169,6 +181,9 @@ struct View {
     int fingers[6] = {-1, -1, -1, -1, -1, -1};  // per string: 1 = index .. 4 = little, 0 = thumb, -1 = none
     int countIn = 0;             // the count-in's number on screen (3, 2, 1), 0 = no count-in now
     std::vector<double> phraseStarts;  // when each phrase iteration starts (the practice bar's ticks and snaps)
+    std::vector<float> phraseHeat;     // trouble spots, per phrase iteration (as phraseStarts): 0 = none .. 1 = the
+                                       // song's hardest (stats.h); red on the practice bar, listed in the menu
+    std::string runSummary;            // this time in the song ("12 played on time, 3 waited for..."), for the menu
     std::vector<technique::Link> chain;  // the note and the notes linked after it (same string, not picked
                                          // again), for the banner's steps; empty = just `tech`
     bool chord = false;          // waiting for a chord: chordName + frets instead of string/fret
@@ -212,6 +227,9 @@ void SetEnabled(bool on);
 
 // True once after the player pressed "Skip this note" in the menu.
 bool TakeSkipRequest();
+
+// True once after the player pressed "Forget this song's trouble spots" in the menu.
+bool TakeForgetRequest();
 
 // Once after the player pressed the menu's Calibrate (1) or Cancel (2) button for the string
 // identification; 0 = nothing asked.
