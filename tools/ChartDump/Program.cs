@@ -90,6 +90,10 @@ static class Program
                 }
                 return 0;
 
+            case "picks": // picks <folder-or-psarc>: per arrangement, notes marked "up stroke" and the section names
+                Picks(args[1]);
+                return 0;
+
             case "levels": // levels <psarc> <sng>: phrases, phrase iterations and notes per difficulty level
                 using (var psarc = OpenPsarc(args[1]))
                 {
@@ -358,6 +362,33 @@ static class Program
             if (entry.Value.TryGetProperty("Attributes", out var attrs))
                 return attrs.Clone();
         return null;
+    }
+
+    // Pick directions and sections of every arrangement (a folder of .psarc, or one): how many notes
+    // say "up stroke" (most songs never set it), and the section names with their numbers.
+    static void Picks(string path)
+    {
+        var files = File.Exists(path) ? new List<string> { path }
+                                      : Directory.GetFiles(path, "*.psarc").Where(f => !f.EndsWith("_m.psarc")).OrderBy(f => f).ToList();
+        foreach (var file in files)
+        {
+            try
+            {
+                using var psarc = OpenPsarc(file);
+                foreach (var sngName in psarc.Manifest.Where(n => n.EndsWith(".sng") && !n.Contains("vocals", StringComparison.OrdinalIgnoreCase)))
+                {
+                    var sng = ReadSng(psarc, sngName);
+                    var notes = sng.Levels.SelectMany(l => l.Notes).ToList();
+                    int up = notes.Count(n => n.PickDirection == 1), down = notes.Count(n => n.PickDirection == 0);
+                    var sections = string.Join(" ", sng.Sections.Select(x => x.Name + x.Number));
+                    Console.WriteLine($"{Path.GetFileName(file),-45} {Path.GetFileName(sngName),-32} notes={notes.Count,6} up={up,5} down={down,6}  {sections}");
+                }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"{Path.GetFileName(file)} ERROR {e.Message}");
+            }
+        }
     }
 
     // Summarizes every arrangement in every .psarc in a folder, so we can pick

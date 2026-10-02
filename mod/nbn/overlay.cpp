@@ -851,6 +851,19 @@ std::vector<Seg> HoldWords(const View& v) {
     return {{"Hold:  ", Col(theme::kChord)}, {"let it ring for ", Col(theme::kText)}, {Millis(v.sustain), Col(theme::kHighlight)}};
 }
 
+// A pick stroke's sign, as in printed music: a bracket open at the bottom = down stroke, a V = up stroke.
+// c = its centre, half = half its width and height. (Drawn: the UI font has no such glyphs.)
+void DrawPickSign(ImDrawList* dl, ImVec2 c, float half, float thick, int pick, ImU32 col) {
+    if (pick == 0) {
+        const ImVec2 pts[4] = {ImVec2(c.x - half, c.y + half), ImVec2(c.x - half, c.y - half), ImVec2(c.x + half, c.y - half),
+                               ImVec2(c.x + half, c.y + half)};
+        dl->AddPolyline(pts, 4, col, 0, thick);
+    } else if (pick == 1) {
+        const ImVec2 pts[3] = {ImVec2(c.x - half, c.y - half), ImVec2(c.x, c.y + half), ImVec2(c.x + half, c.y - half)};
+        dl->AddPolyline(pts, 3, col, 0, thick);
+    }
+}
+
 // The countdown of a held note just played, on the banner's last line instead of the keys: "Keep
 // holding fret 9", a bar that empties, "540 ms". Runs on the song's clock (it stops when the song
 // does). Returns false when no note is being held now.
@@ -919,8 +932,10 @@ void DrawBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVe
     const std::string repWide = "x" + std::to_string(std::max(v.repeatTotal, v.repeatLeft));
     const float repW = repeat ? repGap + std::max(g_fontBold->CalcTextSizeA(repH * 0.78f, FLT_MAX, 0, repWide.c_str()).x + 24 * s, repH) : 0;
     const float line1W = SegsWidth(g_fontBold, big, line1);
+    // The pick stroke's sign after them (setting tabPicks), the tab's sign.
+    const float pickGap = 20 * s, pickHalf = big * 0.26f, pickW = st.tabPicks ? pickGap + 2 * pickHalf : 0;
 
-    const float textW = std::max({line1W + repW, SegsWidth(g_fontUi, mid, line2), LinesWidth(g_fontUi, mid, linesT),
+    const float textW = std::max({line1W + repW + pickW, SegsWidth(g_fontUi, mid, line2), LinesWidth(g_fontUi, mid, linesT),
                                   LinesWidth(g_fontUi, mid, linesH), SegsWidth(g_fontUi, tiny, line3)});
     const float textH = big + 8 * s + (line2.empty() ? 0 : mid + 10 * s) + (linesT.size() + linesH.size()) * (mid + 10 * s) + tiny;
 
@@ -940,6 +955,9 @@ void DrawBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVe
     if (repeat)
         DrawRepeatBadge(dl, ImVec2(t.x + (line1W + repGap + (repW - repGap) * 0.5f) * k, t.y + big * k * 0.55f), repH * k,
                         v.repeatLeft, col, i == 1 || i == 3 || i == 4, swell, ks);  // (yellow, orange, green: light)
+    if (st.tabPicks && v.pick >= 0)
+        DrawPickSign(dl, ImVec2(t.x + (line1W + repW + pickGap + pickHalf) * k, t.y + big * k * 0.52f), pickHalf * k, 3.5f * ks,
+                     v.pick, Col(theme::kText));
     t.y += (big + 8 * s) * k;
     if (!line2.empty()) {
         DrawSegs(dl, g_fontUi, mid * k, t, line2);
@@ -1045,8 +1063,9 @@ void DrawChordBanner(ImDrawList* dl, const View& v, const Settings& st, float S,
     const std::string repWide = "x" + std::to_string(std::max(v.repeatTotal, v.repeatLeft));
     const float repW = repeat ? repGap + std::max(g_fontBold->CalcTextSizeA(repH * 0.78f, FLT_MAX, 0, repWide.c_str()).x + 24 * s, repH) : 0;
     const float line1W = SegsWidth(g_fontBold, big, line1);
+    const float pickGap = 20 * s, pickHalf = big * 0.26f, pickW = st.tabPicks ? pickGap + 2 * pickHalf : 0;
 
-    const float textW = std::max({line1W + repW, SegsWidth(g_fontUi, mid, lineM), LinesWidth(g_fontUi, mid, lines2),
+    const float textW = std::max({line1W + repW + pickW, SegsWidth(g_fontUi, mid, lineM), LinesWidth(g_fontUi, mid, lines2),
                                   LinesWidth(g_fontUi, mid, linesT),
                                   LinesWidth(g_fontUi, mid, linesH), SegsWidth(g_fontUi, tiny, line3)});
     const float textH = big + 8 * s + (lineM.empty() ? 0 : mid + 8 * s) + (lines2.size() + linesT.size() + linesH.size()) * (mid + 10 * s) + tiny;
@@ -1067,6 +1086,9 @@ void DrawChordBanner(ImDrawList* dl, const View& v, const Settings& st, float S,
     if (repeat)
         DrawRepeatBadge(dl, ImVec2(t.x + (line1W + repGap + (repW - repGap) * 0.5f) * k, t.y + big * k * 0.55f), repH * k,
                         v.repeatLeft, gold, true, swell, s * k);
+    if (st.tabPicks && v.pick >= 0)
+        DrawPickSign(dl, ImVec2(t.x + (line1W + repW + pickGap + pickHalf) * k, t.y + big * k * 0.52f), pickHalf * k, 3.5f * s * k,
+                     v.pick, Col(theme::kText));
     t.y += (big + 8 * s) * k;
     if (!lineM.empty()) {
         DrawSegs(dl, g_fontUi, mid * k, t, lineM);
@@ -1248,6 +1270,7 @@ bool DrawCalmBanner(ImDrawList* dl, const View& v, const Settings& st, bool on, 
         s_note.fret = v.fret;
         s_note.midi = v.midi;
         s_note.sustain = v.sustain;
+        s_note.pick = v.pick;
         s_note.repeatLeft = v.repeatLeft;
         s_note.repeatTotal = v.repeatTotal;
         s_note.tech = v.tech;
@@ -1298,6 +1321,16 @@ bool DrawCalmBanner(ImDrawList* dl, const View& v, const Settings& st, bool on, 
 // (Not the right button: the game opens its pause screen with it, whatever the window hook does.)
 // The game hides the mouse pointer in a song, so the bar draws one for a moment after it moves.
 std::vector<Range> g_drawRanges;  // the parts, for drawing (render thread)
+
+// The section of the song at time t ("Chorus 2"), "" = none known.
+std::string SectionAt(const View& v, double t) {
+    std::string name;
+    for (const auto& [start, n] : v.sections) {
+        if (start > t + 0.05) break;
+        name = n;
+    }
+    return name;
+}
 
 // The game's progress bar, measured on a 3440x1440 screen: its picture is 16:9, centred and scaled by
 // height; 4.8% to 11.7% of its height. It is a straight time axis from song time 0 at 10.4% of the
@@ -1463,10 +1496,14 @@ void DrawPracticeBar(ImDrawList* dl, const View& v, const Settings& st, float S,
         return std::string(buf);
     };
     std::string text;
-    if (parts.size() == 1) text = "practising " + mmss(parts[0].first) + " - " + mmss(parts[0].second);
+    const std::string partSec = parts.size() == 1 ? SectionAt(v, parts[0].first) : "";
+    if (parts.size() == 1)
+        text = "practising " + (partSec.empty() ? "" : partSec + " (") + mmss(parts[0].first) + " - " + mmss(parts[0].second) +
+               (partSec.empty() ? "" : ")");
     else if (parts.size() > 1) text = "practising " + std::to_string(parts.size()) + " parts";
+    const std::string mouseSec = hover ? SectionAt(v, T(mouse.x)) : "";  // the section under the mouse
     if (hover)
-        text += std::string(text.empty() ? "" : "   \xC2\xB7   ") +
+        text += std::string(text.empty() ? "" : "   \xC2\xB7   ") + (mouseSec.empty() ? "" : mouseSec + "   \xC2\xB7   ") +
                 (anyHeat ? "red: where you stopped most   " : "") +
                 "click: practise a phrase   drag: add a part   click a part: remove it   drag an end: change it";
     if (!text.empty()) {
@@ -1505,7 +1542,8 @@ void DrawCountIn(ImDrawList* dl, const View& v, float S, ImVec2 ds) {
     dl->AddText(g_fontBold, big, ImVec2(p0.x + (w - ns.x) * 0.5f, p0.y + pad * 0.7f + ss.y), Col(theme::kChord), num.c_str());
 }
 
-// The song clock, top-left by default: "1:23 / 4:28". Small and quiet, the game's HUD stays readable.
+// The song clock, top-left by default: "1:23 / 4:28   Chorus 2" (the section playing). Small and quiet,
+// the game's HUD stays readable.
 void DrawClock(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 ds) {
     const float s = S * st.clockSize / 100.0f;
     auto mmss = [](double t) {
@@ -1517,12 +1555,15 @@ void DrawClock(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec
     const std::string text = mmss(v.songTime) + (v.songLength > 0 ? "  /  " + mmss(v.songLength) : "");
     const float size = 26 * s, padX = 14 * s, padY = 6 * s;
     const ImVec2 ts = g_fontBold->CalcTextSizeA(size, FLT_MAX, 0, text.c_str());
-    const float w = ts.x + 2 * padX, h = ts.y + 2 * padY;
+    const std::string sec = v.section.empty() ? "" : "   " + v.section;
+    const float secW = sec.empty() ? 0 : g_fontBold->CalcTextSizeA(size, FLT_MAX, 0, sec.c_str()).x;
+    const float w = ts.x + secW + 2 * padX, h = ts.y + 2 * padY;
     const ImVec2 p0 = Place(st.clockX * S, st.clockY * S, w, h, ds);
     const ImVec2 p1(p0.x + w, p0.y + h);
     g_box[kClock] = {p0, p1, true};
     dl->AddRectFilled(p0, p1, Col(theme::kPanel, 170), 8 * s);
     dl->AddText(g_fontBold, size, ImVec2(p0.x + padX, p0.y + padY), Col(theme::kText, 230), text.c_str());
+    if (!sec.empty()) dl->AddText(g_fontBold, size, ImVec2(p0.x + padX + ts.x, p0.y + padY), Col(theme::kChord, 230), sec.c_str());
 }
 
 // ---- The scrolling tab: DrawTab() and its parts ----------------------------------------------------
@@ -1816,12 +1857,31 @@ void DrawTabGrid(const TabStaff& tab, const std::vector<TabBeat>& grid, float st
         if (b.downbeat) {
             tab.dl->AddLine(ImVec2(x, staffTop), ImVec2(x, staffBottom), Col(theme::kGrid, 150), 2 * s);
             const std::string num = std::to_string(b.measure);
-            const ImVec2 ns = g_fontUi->CalcTextSizeA(15 * s, FLT_MAX, 0, num.c_str());  // centred on the line
-            const float numY = tab.TopY() - tab.gap * 0.46f - 2 * s - ns.y;  // just above the top string's fret boxes
-            tab.dl->AddText(g_fontUi, 15 * s, ImVec2(std::floor(x - ns.x * 0.5f), std::floor(numY)), Col(theme::kRhythm, 170), num.c_str());
+            // Just before the line (a note on the bar line has its pick mark right on it, and a section's
+            // name comes after it), just above the top string's fret boxes.
+            const ImVec2 ns = g_fontUi->CalcTextSizeA(15 * s, FLT_MAX, 0, num.c_str());
+            const float numY = tab.TopY() - tab.gap * 0.46f - 2 * s - ns.y;
+            const float numX = tab.mirror ? x + 7 * s : x - 7 * s - ns.x;
+            tab.dl->AddText(g_fontUi, 15 * s, ImVec2(std::floor(numX), std::floor(numY)), Col(theme::kRhythm, 170), num.c_str());
         } else {
             tab.dl->AddLine(ImVec2(x, staffTop + 6 * s), ImVec2(x, staffBottom - 6 * s), Col(theme::kGrid, 45), 1 * s);
         }
+    }
+}
+
+// Where a section of the song starts: a gold line across the staff and its name ("Chorus 2") on the bar
+// numbers' row, just after the line (clear of the bar number centred on it).
+void DrawTabSections(const TabStaff& tab, const std::vector<std::pair<double, std::string>>& sections) {
+    const float s = tab.s, fs = 15 * s;
+    for (const auto& [t, name] : sections) {
+        const float x = tab.TimeX(t);
+        const ImVec2 ns = g_fontBold->CalcTextSizeA(fs, FLT_MAX, 0, name.c_str());
+        if (x < tab.lineL - ns.x - 30 * s || x > tab.lineR + 4 * s) continue;
+        const float y = std::floor(tab.TopY() - tab.gap * 0.46f - 2 * s - ns.y);
+        const float tx = std::floor(tab.mirror ? x - 14 * s - ns.x : x + 14 * s);
+        tab.dl->AddLine(ImVec2(x, tab.TopY() - 14 * s), ImVec2(x, tab.BotY() + 10 * s), Col(theme::kChord, 110), 2 * s);
+        tab.dl->AddRectFilled(ImVec2(tx - 4 * s, y - 1 * s), ImVec2(tx + ns.x + 4 * s, y + ns.y + 1 * s), Col(theme::kPanel, 200), 4 * s);
+        tab.dl->AddText(g_fontBold, fs, ImVec2(tx, y), Col(theme::kChord, 230), name.c_str());
     }
 }
 
@@ -1998,6 +2058,14 @@ void DrawTabMarks(const TabStaff& tab, const std::string& text, float x, float y
     tab.dl->AddText(g_fontBold, mark, p, Col(theme::kText, (int)(235 * a)), text.c_str());
 }
 
+// A pick stroke above the staff, on the bar numbers' row, as in printed music: a bracket open at the
+// bottom = down stroke, a V = up stroke. The song's own are drawn a little stronger than suggested ones.
+void DrawPickMark(const TabStaff& tab, float x, int pick, bool fromSong, float a) {
+    const float s = tab.s, hw = 6.5f * s;
+    const float cy = tab.TopY() - tab.gap * 0.46f - 2 * s - 10 * s;
+    DrawPickSign(tab.dl, ImVec2(x, cy), hw, 2.5f * s, pick, Col(theme::kRhythm, (int)((fromSong ? 235 : 190) * a)));
+}
+
 // `aboveMask`: the bits whose marks go above this box (a chord draws the ones all its strings share
 // once, above the chord).
 void DrawTabTechnique(const TabStaff& tab, const technique::Technique& tq, int fret, int str, float x, float half, float a,
@@ -2086,6 +2154,7 @@ void DrawTabItem(const TabStaff& tab, TabShow& sh, const TabItem& it) {
             DrawTabTechnique(tab, t.tech[str], t.frets[str], str, x, tab.BoxHalf(std::to_string(t.frets[str]), RunText(it)), a, ~shared);
     if (shared && topStr >= 0)
         DrawTabMarks(tab, TabMarks(shared), x, tab.RowY(topStr) - tab.gap * 0.46f * std::max(0.7f, std::min(1.1f, tab.nsz)), a);
+    if (sh.st->tabPicks && t.pick >= 0 && it.count == 1) DrawPickMark(tab, x, t.pick, t.pickFromSong, a);
 }
 
 // One staff: the strings, the beat grid, the cursor, the rhythm lane and the notes, as set up by
@@ -2100,6 +2169,7 @@ void DrawTabStaff(const TabStaff& tab, TabShow& sh, int cursor) {
     // (The beats always come with the View, for the rhythm below; the lines are the tabBeats setting.)
     static const std::vector<TabBeat> kNoBeats;
     DrawTabGrid(tab, sh.st->tabBeats ? sh.v->tabBeats : kNoBeats, staffTop, staffBottom);
+    DrawTabSections(tab, sh.v->sections);
     // The practice parts (the practice bar), lightly shaded.
     for (const auto& p : g_drawRanges) {
         const float xa = tab.TimeX(p.first), xb = tab.TimeX(p.second);
@@ -2513,6 +2583,11 @@ void MenuTab(Settings& e) {
     Check("Spread out fast notes", &e.tabSpread,
           "Fast passages get more room so every fret can be read, and a fast repeat of one fret shows once as \"12 x8\". "
           "Off: spacing exactly by time.");
+    Check("Show which way to pick (down / up)", &e.tabPicks,
+          "Above each picked note on the tab: a bracket = a down stroke, a V = an up stroke (the usual signs in printed "
+          "music); the banner shows the same sign after the note. From the song when it says (few songs "
+          "do); otherwise suggested from the rhythm, as alternate picking is taught: down on the beat, up in between "
+          "(with 16th notes, down on the beat and on the \"and\"). Hammer-ons, pull-offs and taps get none.");
     Check("Colour the notes you played", &e.tabMarks,
           "Once the song has passed a note, its box on the tab gets a colour: green = you played it on time, amber = the "
           "song waited for it, red = skipped, or (in \"Show the notes\") not played.");
@@ -2621,8 +2696,10 @@ void MenuPractice(Settings& e, const View& v, float s, bool* forget) {
             const Range r = phrase(i);
             ImGui::PushID((int)i);
             ImGui::AlignTextToFramePadding();
-            ImGui::Text("%s - %s", mmss(r.first).c_str(), mmss(r.second).c_str());
-            ImGui::SameLine(ImGui::GetFontSize() * 6.5f);
+            const std::string sec = SectionAt(v, r.first);  // "Chorus 2  2:23", or the times
+            if (sec.empty()) ImGui::Text("%s - %s", mmss(r.first).c_str(), mmss(r.second).c_str());
+            else ImGui::Text("%s  %s", sec.c_str(), mmss(r.first).c_str());
+            ImGui::SameLine(ImGui::GetFontSize() * 10.5f);
             ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.88f, 0.24f, 0.2f, 1));
             ImGui::ProgressBar(v.phraseHeat[i], ImVec2(220 * s, ImGui::GetFrameHeight() * 0.5f), "");
             ImGui::PopStyleColor();

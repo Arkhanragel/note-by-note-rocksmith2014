@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "music.h"
 #include "technique.h"
 
 namespace nbn {
@@ -39,6 +40,11 @@ struct Target {
     // per fret from the anchor).
     int anchorFret = 0, anchorWidth = 0;
     int fingers[6] = {-1, -1, -1, -1, -1, -1};
+    // Pick stroke (picking.h): what the song file says (0 = down, 1 = up, -1 = none; almost every song
+    // leaves 0), and what the tab shows: 0 = down, 1 = up, -1 = not picked (hammer-on, pull-off, tap,
+    // linked from the note before).
+    int songPick = -1;
+    int pick = -1;
 };
 
 // One beat of the song's beat grid (the highway's bar lines). From game memory only.
@@ -61,6 +67,8 @@ struct Chart {
     int capo = 0;             // capo fret, 0 = none
     std::vector<PhraseIteration> pis;
     std::vector<Beat> beats;                           // beat grid, in time order (empty = unknown)
+    std::vector<music::Section> sections;              // "Intro", "Verse 1"... in time order (empty = unknown)
+    bool picksFromSong = false;                        // Target::pick is the song's own (else from the rhythm)
     std::vector<int> levelCounts;                      // notes per level (to identify the arrangement)
     std::vector<std::vector<std::vector<Target>>> byLevelPi;  // [level][pi] -> notes sorted by time
 

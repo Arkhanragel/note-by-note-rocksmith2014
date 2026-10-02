@@ -77,6 +77,7 @@ struct Settings {
     bool showTab = true;         // show the scrolling tab while playing
     bool tabBeats = true;        // bar lines (with bar numbers) and beat lines in the tab
     bool tabRhythm = true;       // rhythm under the tab: stems + beams (how many notes per beat)
+    bool tabPicks = true;        // pick strokes: marks above the tab's notes, and a line on the banner (picking.h)
     bool tabMarks = true;        // a note's box is coloured once the song passed it: green = played on time,
                                  // amber = the song waited for it, red = skipped or missed (TabNote::mark)
     int tabSeconds = 4;          // seconds of music ahead of the "now" line
@@ -152,6 +153,8 @@ struct TabNote {
                                  // on time, 2 = the song waited for it, 3 = skipped or missed
     technique::Technique tech[6];  // per string: how it's played (slide, bend, hammer-on...), drawn in tab
                                    // notation around the fret number ("7/", "12 ^1", "h", "PM", "~")
+    int pick = -1;               // pick stroke (setting tabPicks): 0 = down, 1 = up, -1 = none (not picked)
+    bool pickFromSong = false;   // the song's own (else suggested from the rhythm: drawn a little fainter)
 };
 
 // One beat line of the scrolling tab.
@@ -177,6 +180,7 @@ struct View {
     int string = 0;              // 0 = thickest string (low E), like the charts
     int fret = 0;                // 0 = open string
     int midi = -1;               // the note (single notes), for its name ("C", "F#")
+    int pick = -1;               // pick stroke (setting tabPicks): 0 = down, 1 = up, -1 = none (the banner says it)
     double sustain = 0;          // how long it rings (s, the tail on the highway); from kHoldMinS the banner
                                  // says how long to hold it
     double holdFrom = -1;        // the held note just played (from kHoldMinS): its song time and sustain, for
@@ -196,6 +200,8 @@ struct View {
     int fingers[6] = {-1, -1, -1, -1, -1, -1};  // per string: 1 = index .. 4 = little, 0 = thumb, -1 = none
     int countIn = 0;             // the count-in's number on screen (3, 2, 1), 0 = no count-in now
     std::vector<double> phraseStarts;  // when each phrase iteration starts (the practice bar's ticks and snaps)
+    std::vector<std::pair<double, std::string>> sections;  // the song's sections: start, name ("Verse 2")
+    std::string section;               // the one playing now (the clock shows it); "" = none
     std::vector<float> phraseHeat;     // trouble spots, per phrase iteration (as phraseStarts): 0 = none .. 1 = the
                                        // song's hardest (stats.h); red on the practice bar, listed in the menu
     std::string runSummary;            // this time in the song ("12 played on time, 3 waited for..."), for the menu

@@ -33,7 +33,7 @@ target_include_directories(imgui PUBLIC ${IMGUI_DIR} ${IMGUI_DIR}/backends)
 target_compile_definitions(imgui PUBLIC IMGUI_DISABLE_DEMO_WINDOWS IMGUI_IMPL_WIN32_DISABLE_GAMEPAD)
 
 # THE MOD: NoteByNote.dll (loaded by our RS_ASIO build from the game folder).
-add_library(NoteByNote SHARED nbn/main.cpp nbn/game.cpp nbn/detector.cpp nbn/tap.cpp nbn/chart.cpp nbn/log.cpp nbn/overlay.cpp nbn/theme.cpp nbn/music.cpp nbn/technique.cpp nbn/hint.cpp nbn/stringid.cpp nbn/startup.cpp nbn/fastintro.cpp nbn/crashfix.cpp nbn/report.cpp nbn/stats.cpp nbn/tuning.cpp)
+add_library(NoteByNote SHARED nbn/main.cpp nbn/game.cpp nbn/detector.cpp nbn/tap.cpp nbn/chart.cpp nbn/log.cpp nbn/overlay.cpp nbn/theme.cpp nbn/music.cpp nbn/technique.cpp nbn/hint.cpp nbn/stringid.cpp nbn/startup.cpp nbn/fastintro.cpp nbn/crashfix.cpp nbn/report.cpp nbn/stats.cpp nbn/tuning.cpp nbn/picking.cpp)
 target_link_libraries(NoteByNote PRIVATE imgui minhook imagehlp winmm)
 target_compile_definitions(NoteByNote PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE _CRT_SECURE_NO_WARNINGS)
 
@@ -47,6 +47,8 @@ add_executable(nbn_stringid_test nbn/test_stringid.cpp nbn/stringid.cpp nbn/dete
 add_executable(nbn_stats_test nbn/test_stats.cpp nbn/stats.cpp)
 # Tuning check: steady pitch, when a string or the guitar is out of tune, the words (--wav: measure recordings).
 add_executable(nbn_tuning_test nbn/test_tuning.cpp nbn/tuning.cpp nbn/music.cpp nbn/detector.cpp)
+# Pick strokes: suggested from the rhythm, or the song's own when they make sense.
+add_executable(nbn_picking_test nbn/test_picking.cpp nbn/picking.cpp nbn/chart.cpp nbn/music.cpp nbn/technique.cpp)
 
 # Dev injector: loads a DLL into the running game.
 add_executable(nbn_inject injector/inject.cpp)

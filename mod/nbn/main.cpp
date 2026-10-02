@@ -175,6 +175,8 @@ Config LoadConfig() {
                 "; 1 = rhythm under the tab, as in printed tab: a stem per note, beams = notes per beat\n"
                 ";     (no beam = 1, 1 beam = 2, 2 beams = 4, 3 beams = 8; a small 3 = triplets)\n"
                 "TabRhythm=1\n"
+                "; 1 = pick strokes above the tab's notes (down / up): the song's, or suggested from the rhythm\n"
+                "TabPicks=1\n"
                 "; 1 = colour each note on the tab once the song has passed it: green = played on time,\n"
                 ";     amber = the song waited for it, red = skipped or not played\n"
                 "TabMarks=1\n"
@@ -282,6 +284,7 @@ Config LoadConfig() {
     c.initial.tabSeconds = std::max(2, std::min(8, (int)GetPrivateProfileIntW(L"NoteByNote", L"TabSeconds", 4, ini.c_str())));
     c.initial.tabRhythm = GetPrivateProfileIntW(L"NoteByNote", L"TabRhythm", 1, ini.c_str()) != 0;
     c.initial.tabMarks = GetPrivateProfileIntW(L"NoteByNote", L"TabMarks", 1, ini.c_str()) != 0;
+    c.initial.tabPicks = GetPrivateProfileIntW(L"NoteByNote", L"TabPicks", 1, ini.c_str()) != 0;
     c.initial.tabSpread = GetPrivateProfileIntW(L"NoteByNote", L"TabSpread", 1, ini.c_str()) != 0;
     c.initial.tabPage = GetPrivateProfileIntW(L"NoteByNote", L"TabPages", 1, ini.c_str()) != 0;
     // TabRows; older ini files have TabTwoRows=1 instead.
@@ -366,6 +369,7 @@ void SaveSettings(const overlay::Settings& st) {
     put(L"TabThickOnTop", st.tabThickTop);
     put(L"TabRhythm", st.tabRhythm);
     put(L"TabMarks", st.tabMarks);
+    put(L"TabPicks", st.tabPicks);
     const std::string themeName = theme::kThemes[st.theme >= 0 && st.theme < theme::kThemeCount ? st.theme : 0].name;
     WritePrivateProfileStringW(L"NoteByNote", L"Theme", std::wstring(themeName.begin(), themeName.end()).c_str(), ini.c_str());
     for (int i = 0; i < theme::kSlots; ++i) {  // own colours as "#RRGGBB"; the theme's = no key
@@ -808,6 +812,7 @@ struct MainLoop {
         std::copy(std::begin(note.notes), std::end(note.notes), v.notes);
         v.midi = (!note.chord && !note.midi.empty()) ? note.midi[0] : -1;
         v.sustain = LongNote(note) ? note.sustain : 0;  // (the banner's "Hold" only for a long one)
+        v.pick = note.pick;
         if (holding) {
             v.holdFrom = held.time;
             v.holdLen = held.sustain;
@@ -856,6 +861,14 @@ struct MainLoop {
         // The clock works even with the mode off or without a chart (it's just the song time).
         if (!inSong || !game::GetSongTime(&v.songTime)) v.songTime = -1;
         if (inSong && !game::GetSongLength(&v.songLength)) v.songLength = 0;
+        // The song's sections (the tab, the clock, the practice bar and page name them).
+        v.sections.clear();
+        v.section.clear();
+        if (chartOk && inSong)
+            for (const auto& sec : chart.sections) {
+                v.sections.push_back({sec.start, sec.name});
+                if (v.songTime >= sec.start - 0.05 && v.songTime < sec.end) v.section = sec.name;
+            }
         // The scrolling tab (works with the mode off too).
         if (inSong && chartOk && st.showTab && v.songTime >= 0) {
             if (now >= nextTabRefresh) RefreshTab(v.songTime, now);
@@ -895,6 +908,8 @@ struct MainLoop {
             tn.time = t->time;
             tn.chord = t->chord;
             tn.ignore = t->ignore;
+            tn.pick = t->pick;
+            tn.pickFromSong = chart.picksFromSong;
             if (t->chord) {
                 std::copy(std::begin(t->frets), std::end(t->frets), tn.frets);
                 for (int s = 0; s < 6; ++s) {  // each string's technique, plus the chord's own palm mute / mute / accent

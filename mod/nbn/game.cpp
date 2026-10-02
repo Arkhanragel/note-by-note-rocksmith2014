@@ -15,6 +15,8 @@
 
 #include "chart.h"
 #include "log.h"
+#include "music.h"
+#include "picking.h"
 #include "report.h"
 #include "signatures.h"
 
@@ -140,6 +142,10 @@ constexpr size_t kChordNameSize = 32;
 constexpr uintptr_t kSongDataTuning = 0x110;  //   vector<int16>: semitones per string vs E standard
 constexpr uintptr_t kSongDataCapo = 0x11C;    //   int8, -1 = no capo
 constexpr uintptr_t kSongDataLength = 0x148;  //   float SongLength, seconds
+// The sections ("intro", "verse"...), found 2026-10-02 by listing every vector of the song data (Seven Nation
+// Army remix lead: 23 x 0x58 bytes, the song file's Section): +0 name (32 chars), +0x20 number, +0x24 start,
+// +0x28 end (floats, s). The game splits them at every phrase (music::NameSections joins them again).
+constexpr uintptr_t kSongDataSections = 0xF4, kSectionSize = 0x58;
 // Note (0x1C8 bytes, same field order as the SNG note). Levels are stored in difficulty order.
 // +0x12/+0x13: the hand's anchor (the fret under the index finger, and how many frets the hand
 // covers), checked 2026-09-29 against Ode to Joy rhythm (notes on frets 2-5: anchor 2, width 4).
@@ -156,6 +162,10 @@ constexpr uint32_t kMaskChord = 0x2, kMaskIgnore = 0x40000;
 // (int8, -1 = none), unpitched-slide-to fret, and the largest bend (float, steps; the bend's curve
 // follows from +0x44 as (time, steps) pairs). Checked when read, like the sustain.
 constexpr uintptr_t kNoteSlideTo = 0x34, kNoteSlideUnpitchTo = 0x35, kNoteMaxBend = 0x40;
+// The pick direction (int8: 0 = down, 1 = up, -1 = chords), found 2026-10-02: the only byte near the
+// technique fields that is 0 on every single note and -1 on every chord (Seven Nation Army remix lead),
+// like the song file's PickDirection (+0x32 there).
+constexpr uintptr_t kNotePick = 0x36;
 // A chord's techniques per string: the chord-notes table, found 2026-09-29 (Ode to Joy rhythm: 16
 // entries = 16 x 0x948 bytes, the song file's layout): +0x0 mask[6] uint32, +0x18 bend curves[6]
 // (32 x (float time, float steps, 4 bytes) + int32 count, 0x184 bytes each), +0x930 slide-to[6] int8,
@@ -729,6 +739,8 @@ struct NoteDecoder {
             t.anchorWidth = width;
         }
         t.sustain = (sus > 0 && sus < 60) ? sus : 0;
+        const int pick = At<int8_t>(notes, n + kNotePick);
+        t.songPick = (pick == 0 || pick == 1) ? pick : -1;
         if (chordId >= 0 && (mask & kMaskChord) && (size_t)chordId * kChordSize < chords.size()) {
             t.chord = true;
             const size_t ch = (size_t)chordId * kChordSize;
@@ -823,6 +835,23 @@ std::vector<Target> MergeTogether(std::vector<Target> all) {
 }
 
 // What was read, in the log (and a few beats, to check the grid by eye).
+// The song's sections (empty if they don't look right: then the mod just doesn't name them).
+std::vector<music::Section> ReadSections(uintptr_t data) {
+    std::vector<uint8_t> raw;
+    if (!ReadVector(data + kSongDataSections, kSectionSize, 1000, &raw)) return {};
+    std::vector<music::SectionPiece> pieces;
+    for (size_t i = 0; i < raw.size(); i += kSectionSize) {
+        char name[33] = {};
+        std::memcpy(name, raw.data() + i, 32);
+        bool ok = name[0] != 0;
+        for (const char* p = name; *p && ok; ++p) ok = *p > 32 && *p < 127;
+        const float a = At<float>(raw, i + 0x24), b = At<float>(raw, i + 0x28);
+        if (!ok || !(a >= 0) || !(b >= a) || b > 7200) return {};
+        pieces.push_back({name, At<int32_t>(raw, i + 0x20), a, b});
+    }
+    return music::NameSections(pieces);
+}
+
 void LogChart(const Chart& chart, const int tuning[6], size_t chordShapes, const std::vector<Target>& all) {
     size_t sustained = 0;
     double maxSustain = 0;
@@ -836,6 +865,13 @@ void LogChart(const Chart& chart, const int tuning[6], size_t chordShapes, const
     for (size_t i = 0; i < chart.beats.size() && i < 6; ++i)
         Log("  beat %zu: %.3f s, bar %d%s", i, chart.beats[i].time, chart.beats[i].measure,
             chart.beats[i].downbeat ? ", first of the bar" : "");
+    std::string secs;
+    for (const auto& s : chart.sections) {
+        char b[64];
+        std::snprintf(b, sizeof(b), "%s%s %.1f", secs.empty() ? "" : ", ", s.name.c_str(), s.start);
+        secs += b;
+    }
+    Log("  sections: %s", secs.empty() ? "(none)" : secs.c_str());
 }
 
 }  // namespace
@@ -870,6 +906,7 @@ bool ReadSongChart(Chart* chart) {
     for (size_t i = 0; i < pis.size(); i += kPiSize)
         c.pis.push_back({At<int32_t>(pis, i), At<float>(pis, i + 4), At<float>(pis, i + 8)});
     c.beats = ReadBeats(data);
+    c.sections = ReadSections(data);
 
     std::vector<Target> all;
     int maxString = 0;
@@ -887,6 +924,9 @@ bool ReadSongChart(Chart* chart) {
     c.arrangement = c.bass ? "bass" : (c.bassUnsure ? "guitar or bass" : "guitar");
     all = MergeTogether(std::move(all));
     c.Index(all);
+    const picking::Result picks = picking::Assign(&c);
+    Log("pick strokes: %s (the song marks %d of %d picked notes \"up\", %d agree with the rhythm)",
+        picks.fromSong ? "the song's own" : "suggested from the rhythm", picks.songUps, picks.picked, picks.agree);
     *chart = std::move(c);
     LogChart(*chart, tuning, chords.size() / kChordSize, all);
     return true;

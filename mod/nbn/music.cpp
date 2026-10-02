@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <map>
 
 namespace nbn::music {
 
@@ -119,6 +120,83 @@ std::string ChordMeaning(const std::string& rawName, const std::vector<int>& not
     }
     // A name we don't know (song authors write all sorts of things): describe the notes instead.
     return FromNotes(notes, flats);
+}
+
+// ------------------------------------------------------------------ sections
+namespace {
+
+// The section names the game uses (the song file's), in words. "mod..." = the same part again in
+// another key. Others: first letter capitalised.
+struct SectionWords {
+    const char* name;
+    const char* word;
+    const char* after;  // after the number
+};
+const SectionWords kSectionWords[] = {
+    {"intro", "Intro", ""},           {"outro", "Outro", ""},
+    {"verse", "Verse", ""},           {"chorus", "Chorus", ""},
+    {"prechorus", "Pre-chorus", ""},  {"postchorus", "Post-chorus", ""},
+    {"prevs", "Pre-verse", ""},       {"postvs", "Post-verse", ""},
+    {"bridge", "Bridge", ""},         {"prebrdg", "Pre-bridge", ""},
+    {"postbrdg", "Post-bridge", ""},  {"solo", "Solo", ""},
+    {"riff", "Riff", ""},             {"hook", "Hook", ""},
+    {"breakdown", "Breakdown", ""},   {"transition", "Transition", ""},
+    {"interlude", "Interlude", ""},   {"melody", "Melody", ""},
+    {"ambient", "Ambient", ""},       {"buildup", "Build-up", ""},
+    {"fadein", "Fade-in", ""},        {"fadeout", "Fade-out", ""},
+    {"noguitar", "No guitar", ""},    {"silence", "Silence", ""},
+    {"tapping", "Tapping", ""},       {"vamp", "Vamp", ""},
+    {"variation", "Variation", ""},   {"modverse", "Verse", " (new key)"},
+    {"modchorus", "Chorus", " (new key)"}, {"modbridge", "Bridge", " (new key)"},
+};
+
+const SectionWords* FindWords(const std::string& name) {
+    std::string low = name;
+    for (char& c : low) c = (char)std::tolower((unsigned char)c);
+    for (const auto& w : kSectionWords)
+        if (low == w.name) return &w;
+    return nullptr;
+}
+
+}  // namespace
+
+std::string SectionWord(const std::string& name) {
+    if (const SectionWords* w = FindWords(name)) return std::string(w->word) + w->after;
+    std::string out = name;
+    if (!out.empty()) out[0] = (char)std::toupper((unsigned char)out[0]);
+    return out;
+}
+
+std::vector<Section> NameSections(const std::vector<SectionPiece>& pieces) {
+    // Which pieces start a section: their number is the next one for that name (1, 2, 3...). A piece
+    // with another number continues the last section of that name (or starts the first one).
+    std::map<std::string, int> next, last, count;
+    std::vector<int> number(pieces.size());
+    for (size_t i = 0; i < pieces.size(); ++i) {
+        const auto& p = pieces[i];
+        const int want = next.count(p.name) ? next[p.name] : 1;
+        if (p.number == want || !last.count(p.name)) {
+            number[i] = want;
+            next[p.name] = want + 1;
+            last[p.name] = want;
+            ++count[p.name];
+        } else {
+            number[i] = last[p.name];
+        }
+    }
+    std::vector<Section> out;
+    for (size_t i = 0; i < pieces.size(); ++i) {
+        const auto& p = pieces[i];
+        const SectionWords* w = FindWords(p.name);
+        std::string name = w ? w->word : SectionWord(p.name);
+        if (count[p.name] > 1) name += " " + std::to_string(number[i]);
+        if (w) name += w->after;
+        if (!out.empty() && out.back().name == name && p.start <= out.back().end + 0.01)
+            out.back().end = std::max(out.back().end, p.end);  // the same section, the next phrase
+        else
+            out.push_back({name, p.start, p.end});
+    }
+    return out;
 }
 
 }  // namespace nbn::music
