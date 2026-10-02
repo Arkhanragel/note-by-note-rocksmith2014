@@ -8,8 +8,6 @@
 
 namespace nbn {
 
-namespace {
-
 // In-place iterative radix-2 FFT (n must be a power of two). inverse=true computes the unscaled
 // inverse transform (the caller divides by n).
 void Fft(std::vector<std::complex<double>>& a, bool inverse) {
@@ -34,6 +32,8 @@ void Fft(std::vector<std::complex<double>>& a, bool inverse) {
         }
     }
 }
+
+namespace {
 
 double HzToMidi(double f) { return 69.0 + 12.0 * std::log2(f / 440.0); }
 

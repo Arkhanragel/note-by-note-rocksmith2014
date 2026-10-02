@@ -54,6 +54,10 @@ struct Settings {
                                  // string's colour with the fret number, a red X where a wrong note was
                                  // played); off = the small tab
     bool waitChords = true;      // also wait at chords (off = chords pass, only single notes wait)
+    bool stringDetect = true;    // after a wrong single note, tell from its sound which string it was played on
+                                 // (stringid.h) and show only that spot; needs a calibration (each open
+                                 // string plucked a few times) and a clean signal. Off / not sure = the
+                                 // guess plus faint marks on the other spots with that pitch
     bool skipGreyed = true;      // after resuming from the game's pause screen, the notes the game replays
                                  // greyed out are not waited for again
     bool showClock = true;       // show the song time while playing
@@ -100,6 +104,10 @@ struct Settings {
     int tabX = -810, tabY = 385;     // tab's top-left corner: x from the screen centre, y from the top
     int tabWidth = 640;              // tab's width (more width = more room between the notes)
     int tabSize = 100;               // tab's height and text size
+    int mistakeX = 0, mistakeY = 0;  // the wrong-note panel: offset from its place beside the banner (right
+                                     // of it, tops level), so it follows the banner; 0, 0 = beside it (on
+                                     // its left or under it when there's no room on the right)
+    int mistakeSize = 100;           // the wrong-note panel's size
 
     bool operator==(const Settings&) const = default;
 };
@@ -170,6 +178,12 @@ struct View {
     std::vector<TabBeat> tabBeats;  // the beat grid over the same time span (empty = no lines)
     hint::Line hint;             // while waiting: how to fix the last wrong note/chord (empty = none)
     std::vector<hint::Mark> heardAt;  // and where it was probably played (red X on the banner's fretboard)
+    // String identification (the menu's "Wrong notes" part): a line about its state, shown as a warning
+    // when something is wrong (no calibration, processed signal...); calibrating = the menu shows Cancel.
+    std::string stringIdStatus;
+    bool stringIdWarn = false;
+    bool calibrating = false;
+    bool calibrated = false;
 };
 
 // Starts a thread that waits for d3d9.dll and installs the hooks. Returns immediately.
@@ -193,6 +207,10 @@ void SetEnabled(bool on);
 
 // True once after the player pressed "Skip this note" in the menu.
 bool TakeSkipRequest();
+
+// Once after the player pressed the menu's Calibrate (1) or Cancel (2) button for the string
+// identification; 0 = nothing asked.
+int TakeCalibrationRequest();
 
 // The practice parts the player chose on the practice bar (song seconds, in time order, not
 // overlapping): the mod waits only for the notes inside them. Empty = the whole song. ClearRanges: a

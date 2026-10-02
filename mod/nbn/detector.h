@@ -6,12 +6,16 @@
 //   OnsetDetector   "a new pick attack happened" (energy jump over the recent minimum)
 //   NoteTracker     turns 256-sample blocks into NoteEvents ("the player just played X")
 #pragma once
+#include <complex>
 #include <deque>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace nbn {
+
+// In-place radix-2 FFT (size a power of two); inverse = unscaled inverse (divide by n yourself).
+void Fft(std::vector<std::complex<double>>& a, bool inverse);
 
 struct PitchResult {
     bool ok = false;

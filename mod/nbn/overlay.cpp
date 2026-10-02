@@ -43,6 +43,7 @@ struct Shared {
     std::string toast;
     DWORD toastUntil = 0;
     bool skipRequest = false;
+    int calibrationRequest = 0;  // 1 = start, 2 = cancel (TakeCalibrationRequest)
     std::vector<Range> ranges;  // the practice parts (song seconds), sorted; empty = the whole song
 } g;
 std::atomic<bool> g_menuOpen{false};
@@ -68,13 +69,16 @@ void CopyLayout(const Settings& from, Settings* to) {
     to->tabY = from.tabY;
     to->tabWidth = from.tabWidth;
     to->tabSize = from.tabSize;
+    to->mistakeX = from.mistakeX;
+    to->mistakeY = from.mistakeY;
+    to->mistakeSize = from.mistakeSize;
 }
 
 // ------------------------------------------------------------------ movable parts
 // The parts the player can drag while the menu is open. Each Draw* function records where it drew
 // its part (render thread only); the next frame's mouse handling hit-tests those boxes.
-enum Part { kBanner, kClock, kTab, kParts };
-const char* kPartName[kParts] = {"Banner", "Clock", "Tab"};
+enum Part { kBanner, kClock, kTab, kMistake, kParts };
+const char* kPartName[kParts] = {"Banner", "Clock", "Tab", "Wrong note"};
 struct Box {
     ImVec2 p0, p1;
     bool drawn = false;  // drawn this frame
@@ -631,6 +635,7 @@ struct NeckPic {
 
     // The red X's fade in (0.2 s) each time they change, so a new wrong note never pops in.
     float MarksAlpha() const {
+        if (marks.empty()) return 1;  // (a picture without X's mustn't restart the fade of one with them)
         static std::string s_key;
         static double s_since = 0;
         std::string key;
@@ -845,6 +850,114 @@ void DrawChordBanner(ImDrawList* dl, const View& v, const Settings& st, float S,
     }
 }
 
+// ------------------------------------------------------------------ the mistake panel
+// After a wrong note: what went wrong and where, in its own panel BESIDE the banner, so the banner
+// (what to play) never changes while the song waits. A header ("You played C"), the advice wrapped to
+// the panel's width, and the same piece of fretboard as the banner with a red X where the note was
+// played and an arrow to the right spot.
+
+// Advice pieces as wrapped lines no wider than maxW (word by word; " · " between two pieces of
+// advice starts a new line).
+std::vector<std::vector<Seg>> WrapSegs(ImFont* f, float size, const std::vector<Seg>& segs, float maxW) {
+    std::vector<std::vector<Seg>> lines(1);
+    float x = 0;
+    auto put = [&](const std::string& t, ImU32 col) {
+        if (!lines.back().empty() && lines.back().back().col == col) lines.back().back().text += t;
+        else lines.back().push_back({t, col});
+    };
+    for (const auto& sg : segs) {
+        if (sg.text == "   \xC2\xB7   ") {  // hint.cpp's separator between two pieces of advice
+            lines.emplace_back();
+            x = 0;
+            continue;
+        }
+        size_t i = 0;
+        while (i < sg.text.size()) {  // a word and the spaces after it
+            size_t j = sg.text.find(' ', i);
+            j = j == std::string::npos ? sg.text.size() : sg.text.find_first_not_of(' ', j);
+            if (j == std::string::npos) j = sg.text.size();
+            std::string word = sg.text.substr(i, j - i);
+            const std::string bare = word.substr(0, word.find_last_not_of(' ') + 1);
+            if (x > 0 && x + f->CalcTextSizeA(size, FLT_MAX, 0, bare.c_str()).x > maxW) {
+                lines.emplace_back();
+                x = 0;
+            }
+            if (x == 0) word.erase(0, word.find_first_not_of(' '));
+            if (!word.empty()) {
+                put(word, sg.col);
+                x += f->CalcTextSizeA(size, FLT_MAX, 0, word.c_str()).x;
+            }
+            i = j;
+        }
+    }
+    return lines;
+}
+
+// Where the panel goes: beside the banner (b0, b1 = its box), moved by the player's offset. Without
+// an offset, on the banner's right, else its left, else under it.
+ImVec2 MistakePlace(const Settings& st, float S, float w, float h, ImVec2 ds, ImVec2 b0, ImVec2 b1) {
+    const float side = 16 * S;
+    ImVec2 p(b1.x + side + st.mistakeX * S, b0.y + st.mistakeY * S);
+    if (st.mistakeX == 0 && st.mistakeY == 0) {
+        if (p.x + w > ds.x - 8 * S) p.x = b0.x - side - w;
+        if (p.x < 8 * S) p = ImVec2((b0.x + b1.x - w) * 0.5f, b1.y + side);
+    }
+    return Place(p.x, p.y, w, h, ds);
+}
+
+// b0, b1: the banner's box.
+void DrawMistakePanel(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 ds, ImVec2 b0, ImVec2 b1) {
+    if (v.hint.empty()) return;
+    const float s = S * st.mistakeSize / 100.0f;
+    const float head = 30 * s, mid = 24 * s, pad = 20 * s;
+    const ImU32 red = Col(theme::kWarning);
+
+    // Header: "You played C" (the advice's first, grey piece without its dash), or for a chord "Not
+    // quite" (its advice starts with a grey "Fix:", dropped). The rest is the advice.
+    std::string header = v.chord ? "Not quite" : "Wrong note";
+    std::vector<Seg> body;
+    for (size_t k = 0; k < v.hint.size(); ++k) {
+        const auto& h = v.hint[k];
+        if (k == 0 && h.color == hint::kGrey) {
+            const size_t dash = h.text.find("  -  ");
+            if (h.text.rfind("You played", 0) == 0) header = h.text.substr(0, dash);
+            if (dash != std::string::npos || h.text.rfind("Fix:", 0) == 0) continue;
+        }
+        body.push_back({h.text, h.color >= 0 && h.color < 6 ? kStringColor[h.color] : (h.color == hint::kGrey ? Col(theme::kTextDim) : Col(theme::kText))});
+    }
+
+    const NeckPic neck(v, st, s);
+    const bool pic = st.bannerNeck && !neck.marks.empty();
+    const float innerW = std::max(pic ? neck.w : 0.0f, 380 * s);
+    const auto lines = WrapSegs(g_fontUi, mid, body, innerW);
+    const float w = pad + innerW + pad;
+    const float h = pad + head + 8 * s + lines.size() * (mid + 8 * s) + (pic ? 6 * s + neck.h : 0) + pad;
+    const ImVec2 p0 = MistakePlace(st, S, w, h, ds, b0, b1);
+    const ImVec2 p1(p0.x + w, p0.y + h);
+    g_box[kMistake] = {p0, p1, true};
+
+    // Fades in (0.2 s) when the advice changes, like the X's.
+    static std::string s_key;
+    static double s_since = 0;
+    const std::string key = hint::Text(v.hint);
+    if (key != s_key) {
+        s_key = key;
+        s_since = ImGui::GetTime();
+    }
+    const int vtx0 = dl->VtxBuffer.Size;
+    dl->AddRectFilled(p0, p1, Col(theme::kPanel, 222), 14 * s);
+    dl->AddRect(p0, p1, red, 14 * s, 0, 3 * s);
+    ImVec2 t(p0.x + pad, p0.y + pad);
+    DrawSegs(dl, g_fontBold, head, t, {{"!  ", red}, {header, red}});
+    t.y += head + 8 * s;
+    for (const auto& l : lines) {
+        DrawSegs(dl, g_fontUi, mid, t, l);
+        t.y += mid + 8 * s;
+    }
+    if (pic) neck.Draw(dl, st, ImVec2(p0.x + (w - neck.w) * 0.5f, t.y + 6 * s));
+    FadeFrom(dl, vtx0, (float)std::min(1.0, (ImGui::GetTime() - s_since) / 0.2));
+}
+
 // The banner, calm (no flashing): shown while the song waits, and while it plays towards the next stop
 // when that is close (it then already names that note), so between fast notes only its text changes.
 // It goes away only after kBridgeMs with nothing to show (a real pause in the notes), fading out, and
@@ -885,8 +998,13 @@ bool DrawCalmBanner(ImDrawList* dl, const View& v, const Settings& st, bool on, 
     s_fade.Step(want || keep, ImGui::GetIO().DeltaTime, 0.2f, 0.4f);
     if (!s_have || s_fade.alpha <= 0) return false;
     const int vtx0 = dl->VtxBuffer.Size;
-    if (s_note.chord) DrawChordBanner(dl, s_note, st, S, ds);
-    else DrawBanner(dl, s_note, st, S, ds);
+    // The banner shows only what to play; a wrong note goes to the mistake panel beside it.
+    View plain = s_note;
+    plain.hint.clear();
+    plain.heardAt.clear();
+    if (s_note.chord) DrawChordBanner(dl, plain, st, S, ds);
+    else DrawBanner(dl, plain, st, S, ds);
+    DrawMistakePanel(dl, s_note, st, S, ds, g_box[kBanner].p0, g_box[kBanner].p1);
     FadeFrom(dl, vtx0, s_fade.alpha);
     return true;
 }
@@ -1836,6 +1954,13 @@ void Arrange(bool menu, Settings* lay, float S, ImVec2 ds) {
         if (g_drag.part == kBanner) {
             e.bannerX = (int)std::lround((p.x + w0 * 0.5f - ds.x * 0.5f) / S);
             e.bannerY = (int)std::lround(p.y / S);
+        } else if (g_drag.part == kMistake) {
+            // An offset from its place on the banner's right (it follows the banner); never exactly
+            // 0, 0 after a drag, which means "beside it, wherever there's room".
+            const Box& bb = g_box[kBanner];
+            e.mistakeX = (int)std::lround((p.x - (bb.p1.x + 16 * S)) / S);
+            e.mistakeY = (int)std::lround((p.y - bb.p0.y) / S);
+            if (e.mistakeX == 0 && e.mistakeY == 0) e.mistakeY = 1;
         } else if (g_drag.part == kClock) {
             e.clockX = (int)std::lround(p.x / S);
             e.clockY = (int)std::lround(p.y / S);
@@ -1851,6 +1976,8 @@ void Arrange(bool menu, Settings* lay, float S, ImVec2 ds) {
         const float ry = (h0 + dy) / h0;
         if (g_drag.part == kBanner) {
             e.bannerSize = size(e.bannerSize * ((w0 + 2 * dx) / w0 + ry) * 0.5f);
+        } else if (g_drag.part == kMistake) {
+            e.mistakeSize = size(e.mistakeSize * ((w0 + dx) / w0 + ry) * 0.5f);
         } else if (g_drag.part == kClock) {
             e.clockSize = size(e.clockSize * ((w0 + dx) / w0 + ry) * 0.5f);
         } else {
@@ -1967,7 +2094,7 @@ void ApplyMenuStyle() {
 }
 
 // Page "Playing": when the song waits, and how strict the listening is.
-void MenuPlaying(Settings& e) {
+void MenuPlaying(Settings& e, const View& v, int* calibration) {
     ImGui::SeparatorText("Waiting");
     ImGui::BeginDisabled(!e.enabled);
     Check("Wait for chords too", &e.waitChords, "Off: the song only waits for single notes; chords pass by themselves.");
@@ -1986,6 +2113,24 @@ void MenuPlaying(Settings& e) {
     SliderRow("Count-in after a wait", "##countin", &e.countInBeats, 0, 4, e.countInBeats ? "%d beats" : "off",
               "After a long wait (over 2 seconds) ends with the right note, the song counts this many beats at its own "
               "tempo (3, 2, 1 on screen) before it goes on, so you find the beat again. 0 = off.");
+    ImGui::SeparatorText("Wrong notes");
+    Check("Show where you really played it", &e.stringDetect,
+          "The same note exists on several strings. After a wrong note, Note-by-Note listens to its sound (a thicker "
+          "string sounds a little different) and shows only the spot you played, with advice for that spot. It needs "
+          "a calibration, once per guitar: press Calibrate and pluck each open string 3 times. Works best with a "
+          "clean sound (no compressor, drive or EQ preset before the game). When it isn't sure, the banner shows its "
+          "guess and the other places with the same note, faded.");
+    ImGui::BeginDisabled(!e.stringDetect);
+    ImGui::PushTextWrapPos(0);
+    ImGui::TextColored(v.stringIdWarn ? ImVec4(1.0f, 0.65f, 0.25f, 1) : ImVec4(0.75f, 0.75f, 0.8f, 1), "%s",
+                       v.stringIdStatus.c_str());
+    ImGui::PopTextWrapPos();
+    if (v.calibrating) {
+        if (ImGui::Button("Cancel calibration")) *calibration = 2;
+    } else if (ImGui::Button(v.calibrated ? "Calibrate again" : "Calibrate")) {
+        *calibration = 1;
+    }
+    ImGui::EndDisabled();
 }
 
 // Page "Tab": everything about the scrolling tab.
@@ -2074,8 +2219,9 @@ void MenuScreen(Settings& e) {
           "only waits inside the parts you mark, and the tab shades them. Drag a part's end to change it, click a part "
           "to remove it.");
     ImGui::SeparatorText("Arrange");
-    ImGui::TextWrapped("While this menu is open, drag the banner, the clock or the tab to move it, and drag its "
-                       "bottom-right corner to resize it. The menu itself moves by its title bar.");
+    ImGui::TextWrapped("While this menu is open, drag the banner, the wrong-note panel, the clock or the tab to move "
+                       "it, and drag its bottom-right corner to resize it. The wrong-note panel follows the banner. "
+                       "The menu itself moves by its title bar.");
     ImGui::Spacing();
     if (ImGui::Button("Reset positions and sizes")) e = WithDefaultLayout(e);
 }
@@ -2153,6 +2299,7 @@ void DrawMenu(const View& v, const Settings& st, float s, ImVec2 ds) {
     ImGui::SetNextWindowSize(ImVec2(680 * s, 0), ImGuiCond_Always);
     if (!g_menuWasOpen) ImGui::SetNextWindowFocus();
     bool open = true, skip = false;
+    int calibration = 0;
     Settings e = st;
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings;
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10 * s, 7 * s));
@@ -2181,7 +2328,7 @@ void DrawMenu(const View& v, const Settings& st, float s, ImVec2 ds) {
                 if (!ImGui::BeginTabItem(kPages[p])) continue;
                 ImGui::BeginChild("page", ImVec2(0, 540 * s), ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
                 switch (p) {
-                    case 0: MenuPlaying(e); break;
+                    case 0: MenuPlaying(e, v, &calibration); break;
                     case 1: MenuTab(e); break;
                     case 2: MenuScreen(e); break;
                     case 3: MenuColours(e, s); break;
@@ -2215,6 +2362,7 @@ void DrawMenu(const View& v, const Settings& st, float s, ImVec2 ds) {
     std::lock_guard<std::mutex> lk(g.m);
     if (!(e == st)) g.settings = e;
     if (skip) g.skipRequest = true;
+    if (calibration) g.calibrationRequest = calibration;
     if (!open) g_menuOpen = false;
 }
 
@@ -2385,6 +2533,21 @@ void Frame(IDirect3DDevice9* dev) {
         ex.fret = 5;
         ex.midi = v.bass ? 43 : 55;
         DrawBanner(dl, ex, lay, s, ds);
+    }
+    if (bannerOn && menu && g_box[kBanner].drawn && !g_box[kMistake].drawn) {
+        // An example wrong note (2 frets too high on the banner's string), so its panel can be arranged.
+        const bool real = bannerShown && !v.chord && v.midi >= 0 && v.string >= 0 && v.string < (v.bass ? 4 : 6);
+        View ex;
+        ex.bass = v.bass;
+        ex.string = real ? v.string : 2;
+        ex.fret = real ? v.fret : 5;
+        ex.midi = real ? v.midi : (v.bass ? 43 : 55);
+        const int d = ex.fret + 2 <= 24 ? 2 : -2;
+        ex.hint = {{"You played " + music::NoteName(ex.midi + d) + "  -  ", hint::kGrey},
+                   {std::string(d > 0 ? "move DOWN" : "move UP") + " 2 frets, to fret " + std::to_string(ex.fret) + " on ", hint::kWhite},
+                   {StringLabel(lay, ex.string, v.bass ? 4 : 6), ex.string}};
+        ex.heardAt = {{ex.string, ex.fret + d, ex.midi + d, true}};
+        DrawMistakePanel(dl, ex, lay, s, ds, g_box[kBanner].p0, g_box[kBanner].p1);
     }
     const bool haveTime = v.inSong && v.songTime >= 0;
     if (st.showClock && haveTime) {
@@ -2637,6 +2800,13 @@ void ClearRanges() {
     std::lock_guard<std::mutex> lk(g.m);
     g.ranges.clear();
     g_clearDrawRanges = true;  // the render thread drops its copy on the next frame
+}
+
+int TakeCalibrationRequest() {
+    std::lock_guard<std::mutex> lk(g.m);
+    const int r = g.calibrationRequest;
+    g.calibrationRequest = 0;
+    return r;
 }
 
 bool TakeSkipRequest() {

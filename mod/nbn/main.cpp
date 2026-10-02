@@ -39,6 +39,7 @@
 #include "overlay.h"
 #include "report.h"
 #include "startup.h"
+#include "stringid.h"
 #include "tap.h"
 
 namespace nbn {
@@ -58,6 +59,7 @@ struct Config {
     bool testUnverifiedGame = false;     // run on a game build nobody verified (addresses found by pattern)
     int testAutoPassMs = 0;              // a wait passes by itself after this long (testing without a guitar)
     bool testPatternsOnly = false;       // dev: ignore the verified addresses, use only the patterns
+    std::string stringCalibration;       // the string identification's calibration (stringid::Calibration text)
 };
 
 std::wstring DllDir() {
@@ -115,6 +117,11 @@ Config LoadConfig() {
                 "CountInBeats=3\n"
                 "; 1 = the same note one octave higher/lower also counts\n"
                 "AcceptOctaves=0\n"
+                "; 1 = after a wrong single note, show only the spot you really played it on (told by its\n"
+                ";     sound). Needs the calibration in the F8 menu (Playing page) and a clean guitar sound\n"
+                "StringDetect=1\n"
+                "; Written by the F8 menu's Calibrate (each open string's sound); empty = not calibrated\n"
+                "StringCalibration=\n"
                 "; 1 = show what to play (string, colour, fret) while the song waits\n"
                 "ShowBanner=1\n"
                 "; 1 = the banner shows the note on a piece of fretboard (and where a wrong note was played),\n"
@@ -204,7 +211,11 @@ Config LoadConfig() {
                 "TabX=-810\n"
                 "TabY=385\n"
                 "TabWidth=640\n"
-                "TabSize=100\n",
+                "TabSize=100\n"
+                "; Wrong-note panel: offset from its place beside the banner (0, 0 = right beside it)\n"
+                "MistakeX=0\n"
+                "MistakeY=0\n"
+                "MistakeSize=100\n",
                 f);
             std::fclose(f);
         }
@@ -223,6 +234,8 @@ Config LoadConfig() {
     c.initial.earlyMs = GetPrivateProfileIntW(L"NoteByNote", L"EarlyMs", 300, ini.c_str());
     c.initial.countInBeats = std::max(0, std::min(4, (int)GetPrivateProfileIntW(L"NoteByNote", L"CountInBeats", 3, ini.c_str())));
     c.initial.acceptOctaves = GetPrivateProfileIntW(L"NoteByNote", L"AcceptOctaves", 0, ini.c_str()) != 0;
+    c.initial.stringDetect = GetPrivateProfileIntW(L"NoteByNote", L"StringDetect", 1, ini.c_str()) != 0;
+    c.stringCalibration = Narrow(str(L"StringCalibration", L""));
     c.initial.showBanner = GetPrivateProfileIntW(L"NoteByNote", L"ShowBanner", 1, ini.c_str()) != 0;
     c.initial.bannerNeck = GetPrivateProfileIntW(L"NoteByNote", L"BannerFretboard", 1, ini.c_str()) != 0;
     c.initial.bannerHand = GetPrivateProfileIntW(L"NoteByNote", L"BannerHand", 1, ini.c_str()) != 0;
@@ -272,6 +285,9 @@ Config LoadConfig() {
     c.initial.tabY = num(L"TabY", d.tabY);
     c.initial.tabWidth = std::max(250, num(L"TabWidth", d.tabWidth));
     c.initial.tabSize = pct(L"TabSize", d.tabSize);
+    c.initial.mistakeX = num(L"MistakeX", d.mistakeX);
+    c.initial.mistakeY = num(L"MistakeY", d.mistakeY);
+    c.initial.mistakeSize = pct(L"MistakeSize", d.mistakeSize);
     return c;
 }
 
@@ -286,6 +302,7 @@ void SaveSettings(const overlay::Settings& st) {
     put(L"EarlyMs", st.earlyMs);
     put(L"CountInBeats", st.countInBeats);
     put(L"AcceptOctaves", st.acceptOctaves);
+    put(L"StringDetect", st.stringDetect);
     put(L"ShowBanner", st.showBanner);
     put(L"BannerFretboard", st.bannerNeck);
     put(L"BannerHand", st.bannerHand);
@@ -327,6 +344,9 @@ void SaveSettings(const overlay::Settings& st) {
     put(L"TabY", st.tabY);
     put(L"TabWidth", st.tabWidth);
     put(L"TabSize", st.tabSize);
+    put(L"MistakeX", st.mistakeX);
+    put(L"MistakeY", st.mistakeY);
+    put(L"MistakeSize", st.mistakeSize);
 }
 
 std::string Join(const std::vector<int>& v) {
@@ -375,6 +395,13 @@ public:
         for (float v : s) { ring_[pos_ % kSize] = v; ++pos_; }
     }
     long long Pos() const { return pos_; }
+    // Samples [from, to) as doubles; false if they aren't all in the ring (too old, or not yet heard).
+    bool Copy(long long from, long long to, std::vector<double>* out) const {
+        if (from < 0 || to > pos_ || to <= from || pos_ - from > kSize) return false;
+        out->resize((size_t)(to - from));
+        for (long long i = from; i < to; ++i) (*out)[(size_t)(i - from)] = ring_[i % kSize];
+        return true;
+    }
     bool enabled = false;  // setting SaveWaitAudio (off = Save does nothing)
     void Save(const std::wstring& dir, double songTime, long long fromPos, unsigned sr) {
         if (!enabled) return;
@@ -503,6 +530,30 @@ struct MainLoop {
     int holdRetries = 0;              // times the hold was re-applied during this wait
     hint::Line waitHint;              // how to fix the last wrong note played during this wait
     std::vector<hint::Mark> waitMarks;  // and where it was probably played (the banner's fretboard)
+
+    // String identification (stringid.h): which string a wrong note was played on, from its sound.
+    stringid::Calibration stringCal;  // the open strings' sound (ini StringCalibration; the menu redoes it)
+    struct PendingId {                // a pluck whose sound is being collected (kLength after its attack)
+        bool on = false;
+        bool forCalibration = false;  // a calibration pluck; else a wrong note while the song waits
+        long long from = 0, to = 0;   // audio positions (DebugAudio::Pos units)
+        double f0 = 0;                // the tracker's frequency
+        int midi = 0;
+        double waitT = -1;            // wrong note: the wait it belongs to (no answer once that wait is over)
+        hint::Line guessHint;         // wrong note: the advice and marks without knowing the string, shown
+        std::vector<hint::Mark> guessMarks;  // only if the sound can't tell (no flash of a guess first)
+    } pendingId;
+    std::vector<long long> eventPos;  // audio position (end of its block) of each of this loop's note events
+    // Calibration in progress: the open string being plucked (0 = thickest, -1 = not calibrating), the
+    // measures of its plucks so far, the new calibration, and the last message for the menu.
+    static constexpr int kCalPlucks = 3;
+    int calString = -1;
+    std::vector<double> calValues;
+    int calMidi = 0;
+    stringid::Calibration calNew;
+    std::string stringIdNote;
+    bool stringIdNoteWarn = false;
+
     DWORD frozenTick = 0, lastTapTry = 0, nextFreezeTry = 0, lastHeartbeat = 0, lastUnloadCheck = 0, nextChartTry = 0,
           songScreenTick = 0;
     // Report: does the song clock run with the music? Checked once per song, over 1 s with the song
@@ -516,7 +567,11 @@ struct MainLoop {
     long long waitAudioStart = 0;
     const std::wstring debugDir = DllDir() + L"NoteByNote_debug\\";
 
-    explicit MainLoop(const Config& c) : cfg(c), st(c.initial) { debugAudio.enabled = cfg.saveWaitAudio; }
+    explicit MainLoop(const Config& c) : cfg(c), st(c.initial) {
+        debugAudio.enabled = cfg.saveWaitAudio;
+        stringCal = stringid::Calibration::FromString(cfg.stringCalibration);
+        Log("string id: %s", stringCal.Complete() ? ("calibrated " + stringCal.ToString()).c_str() : "not calibrated");
+    }
 
     // Runs until the dev unload file appears; then releases the song if we're holding it.
     void Run() {
@@ -529,6 +584,7 @@ struct MainLoop {
             ReadGuitar(now);   // 1.
             const bool skip = ReadKeys();  // 2.
             ApplySettings();
+            HandleCalibrationRequest();
             if (UnloadRequested(now)) break;
             if (!UpdateScreen(now)) continue;  // 3. not (yet) in a song
             ReadChart(now);    // 4.
@@ -621,6 +677,7 @@ struct MainLoop {
             v.hint = waitHint;
             v.heardAt = waitMarks;
         }
+        StringIdStatus(&v);
         // The clock works even with the mode off or without a chart (it's just the song time).
         if (!inSong || !game::GetSongTime(&v.songTime)) v.songTime = -1;
         if (inSong && !game::GetSongLength(&v.songLength)) v.songLength = 0;
@@ -688,6 +745,7 @@ struct MainLoop {
             if (tap.Open()) Log("guitar input connected (GuitarTap, %u Hz)", tap.SampleRate());
         }
         events.clear();
+        eventPos.clear();
         chordResults.clear();
         samples.clear();
         tap.ReadNew(samples);
@@ -696,14 +754,208 @@ struct MainLoop {
         pending.insert(pending.end(), samples.begin(), samples.end());
         // The chord to check: the one we're waiting for, or the next one on the highway (early hits).
         const std::vector<int>& expectChord = frozen ? (waitFor.chord ? waitFor.midi : kNoChord) : upcomingChord;
+        const long long base = debugAudio.Pos() - (long long)pending.size();  // audio position of pending[0]
         size_t used = 0;
         for (; used + NoteTracker::kBlock <= pending.size(); used += NoteTracker::kBlock) {
             NoteEvent ev;
-            if (tracker.Process(&pending[used], &ev)) events.push_back(ev);
+            if (tracker.Process(&pending[used], &ev)) {
+                events.push_back(ev);
+                eventPos.push_back(base + (long long)(used + NoteTracker::kBlock));
+            }
             ChordResult cr;
             if (chordDet.Process(&pending[used], expectChord, &cr)) chordResults.push_back(cr);
         }
         pending.erase(pending.begin(), pending.begin() + used);
+        StringIdAudio();
+    }
+
+    // ---- 1b. string identification: collect the sound after a pick attack, then measure it
+    // (stringid.h). While calibrating, the plucks are for the calibration, not for the song.
+    void StringIdAudio() {
+        for (size_t i = 0; i < events.size(); ++i)  // a new attack ends the sound of the note before
+            if (events[i].attack && pendingId.on && eventPos[i] > pendingId.from)
+                pendingId.to = std::min(pendingId.to, eventPos[i] - (long long)(0.01 * stringid::kSr));
+        if (pendingId.on && debugAudio.Pos() >= pendingId.to) FinishStringId();
+        if (calString < 0) return;
+        for (size_t i = 0; i < events.size(); ++i) {
+            const NoteEvent& ev = events[i];
+            if (!ev.attack) continue;
+            if (std::abs(ev.midi - CalOpenMidi(calString)) > 2) {  // +-2: a guitar tuned down still calibrates
+                stringIdNote = "Heard " + MidiName(ev.midi) + ", that's not " + StringName(calString) + " open";
+                stringIdNoteWarn = true;
+                continue;
+            }
+            StartStringId(ev, eventPos[i], true);
+        }
+        events.clear();
+        chordResults.clear();
+    }
+
+    // The open string the calibration asks for: the song's tuning when a guitar part is loaded, else standard.
+    int CalOpenMidi(int s) const {
+        static const int kStd[6] = {40, 45, 50, 55, 59, 64};
+        return (chartOk && !chart.bass) ? chart.open[s] : kStd[s];
+    }
+
+    // "string 4 (D)", numbered like the banner does (menu text, no colour).
+    std::string StringName(int s) const {
+        static const char* kLetter[6] = {"E", "A", "D", "G", "B", "e"};
+        return "string " + std::to_string(st.stringsFromThick ? s + 1 : 6 - s) + " (" + kLetter[s] + ")";
+    }
+
+    // Can a wrong note's string be identified now? (setting on, a clean calibration, a guitar part)
+    bool StringIdReady() const {
+        return st.stringDetect && calString < 0 && stringCal.Complete() && stringid::CheckCalibration(stringCal).empty() &&
+               !(chartOk && chart.bass);
+    }
+
+    void StartStringId(const NoteEvent& ev, long long pos, bool forCalibration) {
+        pendingId.on = true;
+        pendingId.forCalibration = forCalibration;
+        pendingId.from = pos + (long long)(stringid::kStartAfter * stringid::kSr);
+        pendingId.to = pendingId.from + (long long)(stringid::kLength * stringid::kSr);
+        pendingId.f0 = ev.freq;
+        pendingId.midi = ev.midi;
+        pendingId.waitT = frozen ? waitFor.time : -1;
+        pendingId.guessHint.clear();
+        pendingId.guessMarks.clear();
+    }
+
+    void FinishStringId() {
+        pendingId.on = false;
+        std::vector<double> x;
+        if (pendingId.to - pendingId.from < (long long)(stringid::kMinLength * stringid::kSr) ||
+            !debugAudio.Copy(pendingId.from, pendingId.to, &x)) {
+            if (pendingId.forCalibration && calString >= 0) {
+                stringIdNote = "Too short: let each pluck ring for a moment";
+                stringIdNoteWarn = true;
+            }
+            if (!pendingId.forCalibration) ShowGuess();  // the next note came too soon to tell
+            return;
+        }
+        const stringid::Measure m = stringid::Analyze(x.data(), (int)x.size(), pendingId.f0);
+        if (pendingId.forCalibration) CalibrationPluck(m);
+        else WrongNoteSpot(m);
+    }
+
+    // A wrong note whose string the sound couldn't tell: the advice without knowing it (HeardWaitedNote's guess).
+    void ShowGuess() {
+        if (!frozen || waitFor.time != pendingId.waitT || pendingId.guessHint.empty()) return;
+        waitHint = pendingId.guessHint;
+        waitMarks = pendingId.guessMarks;
+        Log("  advice: %s", hint::Text(waitHint).c_str());
+    }
+
+    // After a wrong note: if its sound says where it was played, the advice and the red X are for that
+    // spot only; else the guess with faint marks on the other spots with the same pitch.
+    void WrongNoteSpot(const stringid::Measure& m) {
+        if (!frozen || waitFor.time != pendingId.waitT || waitFor.chord || waitFor.midi.empty()) return;
+        if (!m.ok) {
+            Log("  string id: %s - too few overtones to tell the string", MidiName(pendingId.midi).c_str());
+            ShowGuess();
+            return;
+        }
+        std::vector<std::pair<int, int>> cands;  // (string, sounding fret) for the heard pitch
+        for (int s = 0; s < 6; ++s) {
+            const int sf = pendingId.midi - chart.open[s];
+            if (sf >= chart.capo && sf <= 24) cands.push_back({s, sf});
+        }
+        const stringid::Guess g = stringid::Identify(stringCal, chart.open, m.logB, cands);
+        Log("  string id: %s log10 B %.2f -> %s fret %d (off by %.2f, next best %.2f further): %s", MidiName(pendingId.midi).c_str(),
+            m.logB, g.string >= 0 ? StringName(g.string).c_str() : "?", g.fret, g.dist, g.margin, g.sure ? "sure" : "not sure");
+        hint::Mark at;
+        const hint::Line l = g.sure ? hint::ForNotePlayedOn(MakeNeck(), waitFor.string, waitFor.fret, waitFor.midi[0], pendingId.midi, g.string, &at)
+                                    : hint::Line{};
+        if (l.empty() || at.string < 0) {
+            ShowGuess();
+            return;
+        }
+        waitHint = l;
+        waitMarks = {at};
+        Log("  advice: %s", hint::Text(waitHint).c_str());
+    }
+
+    // One calibration pluck measured: kCalPlucks per string, thickest first; then check and save.
+    void CalibrationPluck(const stringid::Measure& m) {
+        if (calString < 0) return;
+        if (!m.ok) {
+            stringIdNote = "Couldn't measure that pluck: pluck again and let it ring";
+            stringIdNoteWarn = true;
+            return;
+        }
+        Log("string id: calibration %s open (%s): log10 B %.3f, %d overtones", StringName(calString).c_str(),
+            MidiName(pendingId.midi).c_str(), m.logB, m.partials);
+        stringIdNote.clear();
+        calValues.push_back(m.logB);
+        calMidi = pendingId.midi;
+        if ((int)calValues.size() < kCalPlucks) return;
+        std::sort(calValues.begin(), calValues.end());
+        calNew.has[calString] = true;
+        calNew.midi[calString] = calMidi;
+        calNew.logB[calString] = calValues[calValues.size() / 2];  // the median
+        calValues.clear();
+        if (++calString < 6) return;
+        calString = -1;
+        const std::string why = stringid::CheckCalibration(calNew);
+        Log("string id: calibration %s: %s", calNew.ToString().c_str(), why.empty() ? "clean, saved" : why.c_str());
+        if (!why.empty()) {
+            stringIdNote = "Not saved: " + why + ".";
+            stringIdNoteWarn = true;
+            return;
+        }
+        stringCal = calNew;
+        const std::string text = stringCal.ToString();
+        WritePrivateProfileStringW(L"NoteByNote", L"StringCalibration", std::wstring(text.begin(), text.end()).c_str(), IniPath().c_str());
+        stringIdNote = "Calibrated. After a wrong note, the banner shows the spot you played when the sound is clear enough.";
+        stringIdNoteWarn = false;
+        overlay::Toast("String detection calibrated", 2000);
+    }
+
+    // The menu's Calibrate / Cancel buttons.
+    void HandleCalibrationRequest() {
+        const int r = overlay::TakeCalibrationRequest();
+        if (r == 1) {
+            calString = 0;
+            calValues.clear();
+            calNew = {};
+            pendingId.on = false;
+            stringIdNote.clear();
+            Log("string id: calibration started");
+        } else if (calString >= 0 && (r == 2 || !overlay::MenuOpen())) {
+            // Cancel, or the menu was closed: the plucks must go back to the song (it would never hear
+            // the note it waits for).
+            calString = -1;
+            pendingId.on = false;
+            stringIdNote = "Calibration cancelled (the previous one is kept).";
+            stringIdNoteWarn = false;
+            Log("string id: calibration cancelled");
+        }
+    }
+
+    // The menu's line about the string identification.
+    void StringIdStatus(overlay::View* v) const {
+        v->calibrating = calString >= 0;
+        v->calibrated = stringCal.Complete();
+        v->stringIdWarn = false;
+        if (calString >= 0) {
+            v->stringIdStatus = "Pluck " + StringName(calString) + " open and let it ring  (" + std::to_string(calValues.size() + 1) +
+                                " of " + std::to_string(kCalPlucks) + ")";
+            if (!stringIdNote.empty()) v->stringIdStatus += "\n" + stringIdNote;
+            v->stringIdWarn = stringIdNoteWarn;
+        } else if (!stringIdNote.empty()) {
+            v->stringIdStatus = stringIdNote;
+            v->stringIdWarn = stringIdNoteWarn;
+        } else if (!stringCal.Complete()) {
+            v->stringIdStatus = "Not calibrated yet: press Calibrate, then pluck each open string 3 times.";
+            v->stringIdWarn = true;
+        } else if (!stringid::CheckCalibration(stringCal).empty()) {
+            v->stringIdStatus = "The saved calibration sounds processed: calibrate again with a clean sound.";
+            v->stringIdWarn = true;
+        } else if (chartOk && chart.bass) {
+            v->stringIdStatus = "Guitar only (this song part is for bass).";
+        } else {
+            v->stringIdStatus = "Calibrated. After a wrong note, the banner shows the spot you played when the sound is clear enough.";
+        }
     }
 
     // ---- 2. keys and the menu. Returns true when the player asked to skip the note (key or menu).
@@ -1086,30 +1338,49 @@ struct MainLoop {
 
     // True if what was just played is the note/chord being waited for. Logs what was heard, and after a
     // wrong note or chord sets the "how to fix it" advice (waitHint) the banner shows.
-    bool HeardWaitedNote(DWORD now) {
-        bool hit = false;
-        hint::Neck neck;  // for the "how to fix it" advice
+    // The instrument, for the "how to fix it" advice.
+    hint::Neck MakeNeck() const {
+        hint::Neck neck;
         neck.strings = chart.bass ? 4 : 6;
         std::copy(std::begin(chart.open), std::end(chart.open), neck.open);
         neck.capo = chart.capo;
         neck.bassUnsure = chart.bassUnsure;
         neck.fromThick = st.stringsFromThick;
+        return neck;
+    }
+
+    bool HeardWaitedNote(DWORD now) {
+        bool hit = false;
+        const hint::Neck neck = MakeNeck();
         // A wrong note gets advice only when it was picked (an attack), and not in the first moment of
         // the wait (that is still the previous note ringing).
         const bool adviseNow = now - frozenTick > 150;
-        for (const auto& ev : events) {
+        for (size_t i = 0; i < events.size(); ++i) {
+            const NoteEvent& ev = events[i];
             if (Matches(st, chart, waitFor, ev.midi)) { hit = true; break; }
             Log("  heard %s (%+.0f cents, %.1f dB, aper %.2f%s), waiting for %s", MidiName(ev.midi).c_str(), ev.cents, ev.levelDb,
                 ev.aperiodicity, ev.attack ? ", attack" : "", Describe(chart, waitFor).c_str());
             if (ev.attack && adviseNow && !waitFor.chord && !waitFor.midi.empty()) {
+                // Without knowing the string: the likely spot and, faded, the others with the same pitch.
                 hint::Mark at;
-                waitHint = hint::ForNote(neck, waitFor.string, waitFor.fret, waitFor.midi[0], ev.midi, &at);
-                waitMarks.clear();
+                hint::Line guess = hint::ForNote(neck, waitFor.string, waitFor.fret, waitFor.midi[0], ev.midi, &at);
+                std::vector<hint::Mark> marks;
                 if (at.string >= 0) {
-                    waitMarks.push_back(at);
-                    for (const auto& m : hint::SameNoteElsewhere(neck, at)) waitMarks.push_back(m);
+                    marks.push_back(at);
+                    for (const auto& m : hint::SameNoteElsewhere(neck, at)) marks.push_back(m);
                 }
-                if (!waitHint.empty()) Log("  advice: %s", hint::Text(waitHint).c_str());
+                if (guess.empty()) continue;
+                if (StringIdReady()) {
+                    // The note's sound may tell where it was played: nothing is shown until it's measured
+                    // (~0.25 s); then the spot, or this guess if the sound can't tell (WrongNoteSpot).
+                    StartStringId(ev, eventPos[i], false);
+                    pendingId.guessHint = guess;
+                    pendingId.guessMarks = marks;
+                    continue;
+                }
+                waitHint = guess;
+                waitMarks = marks;
+                Log("  advice: %s", hint::Text(waitHint).c_str());
             }
         }
         for (const auto& cr : chordResults) {  // only produced while waiting for a chord

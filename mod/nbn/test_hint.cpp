@@ -35,6 +35,16 @@ int main() {
     thick.fromThick = true;
     check("numbered from the thickest", nbn::hint::ForNote(thick, 2, 5, 55, 60), "You played C  -  that's string 4 (G), use fret 5 on string 3 (D)");
 
+    // The sound told where the wrong note was played (string identification).
+    using nbn::hint::ForNotePlayedOn;
+    check("known: same string", ForNotePlayedOn(gtr, 2, 5, 55, 57, 2), "You played A  -  move DOWN 2 frets, to fret 5 on string 4 (D)");
+    check("known: other string", ForNotePlayedOn(gtr, 2, 5, 55, 60, 3), "You played C  -  that's fret 5 on string 3 (G), use fret 5 on string 4 (D)");
+    check("known: other string, far", ForNotePlayedOn(gtr, 2, 5, 55, 57, 1), "You played A  -  that's fret 12 on string 5 (A), use fret 5 on string 4 (D)");
+    check("known: open string", ForNotePlayedOn(gtr, 2, 5, 55, 64, 5), "You played E  -  that's string 1 (e) open, use fret 5 on string 4 (D)");
+    check("known: octave", ForNotePlayedOn(gtr, 2, 5, 55, 67, 3), "You played G  -  right note, but an octave too high: play fret 5 on string 4 (D)");
+    check("known: open wanted", ForNotePlayedOn(gtr, 0, 0, 40, 42, 0), "You played F#  -  don't press any fret: play string 6 (E) open");
+    check("known: right note", ForNotePlayedOn(gtr, 2, 5, 55, 55, 2), "");
+
     // Chords.
     const int a5f[6] = {-1, 0, 2, -1, -1, -1}, a5n[6] = {-1, 45, 52, -1, -1, -1};
     check("A5, finger 1 fret high", nbn::hint::ForChord(gtr, a5f, a5n, {45, 53}, {5}, 1, 2),
@@ -70,6 +80,10 @@ int main() {
     std::vector<nbn::hint::Mark> ms = nbn::hint::SameNoteElsewhere(gtr, {1, 8, 53});  // F3 at A8, as in a real test
     at("same F3: low E 13", ms.size() == 2 ? ms[0] : nbn::hint::Mark{}, 0, 13, 53);
     at("same F3: D 3", ms.size() == 2 ? ms[1] : nbn::hint::Mark{}, 2, 3, 53);
+    ForNotePlayedOn(gtr, 2, 5, 55, 57, 1, &m);
+    at("X: known, A string 12", m, 1, 12, 57);
+    ForNotePlayedOn(capo2, 1, 0, 47, 48, 1, &m);
+    at("X: known, capo", m, 1, 3, 48);
     ms.clear();
     nbn::hint::ForChord(gtr, a5f, a5n, {45, 53}, {5}, 1, 2, &ms);
     at("X: A5 finger high", ms.size() == 1 ? ms[0] : nbn::hint::Mark{}, 2, 3, 53);

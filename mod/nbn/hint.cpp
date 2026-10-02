@@ -222,6 +222,37 @@ Line ForChord(const Neck& neck, const int frets[6], const int notes[6], const st
     return out;
 }
 
+Line ForNotePlayedOn(const Neck& neck, int string, int fret, int want, int heard, int playedString, Mark* where) {
+    Mark unused;
+    Mark& at = where ? *where : unused;
+    at = Mark{};
+    if (string < 0 || string >= neck.strings || playedString < 0 || playedString >= neck.strings) return {};
+    const int d = heard - want;
+    const int sf = heard - neck.open[playedString];  // the sounding fret it was played at
+    if (d == 0 || !Playable(neck, sf)) return {};
+    const int pf = ChartFret(neck, sf);
+    at = {playedString, pf, heard, true};
+    Line l = {{"You played " + music::NoteName(heard) + "  -  ", kGrey}};
+    if (d % 12 == 0) {
+        l.push_back({std::string("right note, but an octave too ") + (d > 0 ? "high" : "low") + ": play ", kWhite});
+    } else if (playedString == string) {
+        if (fret == 0) {
+            l.push_back({"don't press any fret: play ", kWhite});
+        } else {
+            l.push_back({std::string("move ") + (d > 0 ? "DOWN " : "UP ") + Frets(std::abs(d)) + ", to fret " +
+                             std::to_string(fret) + " on ", kWhite});
+            l.push_back(StringSeg(neck, string));
+            return l;
+        }
+    } else {
+        l.push_back({"that's ", kWhite});
+        AddWhere(neck, &l, playedString, pf);
+        l.push_back({", use ", kWhite});
+    }
+    AddWhere(neck, &l, string, fret);
+    return l;
+}
+
 std::vector<Mark> SameNoteElsewhere(const Neck& neck, const Mark& at) {
     std::vector<Mark> out;
     if (at.string < 0 || at.string >= neck.strings) return out;

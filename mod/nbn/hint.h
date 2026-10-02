@@ -57,6 +57,14 @@ Line ForNote(const Neck& neck, int string, int fret, int want, int heard, Mark* 
 Line ForChord(const Neck& neck, const int frets[6], const int notes[6], const std::vector<int>& heard,
               const std::vector<int>& extraPcs, int hits, int needed, std::vector<Mark>* where = nullptr);
 
+// Single note, when the sound told WHERE the wrong note was played (stringid.h): on `playedString`
+// (its fret follows from the pitch). Same wording as ForNote, but no guessing:
+//   same string:      "You played A  -  move DOWN 2 frets, to fret 5 on string 4 (D)"
+//   another string:   "You played C  -  that's fret 5 on string 3 (G), use fret 5 on string 4 (D)"
+//   octave:           "You played G  -  right note, but an octave too high: play fret 5 on string 4 (D)"
+// `where` gets that spot (likely = true). Empty line = right note, or the spot doesn't exist.
+Line ForNotePlayedOn(const Neck& neck, int string, int fret, int want, int heard, int playedString, Mark* where = nullptr);
+
 // The other spots of the neck where the note at `at` can be played (same pitch, other strings), as
 // likely = false marks: the player may have played any of them.
 std::vector<Mark> SameNoteElsewhere(const Neck& neck, const Mark& at);
