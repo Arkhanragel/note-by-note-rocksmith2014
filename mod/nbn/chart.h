@@ -45,6 +45,14 @@ struct Target {
     // linked from the note before).
     int songPick = -1;
     int pick = -1;
+    // A single note played inside a held chord shape (the song's "hand shape": the chord stays pressed while
+    // its strings are picked one by one), on a string and fret of that chord: the chord's name (may be
+    // empty), its frets and fingers per string (-1 = not played / none), and the shape's start and end.
+    // shapeEnd < 0 = not in a shape.
+    std::string shapeName;
+    int shapeFrets[6] = {-1, -1, -1, -1, -1, -1};
+    int shapeFingers[6] = {-1, -1, -1, -1, -1, -1};
+    double shapeStart = -1, shapeEnd = -1;
 };
 
 // One beat of the song's beat grid (the highway's bar lines). From game memory only.

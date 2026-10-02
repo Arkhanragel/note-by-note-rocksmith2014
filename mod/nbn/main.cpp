@@ -813,6 +813,9 @@ struct MainLoop {
         v.midi = (!note.chord && !note.midi.empty()) ? note.midi[0] : -1;
         v.sustain = LongNote(note) ? note.sustain : 0;  // (the banner's "Hold" only for a long one)
         v.pick = note.pick;
+        v.inShape = !note.chord && note.shapeEnd > 0;
+        v.shapeName = v.inShape ? note.shapeName : "";
+        std::copy(std::begin(note.shapeFrets), std::end(note.shapeFrets), v.shapeFrets);
         if (holding) {
             v.holdFrom = held.time;
             v.holdLen = held.sustain;
@@ -910,6 +913,11 @@ struct MainLoop {
             tn.ignore = t->ignore;
             tn.pick = t->pick;
             tn.pickFromSong = chart.picksFromSong;
+            if (!t->chord && t->shapeEnd > 0) {
+                tn.shapeName = t->shapeName;
+                tn.shapeStart = t->shapeStart;
+                tn.shapeEnd = t->shapeEnd;
+            }
             if (t->chord) {
                 std::copy(std::begin(t->frets), std::end(t->frets), tn.frets);
                 for (int s = 0; s < 6; ++s) {  // each string's technique, plus the chord's own palm mute / mute / accent

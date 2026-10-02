@@ -94,6 +94,10 @@ static class Program
                 Picks(args[1]);
                 return 0;
 
+            case "shapes": // shapes <folder-or-psarc>: held chord shapes (hand shapes, arpeggios) and the single notes inside them
+                Shapes(args[1]);
+                return 0;
+
             case "levels": // levels <psarc> <sng>: phrases, phrase iterations and notes per difficulty level
                 using (var psarc = OpenPsarc(args[1]))
                 {
@@ -362,6 +366,50 @@ static class Program
             if (entry.Value.TryGetProperty("Attributes", out var attrs))
                 return attrs.Clone();
         return null;
+    }
+
+    // Held chord shapes of every arrangement (its hardest level): how many hand shapes and arpeggios, and
+    // how many single notes are played inside one on a string and fret of its chord (the notes a "keep
+    // the C shape" hint would be for), with a few examples.
+    static void Shapes(string path)
+    {
+        var files = File.Exists(path) ? new List<string> { path }
+                                      : Directory.GetFiles(path, "*.psarc").Where(f => !f.EndsWith("_m.psarc")).OrderBy(f => f).ToList();
+        foreach (var file in files)
+        {
+            try
+            {
+                using var psarc = OpenPsarc(file);
+                foreach (var sngName in psarc.Manifest.Where(n => n.EndsWith(".sng") && !n.Contains("vocals", StringComparison.OrdinalIgnoreCase)))
+                {
+                    var sng = ReadSng(psarc, sngName);
+                    var lv = sng.Levels.OrderBy(l => l.Difficulty).Last();
+                    int inside = 0, insideArp = 0;
+                    var examples = new List<string>();
+                    foreach (var n in lv.Notes.Where(n => n.ChordId < 0))
+                    {
+                        foreach (var (shapes, arp) in new[] { (lv.HandShapes, false), (lv.Arpeggios, true) })
+                        {
+                            var hs = shapes.FirstOrDefault(h => n.Time >= h.StartTime - 0.001f && n.Time < h.EndTime);
+                            if (hs == null || hs.ChordId < 0 || hs.ChordId >= sng.Chords.Length) continue;
+                            var ch = sng.Chords[hs.ChordId];
+                            if (ch.Frets.Count(f => f >= 0) < 2 || ch.Frets[n.StringIndex] != n.Fret) continue;
+                            if (arp) insideArp++; else inside++;
+                            if (examples.Count < 3) examples.Add($"{n.Time:F2}s s{n.StringIndex}f{n.Fret} in {(arp ? "arp" : "shape")} '{ch.Name}'");
+                            break;
+                        }
+                    }
+                    int singles = lv.Notes.Count(n => n.ChordId < 0);
+                    var perLevel = string.Join(" ", sng.Levels.OrderBy(l => l.Difficulty).Select(l => l.HandShapes.Length + l.Arpeggios.Length));
+                    Console.WriteLine($"{Path.GetFileName(file),-45} {Path.GetFileName(sngName),-32} perLevel=[{perLevel}] shapes={lv.HandShapes.Length,4} arps={lv.Arpeggios.Length,3} " +
+                                      $"singles={singles,5} inShape={inside,4} inArp={insideArp,4}  {string.Join("; ", examples)}");
+                }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"{Path.GetFileName(file)} ERROR {e.Message}");
+            }
+        }
     }
 
     // Pick directions and sections of every arrangement (a folder of .psarc, or one): how many notes

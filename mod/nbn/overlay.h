@@ -155,6 +155,9 @@ struct TabNote {
                                    // notation around the fret number ("7/", "12 ^1", "h", "PM", "~")
     int pick = -1;               // pick stroke (setting tabPicks): 0 = down, 1 = up, -1 = none (not picked)
     bool pickFromSong = false;   // the song's own (else suggested from the rhythm: drawn a little fainter)
+    std::string shapeName;       // a single note inside a held chord shape: its chord's name (may be empty),
+    double shapeStart = -1;      // and when the shape starts and ends (the tab names it over its notes);
+    double shapeEnd = -1;        // shapeEnd < 0 = not in one
 };
 
 // One beat line of the scrolling tab.
@@ -181,6 +184,9 @@ struct View {
     int fret = 0;                // 0 = open string
     int midi = -1;               // the note (single notes), for its name ("C", "F#")
     int pick = -1;               // pick stroke (setting tabPicks): 0 = down, 1 = up, -1 = none (the banner says it)
+    bool inShape = false;        // a single note inside a held chord shape: keep the chord pressed, pick its
+    std::string shapeName;       // strings one by one. The chord's name (may be empty), its frets per string
+    int shapeFrets[6] = {-1, -1, -1, -1, -1, -1};  // (-1 = not played): the banner's fretboard shows them faintly
     double sustain = 0;          // how long it rings (s, the tail on the highway); from kHoldMinS the banner
                                  // says how long to hold it
     double holdFrom = -1;        // the held note just played (from kHoldMinS): its song time and sustain, for

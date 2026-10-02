@@ -166,6 +166,11 @@ constexpr uintptr_t kNoteSlideTo = 0x34, kNoteSlideUnpitchTo = 0x35, kNoteMaxBen
 // technique fields that is 0 on every single note and -1 on every chord (Seven Nation Army remix lead),
 // like the song file's PickDirection (+0x32 there).
 constexpr uintptr_t kNotePick = 0x36;
+// Held chord shapes, per level (the song file's FingerPrint: hand shapes, and arpeggios): 0x14 bytes,
+// +0 chord template, +4 start, +8 end, +0xC first note, +0x10 last note (floats, s). The level keeps the
+// file's vectors in order from +0 (anchors, anchor extensions, hand shapes, arpeggios, notes at +0x30).
+// Checked 2026-10-03 against the song files (counts per level; see the log line "held chord shapes").
+constexpr uintptr_t kLevelHandShapes = 0x18, kLevelArpeggios = 0x24, kShapeSize = 0x14;
 // A chord's techniques per string: the chord-notes table, found 2026-09-29 (Ode to Joy rhythm: 16
 // entries = 16 x 0x948 bytes, the song file's layout): +0x0 mask[6] uint32, +0x18 bend curves[6]
 // (32 x (float time, float steps, 4 bytes) + int32 count, 0x184 bytes each), +0x930 slide-to[6] int8,
@@ -835,6 +840,59 @@ std::vector<Target> MergeTogether(std::vector<Target> all) {
 }
 
 // What was read, in the log (and a few beats, to check the grid by eye).
+struct HeldShape {
+    int chord = -1;
+    double start = 0, end = 0;
+};
+
+// A level's held chord shapes (hand shapes and arpeggios, in time order); empty if they don't look right.
+std::vector<HeldShape> ReadShapes(uintptr_t level, size_t chordCount) {
+    std::vector<HeldShape> out;
+    for (const uintptr_t off : {kLevelHandShapes, kLevelArpeggios}) {
+        std::vector<uint8_t> raw;
+        if (!ReadVector(level + off, kShapeSize, 20000, &raw)) return {};
+        for (size_t i = 0; i < raw.size(); i += kShapeSize) {
+            const int chord = At<int32_t>(raw, i);
+            const float a = At<float>(raw, i + 4), b = At<float>(raw, i + 8);
+            if (chord < -1 || chord >= (int)chordCount || !(a >= 0) || !(b >= a) || b > 7200) return {};
+            if (chord >= 0) out.push_back({chord, a, b});
+        }
+    }
+    std::sort(out.begin(), out.end(), [](const HeldShape& x, const HeldShape& y) { return x.start < y.start; });
+    return out;
+}
+
+// A single note inside a held shape, on a string and fret of its chord (2 strings or more): the shape
+// goes with it (the banner shows it, the tab names it), and the chord's finger for this string replaces
+// the one guessed from the hand's position. Returns true if it's in one.
+bool ApplyShape(Target* t, const std::vector<HeldShape>& shapes, const std::vector<uint8_t>& chords) {
+    if (t->chord || t->string < 0 || t->string > 5) return false;
+    for (const HeldShape& h : shapes) {
+        if (h.start > t->time + 0.001) break;
+        if (t->time >= h.end) continue;
+        const size_t ch = (size_t)h.chord * kChordSize;
+        int frets[6], played = 0;
+        for (int s = 0; s < 6; ++s) {
+            frets[s] = At<int8_t>(chords, ch + kChordFrets + s);
+            played += frets[s] >= 0;
+        }
+        if (played < 2 || frets[t->string] != t->fret) continue;
+        for (int s = 0; s < 6; ++s) {
+            t->shapeFrets[s] = frets[s];
+            const int f = At<int8_t>(chords, ch + kChordFingers + s);
+            t->shapeFingers[s] = (frets[s] > 0 && f >= 0 && f <= 4) ? f : -1;
+        }
+        const char* name = (const char*)&chords[ch + kChordName];
+        t->shapeName.assign(name, strnlen(name, kChordNameSize));
+        while (!t->shapeName.empty() && t->shapeName.back() == ' ') t->shapeName.pop_back();
+        t->shapeStart = h.start;
+        t->shapeEnd = h.end;
+        if (t->shapeFingers[t->string] >= 0) t->fingers[t->string] = t->shapeFingers[t->string];
+        return true;
+    }
+    return false;
+}
+
 // The song's sections (empty if they don't look right: then the mod just doesn't name them).
 std::vector<music::Section> ReadSections(uintptr_t data) {
     std::vector<uint8_t> raw;
@@ -910,12 +968,17 @@ bool ReadSongChart(Chart* chart) {
 
     std::vector<Target> all;
     int maxString = 0;
+    std::string shapeCounts;
+    int inShape = 0;
     for (size_t lv = 0; lv * kLevelSize < levels.size(); ++lv) {
         if (!ReadVector(levelsBegin + lv * kLevelSize + kLevelNotes, kNoteSize, 100000, &notes)) return false;
         c.levelCounts.push_back((int)(notes.size() / kNoteSize));
+        const std::vector<HeldShape> shapes = ReadShapes(levelsBegin + lv * kLevelSize, chords.size() / kChordSize);
+        shapeCounts += (shapeCounts.empty() ? "" : " ") + std::to_string(shapes.size());
         for (size_t n = 0; n < notes.size(); n += kNoteSize) {
             Target t;
             if (!dec.Decode(notes, n, (int)lv, &t)) continue;
+            inShape += ApplyShape(&t, shapes, chords);
             if (!t.chord) maxString = std::max(maxString, t.string);
             all.push_back(std::move(t));
         }
@@ -927,6 +990,7 @@ bool ReadSongChart(Chart* chart) {
     const picking::Result picks = picking::Assign(&c);
     Log("pick strokes: %s (the song marks %d of %d picked notes \"up\", %d agree with the rhythm)",
         picks.fromSong ? "the song's own" : "suggested from the rhythm", picks.songUps, picks.picked, picks.agree);
+    Log("held chord shapes per level: %s; %d single notes inside one (all levels)", shapeCounts.c_str(), inShape);
     *chart = std::move(c);
     LogChart(*chart, tuning, chords.size() / kChordSize, all);
     return true;

@@ -306,6 +306,7 @@ struct NeckPic {
     bool flats = false;        // note names with flats (the chord's name has them)
     std::vector<Dot> dots;     // what to play
     std::vector<Dot> marks;    // where wrong notes were played (inside the window only)
+    std::vector<Dot> shape;    // a note inside a held chord shape: the chord's other strings (drawn faintly)
     int lo = 1, hi = 5;        // fret cells shown (1 = the first fret, with the nut on its left)
     technique::Technique tech; // single notes: the technique (a slide's end, a bend)
     int slideEnd = -1;         // the fret a slide goes to (-1 = none)
@@ -339,12 +340,16 @@ struct NeckPic {
                 if (v.frets[i] >= 0) dots.push_back({i, v.frets[i], v.notes[i]});
         } else {
             dots.push_back({std::max(0, std::min(n - 1, v.string)), std::max(0, v.fret), v.midi});
+            if (v.inShape)
+                for (int i = 0; i < n; ++i)
+                    if (i != v.string && v.shapeFrets[i] >= 0) shape.push_back({i, v.shapeFrets[i], -1});
         }
         // The window: the fretted notes with a fret of room, at least 5 frets, from the nut when they
         // are low on the neck. A wrong note joins it if it isn't too far (else only the text says it);
         // the same note's other spots too, up to a wider window (the frets get narrower).
         int mn = 99, mx = -1;
         for (const auto& d : dots) if (d.fret > 0) { mn = std::min(mn, d.fret); mx = std::max(mx, d.fret); }
+        for (const auto& d : shape) if (d.fret > 0) { mn = std::min(mn, d.fret); mx = std::max(mx, d.fret); }
         if (!chord) {  // a slide (of the note, or of a note linked after it): where it ends is in the picture
             tech = v.tech;
             std::vector<technique::Link> chain = v.chain;
@@ -398,6 +403,7 @@ struct NeckPic {
         // banner always has it, so its picture keeps one shape).
         bool open = banner || lo == 1 || chord;
         for (const auto& d : dots) open = open || d.fret == 0;
+        for (const auto& d : shape) open = open || d.fret == 0;
         for (const auto& m : marks) open = open || m.fret == 0;
         // The banner: the same string spacing, top and tail for notes and chords (only the dots change).
         gap = (banner ? 22 : chord ? 24 : 20) * s;
@@ -526,6 +532,7 @@ struct NeckPic {
         // Strings in their colours (thicker for the low ones), names at the side.
         auto used = [&](int str) {
             for (const auto& d : dots) if (d.string == str) return true;
+            for (const auto& d : shape) if (d.string == str) return true;
             for (const auto& m : marks) if (m.string == str) return true;
             return false;
         };
@@ -659,6 +666,18 @@ struct NeckPic {
                 dl->AddRectFilled(ImVec2(tp.x - 3 * s, tp.y), ImVec2(tp.x + ts.x + 3 * s, tp.y + ts.y), Col(theme::kPanel, 230), 4 * s);
                 dl->AddText(g_fontBold, bfs, tp, bc, t.c_str());
             }
+        }
+
+        // A held chord shape: its other strings as faint rings (the fingers stay there while this string
+        // is picked), with their fret numbers.
+        for (const auto& d : shape) {
+            const ImVec2 c(X(FretX(p0.x, d.fret)), Y(d.string));
+            const ImU32 sc = kStringColor[d.string] & 0x00FFFFFF;
+            dl->AddCircleFilled(c, rad * 0.8f, sc | (60u << 24));
+            dl->AddCircle(c, rad * 0.8f, sc | (190u << 24), 0, 2 * s);
+            const std::string t = std::to_string(d.fret);
+            const ImVec2 ts = g_fontBold->CalcTextSizeA(16 * s, FLT_MAX, 0, t.c_str());
+            dl->AddText(g_fontBold, 16 * s, ImVec2(c.x - ts.x * 0.5f, c.y - ts.y * 0.5f), Col(theme::kText, 170), t.c_str());
         }
 
         // The notes to play: a dot in the string's colour with the fret number, like tab.
@@ -922,6 +941,10 @@ void DrawBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVe
         const std::string num = steps.size() > 1 ? std::to_string(k + 1) + ".  " : "";
         linesT.push_back({{num + steps[k].name + ":  ", Col(theme::kChord)}, {steps[k].how, Col(theme::kText)}});
     }
+    if (v.inShape)  // a note of a held chord shape (the faint rings on the fretboard)
+        linesT.push_back({{"Hold the shape:  ", Col(theme::kChord)},
+                          {"keep your fingers on " + (v.shapeName.empty() ? std::string("the chord") : v.shapeName) +
+                               ", pick its strings one by one", Col(theme::kText)}});
     if (const auto hold = HoldWords(v); !hold.empty()) linesT.push_back(hold);
     linesT = WrapLines(g_fontUi, mid, linesT, kBannerTextW * s);  // a long one takes two lines (the box has room)
 
@@ -1271,6 +1294,9 @@ bool DrawCalmBanner(ImDrawList* dl, const View& v, const Settings& st, bool on, 
         s_note.midi = v.midi;
         s_note.sustain = v.sustain;
         s_note.pick = v.pick;
+        s_note.inShape = v.inShape;
+        s_note.shapeName = v.shapeName;
+        std::copy(std::begin(v.shapeFrets), std::end(v.shapeFrets), s_note.shapeFrets);
         s_note.repeatLeft = v.repeatLeft;
         s_note.repeatTotal = v.repeatTotal;
         s_note.tech = v.tech;
@@ -2157,6 +2183,49 @@ void DrawTabItem(const TabStaff& tab, TabShow& sh, const TabItem& it) {
     if (sh.st->tabPicks && t.pick >= 0 && it.count == 1) DrawPickMark(tab, x, t.pick, t.pickFromSong, a);
 }
 
+// Held chord shapes: a thin gold bracket over their notes in the chord names' lane (they're picked one by
+// one with the chord kept pressed), from the first note to where the shape ends, with the chord's name at
+// its start when it has one. Shapes that follow each other with the same chord name make one bracket (a
+// song often repeats the shape every bar: a name every few notes was clutter); nameless ones stay apart
+// (they may be different shapes).
+void DrawTabShapes(const TabStaff& tab, const std::vector<TabItem>& items) {
+    struct Span {
+        double from, to;  // the first note, the end of the last shape
+        std::string name;
+    };
+    std::vector<Span> spans;
+    double key = -1;  // the shape of the last note seen (its start)
+    for (const TabItem& it : items) {
+        const TabNote& t = *it.note;
+        if (t.shapeEnd < 0 || t.shapeStart == key) continue;
+        key = t.shapeStart;
+        if (!spans.empty() && !t.shapeName.empty() && spans.back().name == t.shapeName && t.shapeStart <= spans.back().to + 0.05)
+            spans.back().to = std::max(spans.back().to, t.shapeEnd);
+        else
+            spans.push_back({it.time, t.shapeEnd, t.shapeName});
+    }
+    const float s = tab.s, y = tab.staffY + 6 * s;
+    const ImU32 gold = Col(theme::kChord, 200);
+    for (const Span& sp : spans) {
+        const float x0 = tab.TimeX(sp.from), x1 = tab.TimeX(sp.to);
+        if (std::max(x0, x1) < tab.lineL - 20 * s || std::min(x0, x1) > tab.lineR + 20 * s) continue;
+        const float dir = x1 >= x0 ? 1.0f : -1.0f;
+        const ImVec2 ns = sp.name.empty() ? ImVec2(0, tab.tiny) : g_fontBold->CalcTextSizeA(tab.tiny, FLT_MAX, 0, sp.name.c_str());
+        const float ly = y + ns.y * 0.55f;
+        float a = x0;
+        if (!sp.name.empty()) {
+            tab.dl->AddText(g_fontBold, tab.tiny, ImVec2(std::floor(x0 - ns.x * 0.5f), y), gold, sp.name.c_str());
+            a = x0 + dir * (ns.x * 0.5f + 5 * s);
+        } else {
+            tab.dl->AddLine(ImVec2(x0, ly), ImVec2(x0, ly + 6 * s), gold, 1.5f * s);  // the bracket's start
+        }
+        if ((x1 - a) * dir > 4 * s) {
+            tab.dl->AddLine(ImVec2(a, ly), ImVec2(x1, ly), gold, 1.5f * s);
+            tab.dl->AddLine(ImVec2(x1, ly), ImVec2(x1, ly + 6 * s), gold, 1.5f * s);  // and its end
+        }
+    }
+}
+
 // One staff: the strings, the beat grid, the cursor, the rhythm lane and the notes, as set up by
 // TabStaff::Layout(). cursor: 2 = the cursor ("now" line), 1 = its dimmed copy (a row still to come
 // whose repeated part is where the cursor is right now), 0 = none.
@@ -2182,6 +2251,7 @@ void DrawTabStaff(const TabStaff& tab, TabShow& sh, int cursor) {
     else if (cursor == 1)
         tab.dl->AddLine(ImVec2(cursorX, tab.TopY() - 16 * s), ImVec2(cursorX, tab.BotY() + 12 * s), Col(theme::kHighlight, 80), 2 * s);
     if (sh.rhythm && !sh.items->empty()) DrawTabRhythm(tab, sh, staffBottom);
+    DrawTabShapes(tab, *sh.items);
     for (const TabItem& it : *sh.items) DrawTabItem(tab, sh, it);
     tab.dl->PopClipRect();
 }
