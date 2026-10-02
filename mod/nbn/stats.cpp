@@ -26,8 +26,50 @@ float Trouble(Result r, double waitS, bool wrongNote) {
     return std::min(1.0f, 0.25f + 0.5f * wait + (wrongNote ? 0.25f : 0.0f));
 }
 
-void SongStats::Open(const std::wstring& dir, const std::string& name) {
-    const std::wstring path = dir + std::wstring(name.begin(), name.end()) + L".txt";
+namespace {
+
+std::wstring Wide(const std::string& s) { return std::wstring(s.begin(), s.end()); }  // (names are ASCII)
+
+bool Exists(const std::wstring& path) { return GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES; }
+
+// The newest file in dir whose name ends in tail + ".txt"; "" if none.
+std::wstring NewestEndingIn(const std::wstring& dir, const std::wstring& tail) {
+    const std::wstring end = tail + L".txt";
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((dir + L"*" + end).c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return L"";
+    std::wstring best;
+    FILETIME bestTime{};
+    do {
+        const std::wstring n = fd.cFileName;
+        // (the pattern can also match a file's short 8.3 name: check the long one)
+        if (n.size() < end.size() || n.compare(n.size() - end.size(), end.size(), end) != 0) continue;
+        if (best.empty() || CompareFileTime(&fd.ftLastWriteTime, &bestTime) > 0) {
+            best = n;
+            bestTime = fd.ftLastWriteTime;
+        }
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    return best.empty() ? L"" : dir + best;
+}
+
+}  // namespace
+
+void SongStats::Open(const std::wstring& dir, const std::string& name, const std::string& tail) {
+    std::wstring path = dir + Wide(name) + L".txt";
+    if (!tail.empty() && !Exists(path)) {
+        const std::wstring keyless = dir + L"song" + Wide(tail) + L".txt";
+        if (path == keyless) {
+            // The song's key isn't known (the mod was loaded in the middle of a game): its record has
+            // the arrangement's fingerprint at the end of its name.
+            if (const std::wstring found = NewestEndingIn(dir, Wide(tail)); !found.empty()) path = found;
+        } else if (Exists(keyless)) {
+            // A record made without the key: from now on it's under the song's name.
+            if (path_ == keyless) Save();
+            if (!MoveFileW(keyless.c_str(), path.c_str())) path = keyless;
+            else if (path_ == keyless) path_ = path;  // (the same record, open already)
+        }
+    }
     if (path == path_) return;
     Save();
     notes_.clear();
@@ -135,8 +177,7 @@ std::vector<Spot> SongStats::Spots(const std::vector<std::pair<double, double>>&
     return out;
 }
 
-std::string RecordName(const std::string& songKey, const std::string& arrangement, const std::vector<int>& levelCounts,
-                       size_t phrases) {
+std::string RecordTail(const std::string& arrangement, const std::vector<int>& levelCounts, size_t phrases) {
     // FNV-1a over the arrangement's shape: the same song and arrangement always give the same name.
     uint32_t h = 2166136261u;
     auto mix = [&](uint32_t v) {
@@ -147,14 +188,19 @@ std::string RecordName(const std::string& songKey, const std::string& arrangemen
     };
     for (int c : levelCounts) mix((uint32_t)c);
     mix((uint32_t)phrases);
+    std::string tail = "_";
+    for (char c : arrangement) tail += std::isalnum((unsigned char)c) ? c : '_';
+    char hex[16];
+    std::snprintf(hex, sizeof(hex), "_%08X", h);
+    return tail.substr(0, 20) + hex;
+}
+
+std::string RecordName(const std::string& songKey, const std::string& arrangement, const std::vector<int>& levelCounts,
+                       size_t phrases) {
     std::string name;
     for (char c : songKey.empty() ? std::string("song") : songKey)
         name += (std::isalnum((unsigned char)c) || c == '-' || c == '_') ? c : '_';
-    name += '_';
-    for (char c : arrangement) name += std::isalnum((unsigned char)c) ? c : '_';
-    char hex[16];
-    std::snprintf(hex, sizeof(hex), "_%08X", h);
-    return name.substr(0, 60) + hex;
+    return name.substr(0, 40) + RecordTail(arrangement, levelCounts, phrases);
 }
 
 }  // namespace nbn::stats

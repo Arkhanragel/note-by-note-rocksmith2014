@@ -37,8 +37,11 @@ struct Spot {
 class SongStats {
 public:
     // Loads the record of a song (file = dir + name + ".txt"); a new song starts empty. Saves the
-    // previous song first if it changed.
-    void Open(const std::wstring& dir, const std::string& name);
+    // previous song first if it changed. tail = RecordTail of the song: when the file isn't there, a
+    // record of the same arrangement made while the song's key wasn't known ("song" + tail, after the
+    // mod was loaded in the middle of a game) is taken and renamed; and when the key isn't known now
+    // (name = "song" + tail), the newest record ending in tail is used.
+    void Open(const std::wstring& dir, const std::string& name, const std::string& tail = "");
     // Returns true when this try cleared the note (its clearAfter-th time on time in a row after going
     // wrong).
     bool Record(double t, Result r, double waitS, bool wrongNote, int clearAfter);
@@ -51,6 +54,8 @@ public:
     void Save();            // if anything changed since the last save
     void Forget();          // this song's record is deleted
     bool Empty() const { return notes_.empty(); }
+    size_t Count() const { return notes_.size(); }
+    const std::wstring& Path() const { return path_; }  // the record's file
 
     // The trouble per phrase (phrase starts and ends in song seconds), with notes played well
     // `clearAfter` times in a row cleared. Phrases with less than half a stop's worth of trouble get
@@ -82,5 +87,7 @@ private:
 // arrangement (the notes per difficulty level), so lead and rhythm get their own records.
 std::string RecordName(const std::string& songKey, const std::string& arrangement, const std::vector<int>& levelCounts,
                        size_t phrases);
+// The end of that name, the same whatever the song key: "_guitar_9BD8B219".
+std::string RecordTail(const std::string& arrangement, const std::vector<int>& levelCounts, size_t phrases);
 
 }  // namespace nbn::stats

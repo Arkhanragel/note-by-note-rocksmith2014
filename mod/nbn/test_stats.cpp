@@ -90,6 +90,36 @@ int main() {
     nbn::stats::SongStats gone;
     gone.Open(dir, name);
     expect("forgotten", gone.Empty(), 1);
+
+    // A record made while the song's key wasn't known (the mod loaded in the middle of a game).
+    const std::string tail = nbn::stats::RecordTail("guitar", {10, 20, 30}, 4);
+    const std::string keyless = nbn::stats::RecordName("", "guitar", {10, 20, 30}, 4);
+    expect("the name ends in the tail", name.size() > tail.size() && name.ends_with(tail), 1);
+    expect("no key: \"song\" + tail", keyless == "song" + tail, 1);
+    {
+        nbn::stats::SongStats a;
+        a.Open(dir, keyless, tail);
+        a.Record(1.0, Result::kSkipped, 0, false, 2);
+        a.Save();
+    }
+    {   // Known again: that record is taken and renamed.
+        nbn::stats::SongStats b;
+        b.Open(dir, name, tail);
+        expect("keyless record taken", b.Spots(phrases, 2)[0].score, 1);
+        expect("and renamed", GetFileAttributesW((dir + L"song" + std::wstring(tail.begin(), tail.end()) + L".txt").c_str())
+                                  == INVALID_FILE_ATTRIBUTES, 1);
+        b.Record(2.0, Result::kSkipped, 0, false, 2);
+        b.Save();
+    }
+    {   // Not known: the song's record is found by its tail.
+        nbn::stats::SongStats c;
+        c.Open(dir, keyless, tail);
+        expect("found by its tail", c.Spots(phrases, 2)[0].score, 2);
+        c.Forget();  // (deletes the song's record, not a "song_..." one)
+        nbn::stats::SongStats d;
+        d.Open(dir, name, tail);
+        expect("forgotten by its tail", d.Empty(), 1);
+    }
     RemoveDirectoryW(dir.c_str());
 
     std::printf("%s\n", fails ? "FAILED" : "all passed");

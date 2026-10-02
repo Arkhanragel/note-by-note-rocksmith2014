@@ -74,6 +74,14 @@ std::wstring DllDir() {
 
 std::wstring IniPath() { return DllDir() + L"NoteByNote.ini"; }
 
+// The game's folder (Rocksmith2014.exe), with a trailing backslash.
+std::wstring GameDir() {
+    wchar_t p[MAX_PATH];
+    GetModuleFileNameW(nullptr, p, MAX_PATH);
+    std::wstring s(p);
+    return s.substr(0, s.find_last_of(L"\\/") + 1);
+}
+
 // Wide -> narrow for text that is ASCII by nature (ini theme names, "#RRGGBB", our own file names).
 // Any other character becomes '?' instead of a truncated wchar_t that could turn into an unrelated letter.
 std::string Narrow(const std::wstring& w) {
@@ -603,7 +611,8 @@ struct MainLoop {
     long long waitAudioStart = 0;
     const std::wstring debugDir = DllDir() + L"NoteByNote_debug\\";
     // Trouble spots (stats.h): how each note went, per song; the practice bar shades its phrases by it.
-    const std::wstring statsDir = DllDir() + L"NoteByNote_stats\\";
+    // In the game's folder, wherever the DLL is: a copy loaded by hand (from run\) keeps the same records.
+    const std::wstring statsDir = GameDir() + L"NoteByNote_stats\\";
     stats::SongStats songStats;
     std::vector<float> phraseHeat;    // per phrase iteration (chart.pis), from songStats
     std::vector<std::pair<int, int>> phraseCleared;  // and its notes cleared, of those that went wrong
@@ -1275,7 +1284,13 @@ struct MainLoop {
                 lastT = -1;
                 unplayedT = -1;
                 overlay::ClearRanges();  // a new song: no practice parts yet
-                songStats.Open(statsDir, stats::RecordName(lastKey, chart.arrangement, chart.levelCounts, chart.pis.size()));
+                songStats.Open(statsDir, stats::RecordName(lastKey, chart.arrangement, chart.levelCounts, chart.pis.size()),
+                               stats::RecordTail(chart.arrangement, chart.levelCounts, chart.pis.size()));
+                {
+                    const std::wstring& rec = songStats.Path();
+                    Log("trouble spots: record %s (%d notes)", Narrow(rec.substr(rec.find_last_of(L'\\') + 1)).c_str(),
+                        (int)songStats.Count());
+                }
                 songStats.ResetRun();
                 statsChanged = true;
                 noteMarks.clear();
