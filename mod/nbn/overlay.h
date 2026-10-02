@@ -54,6 +54,8 @@ struct Settings {
                                  // string's colour with the fret number, a red X where a wrong note was
                                  // played); off = the small tab
     bool waitChords = true;      // also wait at chords (off = chords pass, only single notes wait)
+    bool stopSong = true;        // the song stops at each note until it's played; off = guide only: the song
+                                 // plays on, the banner shows the next note and moves on as the song passes it
     bool stringDetect = true;    // after a wrong single note, tell from its sound which string it was played on
                                  // (stringid.h) and show only that spot; needs a calibration (each open
                                  // string plucked a few times) and a clean signal. Off / not sure = the
@@ -155,7 +157,10 @@ struct View {
     int string = 0;              // 0 = thickest string (low E), like the charts
     int fret = 0;                // 0 = open string
     int midi = -1;               // the note (single notes), for its name ("C", "F#")
-    technique::Technique tech;   // how to play it (slide, bend...; the banner explains it); chords: all
+    int repeatLeft = 1;          // a quick repeat of this note (same string and fret, one right after the
+    int repeatTotal = 1;         // other): how many are still to play, counting this one, and how many
+                                 // the run has. The banner shows "x5" when the run has 2 or more
+    technique::Technique tech;  // how to play it (slide, bend...; the banner explains it); chords: all
                                  // strings merged, techFret = the fret it refers to
     int techFret = -1;
     technique::Technique strings[6];  // chords: each string's technique (the fretboard draws their slides)

@@ -78,6 +78,7 @@ Chains: read the pointer, add the offset, repeat.
 | `[previewName] +0xBC → +0x0` | `Play_<SongKey>_Preview` (only while the song list shows a song; `_Invalid` with previews off) |
 | `[root] +0xB0` | the **song object** (while a song is loaded) |
 | `[root] +0x68 → +0x10 → +0x2C → +0x28 → +0x3DC` | float: the **grey-out time**: every note before it is greyed out on the highway. After resuming from the pause screen the game goes back ~3 s and replays with the notes already passed greyed (RSMods `ptr_greyOutNoteTimer`; checked on L&P: paused at 136.43, resumed at 133.41, grey time stayed at the pause point). Note-by-Note doesn't wait for those notes again (setting `SkipGreyedNotes`); it only trusts a value up to 20 s ahead of the clock |
+| grey-out float −0x1C / −0x18 / −0x14 (and −0x10) | **Riff Repeater's loop**: start, the grey time the game really uses there (back to the loop start each time the loop starts over, while the timer above keeps the pause point), end (twice). Outside Riff Repeater: 0, the grey time, the song's end, the song's end. At the loop end the game rewinds the highway over ~1.5 s (the clock goes down gradually). Note-by-Note waits only inside the loop and reads the grey time from −0x18 there (checked on L&P, 3 loops) |
 
 **Song object** (`song`):
 

@@ -43,6 +43,9 @@ bool GetSongTime(double* t);
 // The game greys out every note before this song time (seconds): after resuming from the pause
 // screen it replays a few seconds with the notes already passed greyed. Usually <= the song time.
 bool GetGreyTime(double* t);
+// Riff Repeater's loop (song seconds; at `end` the game rewinds to a few seconds before `start`).
+// false = no loop (normal play).
+bool GetLoop(double* start, double* end);
 // Length of the loaded song in seconds (SongLength of the arrangement being played).
 bool GetSongLength(double* len);
 

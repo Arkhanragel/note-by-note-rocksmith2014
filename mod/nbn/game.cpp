@@ -76,6 +76,9 @@ struct Layout {
     uint32_t greyChain[5];      // [root] -> ... -> float: notes before this song time are greyed out on
                                 // the highway (after resuming from the pause screen the game replays a
                                 // few seconds with those notes greyed). RSMods' ptr_greyOutNoteTimer
+    int32_t loopStart;          // from that float: Riff Repeater's loop, floats: start, the grey time the
+    int32_t loopGrey;           //   game really uses there, end (twice: end, end). Outside Riff Repeater
+    int32_t loopEnd;            //   they hold 0, the grey time, the song's end, the song's end
 };
 
 // Learn & Play, all verified (docs/TECHNICAL.md: "Object layouts", "Pausing the song..."). Other
@@ -87,6 +90,7 @@ constexpr Layout kLayoutLearnAndPlay = {
     0x0C, 0xCC, 0xDA,
     0x1234,
     {0x68, 0x10, 0x2C, 0x28, 0x3DC},  // checked 2026-09-29: resumed at 133.36 s, grey time stayed 135.962
+    -0x1C, -0x18, -0x14,  // checked 2026-10-02: loops 104.011-106.889 and 41.806-47.602 (phrases 18, 7)
 };
 
 struct Build {
@@ -578,13 +582,40 @@ bool GetSongTime(double* t) {
     return true;
 }
 
+namespace {
+// Riff Repeater's loop, read next to the grey timer at `a`. false = no loop.
+bool ReadLoop(uintptr_t a, double* start, double* end) {
+    float s, e, e2;
+    if (!ReadFloat(a + g_lay.loopStart, &s) || !ReadFloat(a + g_lay.loopEnd, &e) || !ReadFloat(a + g_lay.loopEnd + 4, &e2))
+        return false;
+    // Normal play keeps 0 .. the song's end there, and after leaving Riff Repeater (the pause point or
+    // the old loop's start) .. the song's end: a loop ends before the song's end. (Both end copies must
+    // agree: a wrong offset on another build reads something else, and a false loop would stop every
+    // wait outside it; it did ignore the practice bar after Riff Repeater, start 51.17, end = song end.)
+    double len = 0;
+    if (!(s > 0.001f && e > s + 0.2f && e == e2) || !GetSongLength(&len) || e > len - 0.5) return false;
+    *start = s;
+    *end = e;
+    return true;
+}
+}  // namespace
+
 bool GetGreyTime(double* t) {
     uintptr_t a;
     float f;
-    if (!g_ready || !ReadChain(g_base + g_addr.root, g_lay.greyChain, 5, &a) || !ReadFloat(a, &f) || !(f >= 0 && f < 36000))
-        return false;
+    double s, e;
+    if (!g_ready || !ReadChain(g_base + g_addr.root, g_lay.greyChain, 5, &a)) return false;
+    // In Riff Repeater the timer above keeps the pause point after the loop starts over (the whole loop
+    // then looked greyed out); the game's own value 0x18 before it goes back to the loop's start.
+    const uintptr_t at = ReadLoop(a, &s, &e) ? a + g_lay.loopGrey : a;
+    if (!ReadFloat(at, &f) || !(f >= 0 && f < 36000)) return false;
     *t = f;
     return true;
+}
+
+bool GetLoop(double* start, double* end) {
+    uintptr_t a;
+    return g_ready && ReadChain(g_base + g_addr.root, g_lay.greyChain, 5, &a) && ReadLoop(a, start, end);
 }
 
 bool GetPhraseLevels(std::vector<int>* levels) {

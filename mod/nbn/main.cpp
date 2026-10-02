@@ -1,4 +1,4 @@
-﻿// main.cpp: Note-by-Note for Rocksmith 2014, the mod's entry point and "wait mode" logic.
+// main.cpp: Note-by-Note for Rocksmith 2014, the mod's entry point and "wait mode" logic.
 //
 // Loaded by our RS_ASIO build (it loads NoteByNote.dll from the game folder at startup), or during
 // development by nbn_inject.exe. Everything runs on one background thread:
@@ -134,6 +134,10 @@ Config LoadConfig() {
                 "StringsFromThickest=0\n"
                 "; 1 = the song also waits at chords, 0 = chords pass (only single notes wait)\n"
                 "WaitChords=1\n"
+                "; With Enabled=1: 1 = the song stops at each note until you play it (menu: Wait for each note),\n"
+                ";     0 = the song plays on, the banner shows the next note and moves on as the song passes it\n"
+                ";     (menu: Show the notes)\n"
+                "StopSong=1\n"
                 "; 1 = after resuming from the game's pause screen, don't wait again for the notes the game\n"
                 ";     replays greyed out (the few seconds before where you paused)\n"
                 "SkipGreyedNotes=1\n"
@@ -264,6 +268,7 @@ Config LoadConfig() {
         c.initial.colors[i] = theme::ParseHex(Narrow(str(std::wstring(key.begin(), key.end()).c_str(), L"")));
     }
     c.initial.skipGreyed = GetPrivateProfileIntW(L"NoteByNote", L"SkipGreyedNotes", 1, ini.c_str()) != 0;
+    c.initial.stopSong = GetPrivateProfileIntW(L"NoteByNote", L"StopSong", 1, ini.c_str()) != 0;
     c.initial.skipPopups = GetPrivateProfileIntW(L"NoteByNote", L"SkipUbisoftPopups", 1, ini.c_str()) != 0;
     c.initial.fastIntro = std::max(1, std::min(8, (int)GetPrivateProfileIntW(L"NoteByNote", L"FastIntro", 4, ini.c_str())));
     c.initial.fixCrash = GetPrivateProfileIntW(L"NoteByNote", L"FixGameCrash", 1, ini.c_str()) != 0;
@@ -309,6 +314,7 @@ void SaveSettings(const overlay::Settings& st) {
     put(L"StringsFromThickest", st.stringsFromThick);
     put(L"WaitChords", st.waitChords);
     put(L"SkipGreyedNotes", st.skipGreyed);
+    put(L"StopSong", st.stopSong);
     put(L"ShowClock", st.showClock);
     put(L"ShowPracticeBar", st.showPracticeBar);
     put(L"ShowTab", st.showTab);
@@ -518,7 +524,13 @@ struct MainLoop {
     Target nextTarget;                // that note (valid while nextWaitT >= 0): the banner shows it early
     double shownT = -1;               // the note the banner shows, and its hand anchor, and the anchor of
     int shownAnchor = 0, handFrom = 0;  // the note shown before it (for "Hand: move UP to fret 7")
+    Target shownShape;                // the note the banner shows (its shape: SameShape), and the size of
+    int repeatTotal = 1;              // the quick repeat it is part of (RepeatLeft)
     double lastT = -1;
+    double peakT = -1;                // the furthest song time since the cursor was last synced
+    bool rewinding = false;           // the song is going back (a Riff Repeater loop starting over)
+    double loopStart = -1, loopEnd = -1;  // Riff Repeater's loop (-1 = none)
+    DWORD rangesLogTick = 0;          // when to log the practice parts (0 = logged)
     double greyT = -1;                // notes before this are greyed out and not waited for (-1 = none)
     double unplayedT = -1;            // the note the song was waiting at when the pause screen opened: never
                                       // passed as greyed out (-1 = none)
@@ -632,6 +644,33 @@ struct MainLoop {
         return out;
     }
 
+    // A quick repeat of one note or chord: the same shape again (SameShape), each within kRepeatGap of the one
+    // before (quarter notes at 110 bpm or faster: the chart's times wobble a ms or two, 0.5 s missed some
+    // at 120 bpm). The banner shows "x5" and counts down as they're played, since its text alone doesn't
+    // change from one to the next.
+    static constexpr double kRepeatGap = 0.55;
+
+    // The same thing to play: a single note on the same string and fret, or a chord (or double stop) with
+    // the same fret on every string (a power chord strummed again and again).
+    static bool SameShape(const Target& a, const Target& b) {
+        if (a.chord != b.chord) return false;
+        if (!a.chord) return a.string == b.string && a.fret == b.fret;
+        return std::equal(std::begin(a.frets), std::end(a.frets), std::begin(b.frets));
+    }
+
+    // How many of the run starting at `first` are still to play, counting it (1 = no repeat). Only the
+    // notes the mode waits for count (a greyed-out or ignored one ends the run).
+    int RepeatLeft(const Target& first) const {
+        int n = 1;
+        for (const Target* cur = &first; n < 99; ++n) {
+            const Target* c = chart.NextTarget(cur->time, levels);
+            if (!c || !SameShape(*c, first) || c->time - cur->time > kRepeatGap || !CanWait(*c))
+                break;
+            cur = c;
+        }
+        return n;
+    }
+
     // ---- 0. what the overlay shows
     void PublishView(DWORD now) {
         overlay::View v;
@@ -661,13 +700,23 @@ struct MainLoop {
         v.anchorFret = note.anchorFret;
         v.anchorWidth = note.anchorWidth;
         std::copy(std::begin(note.fingers), std::end(note.fingers), v.fingers);
+        // A quick repeat: the run's size is taken when it starts (its first note shown), and kept while
+        // the banner moves along it.
+        const int left = RepeatLeft(note);
         // The hand moves from the anchor of the note shown before this one.
         if (note.time != shownT) {
+            const bool sameRun = shownT >= 0 && SameShape(note, shownShape) && note.time > shownT &&
+                                 note.time - shownT <= kRepeatGap;
+            repeatTotal = sameRun ? std::max(repeatTotal, left) : left;
+            shownShape = note;
             handFrom = shownAnchor;
             shownT = note.time;
             shownAnchor = note.anchorFret;
         }
         v.handFrom = handFrom;
+        repeatTotal = std::max(repeatTotal, left);
+        v.repeatLeft = left;
+        v.repeatTotal = repeatTotal;
         v.phraseStarts.clear();
         if (chartOk)
             for (const auto& p : chart.pis) v.phraseStarts.push_back(p.start);
@@ -984,14 +1033,24 @@ struct MainLoop {
     void ApplySettings() {
         const overlay::Settings newSt = overlay::GetSettings();
         if (newSt == st) return;
+        // The mode (the menu's Off / Show the notes / Wait for each note): one message for it.
+        if (newSt.enabled != st.enabled || (newSt.enabled && newSt.stopSong != st.stopSong)) {
+            const char* mode = !newSt.enabled ? "Off" : newSt.stopSong ? "Wait for each note" : "Show the notes (the song plays on)";
+            Log("Note-by-Note: %s", mode);
+            overlay::Toast(std::string("Note-by-Note: ") + mode);
+        }
         if (newSt.enabled != st.enabled) {
-            Log("Note-by-Note %s", newSt.enabled ? "ON" : "OFF");
-            overlay::Toast(newSt.enabled ? "Note-by-Note ON" : "Note-by-Note OFF");
             if (!newSt.enabled && frozen) {
                 SaveWaitAudio();
                 ReleaseWait();
             }
             if (newSt.enabled) lastT = -1;  // re-sync to the current position
+        }
+        if (newSt.stopSong != st.stopSong) {
+            if (!newSt.stopSong && frozen) {  // switched off while waiting: the song goes on from this note
+                cursor = waitFor.time;
+                ReleaseWait();
+            }
         }
         if (!newSt.waitChords && frozen && waitFor.chord) {  // chord waits switched off while waiting at one
             cursor = waitFor.time;
@@ -1119,7 +1178,7 @@ struct MainLoop {
     void CheckClock(DWORD now) {
         if (!chartOk || clockChecked) return;
         double ct;
-        if (frozen || menuHold || !game::GetSongTime(&ct)) {
+        if (frozen || menuHold || rewinding || !game::GetSongTime(&ct)) {  // (a Riff Repeater rewind isn't a fault)
             clockTick = 0;
         } else if (!clockTick) {
             clockTick = now;
@@ -1151,33 +1210,66 @@ struct MainLoop {
         }
     }
 
-    // A note the mode waits for: not ignored, chords only if chord waits are on, and not greyed out.
+    // A note the mode waits for: not ignored, chords only if chord waits are on, not greyed out, and
+    // inside the part being practised.
+    bool CanWait(const Target& x) const { return Waitable(st, x) && !Greyed(x) && Inside(x); }
+
     // The song stops a few ms PAST its note, so when the player opens the game's pause screen while it
     // waits, the game counts that note as passed and greys it out on resuming; it was never played, so
     // it (and what follows) is waited for anyway. Before this, every pause during a wait lost a note.
-    // Outside the practice part (the practice bar), the song plays on without waiting.
-    bool CanWait(const Target& x) const {
-        const bool greyed = greyT > 0 && x.time < greyT - 0.001 && !(unplayedT >= 0 && x.time >= unplayedT - 0.001);
-        bool inside = ranges.empty();
-        for (const auto& r : ranges) inside = inside || (x.time >= r.first - 0.001 && x.time <= r.second + 0.001);
-        return Waitable(st, x) && !greyed && inside;
+    // Not in Riff Repeater: there the game greys it even when the song stopped 25 ms before it, and
+    // the loop comes round again anyway.
+    bool Greyed(const Target& x) const {
+        const bool unplayed = loopEnd < 0 && unplayedT >= 0 && x.time >= unplayedT - 0.001;
+        return greyT > 0 && x.time < greyT - 0.001 && !unplayed;
+    }
+
+    // Inside the part being practised: the practice parts of the practice bar, if any (outside them the
+    // song plays on without waiting), and in Riff Repeater also inside the loop (its end is where it
+    // starts over: the next phrase's first note isn't waited for, the game rewinds there; the lead-in
+    // before it isn't either). Practice parts that miss the loop don't count there: a part left from
+    // before, elsewhere in the song, stopped every wait in the loop.
+    bool Inside(const Target& x) const {
+        const bool loop = loopEnd > 0;
+        if (loop && !(x.time >= loopStart - 0.001 && x.time < loopEnd - 0.001)) return false;
+        bool any = false, inside = false;
+        for (const auto& r : ranges) {
+            if (loop && (r.second < loopStart || r.first >= loopEnd)) continue;
+            any = true;
+            inside = inside || (x.time >= r.first - 0.001 && x.time <= r.second + 0.001);
+        }
+        return !any || inside;
     }
 
     // ---- 6.-8. follow the song: keep the cursor in sync, wait at the next note, or pass it
     void Follow(DWORD now, bool skip) {
         double t;
         if (!chartOk || !st.enabled || !game::GetSongTime(&t)) { upcomingChord.clear(); return; }
-        // The practice parts, if the player chose some (logged when they change).
+        // The practice parts, if the player chose some (logged once they stop changing: a drag on the
+        // practice bar changes them every frame).
         std::vector<overlay::Range> parts = overlay::GetRanges();
         if (parts != ranges) {
+            ranges = std::move(parts);
+            rangesLogTick = now + 500;
+        }
+        if (rangesLogTick && now >= rangesLogTick) {
+            rangesLogTick = 0;
             std::string list;
-            for (const auto& r : parts) {
+            for (const auto& r : ranges) {
                 char buf[48];
                 std::snprintf(buf, sizeof(buf), "%s%.2f-%.2f", list.empty() ? "" : ", ", r.first, r.second);
                 list += buf;
             }
-            Log("practice parts: %s", parts.empty() ? "none (the whole song)" : list.c_str());
-            ranges = std::move(parts);
+            Log("practice parts: %s", ranges.empty() ? "none (the whole song)" : list.c_str());
+        }
+        // Riff Repeater's loop (logged when it changes).
+        double ls = -1, le = -1;
+        if (!game::GetLoop(&ls, &le)) ls = le = -1;
+        if (ls != loopStart || le != loopEnd) {
+            if (le > 0) Log("Riff Repeater loop %.3f - %.3f s: waits only inside it", ls, le);
+            else if (loopEnd > 0) Log("Riff Repeater loop off");
+            loopStart = ls;
+            loopEnd = le;
         }
         // Greyed-out notes (setting SkipGreyedNotes): after resuming from the game's pause screen the
         // song replays a few seconds with the notes already passed greyed out; those aren't waited for
@@ -1192,13 +1284,35 @@ struct MainLoop {
         // lastT < 0 (a new song, the mode switched on) re-syncs even while our menu holds the song: the
         // mode is switched on IN the menu, so the song is always held then. (Skipping it there left the
         // cursor where the mode was switched off, and the song then stopped at a note seconds behind.)
-        const bool jumped = lastT >= 0 && (t < lastT - 0.25 || t > lastT + 1.0);
-        if (!frozen && (lastT < 0 || (jumped && !menuHold))) {
-            if (lastT >= 0) Log("song position jumped %.2f -> %.2f s", lastT, t);
+        // Riff Repeater doesn't jump back to the loop's start: the highway rewinds over ~1 s, the clock
+        // going down a few ms at a time. So a step back is measured from the furthest point the song
+        // reached (peakT), and while it rewinds the cursor follows it down and nothing is waited for
+        // (a note the rewind passes would otherwise stop the song mid-rewind).
+        if (rewinding) {
+            if (lastT < 0 || t > lastT) {  // playing forward again (or re-synced since)
+                rewinding = false;
+                if (lastT >= 0) Log("  (rewound to %.2f s)", lastT);
+            } else {
+                cursor = std::min(cursor, t - 0.05);
+                lastT = peakT = t;
+                upcomingChord.clear();
+                return;
+            }
+        }
+        const bool back = lastT >= 0 && t < peakT - 0.25, ahead = lastT >= 0 && t > lastT + 1.0;
+        if (!frozen && (lastT < 0 || ((back || ahead) && !menuHold))) {
+            if (lastT >= 0) Log("song position jumped %.2f -> %.2f s", back ? peakT : lastT, t);
             else Log("song position %.3f s: following from here", t);
             cursor = t - 0.05;
+            peakT = t;
+            rewinding = back;
         }
         lastT = t;
+        peakT = std::max(peakT, t);
+        if (rewinding) {
+            upcomingChord.clear();
+            return;
+        }
         if (unplayedT >= 0 && !frozen && cursor >= unplayedT - 0.001) unplayedT = -1;  // played or skipped since
 
         // ---- 7. waiting: the player's notes, or a skip
@@ -1216,6 +1330,13 @@ struct MainLoop {
         if (!next || !CanWait(*next)) return;
         nextWaitT = next->time;  // the song stops here unless it's played (the tab's cursor won't pass it)
         if (nextTarget.time != next->time || nextTarget.level != next->level) nextTarget = *next;  // (copy once)
+        // Guide only (setting StopSong off): the song never stops. The banner shows this note (and the
+        // repeat counter counts down) until the song passes it, played or not; a note played on time is
+        // logged as a hit (CheckOnTime above).
+        if (!st.stopSong) {
+            if (t >= next->time) cursor = next->time;
+            return;
+        }
         // A strum is checked 90 and 180 ms after its attack: while one is being checked, give it a
         // moment before stopping the song (so a chord played right on time doesn't stop it).
         if (next->chord && chordDet.Pending() && t < next->time + 0.2) return;
@@ -1230,9 +1351,11 @@ struct MainLoop {
     const Target* PassNotes(double t, double earlyS) {
         const Target* next = chart.NextTarget(cursor, levels);
         while (next && !CanWait(*next) && next->time <= t + earlyS) {
-            if (next->chord || (greyT > 0 && Waitable(st, *next)))
+            // Logged: chords, and greyed-out notes (not the notes outside the practised part).
+            const bool waitable = Waitable(st, *next), inside = Inside(*next);
+            if ((next->chord && inside) || (waitable && inside && Greyed(*next)))
                 Log("pass %.3f %s (%s)", next->time, Describe(chart, *next).c_str(),
-                    Waitable(st, *next) ? "greyed out after resuming" : next->ignore ? "ignored" : "chord waits off");
+                    waitable ? "greyed out after resuming" : next->ignore ? "ignored" : "chord waits off");
             cursor = next->time;
             next = chart.NextTarget(cursor, levels);
         }
@@ -1329,9 +1452,22 @@ struct MainLoop {
     // said OK, but the new playback runs, and the song used to go on with the mod still "waiting".
     // Paused again, the new playback stops (Freeze looks up the current one). If it can't be held,
     // stop waiting and follow the song from where it really is (the next note stops it again).
+    // The song can also jump BACK while held: at the end of a Riff Repeater loop the game starts the
+    // loop over even then (the mod had stopped at the first note after the loop). That note isn't
+    // coming, so the wait ends there too. (Before, the cursor stayed past the loop: no more waits.)
     bool HoldKept(DWORD now) {
         double t;
-        if (!game::GetSongTime(&t) || t - frozenT < 0.3) return true;
+        if (!game::GetSongTime(&t)) return true;
+        if (t < frozenT - 0.25) {
+            Log("song position jumped %.2f -> %.2f s while waiting for %.3f: following from there", frozenT, t,
+                waitFor.time);
+            ReleaseWait();
+            cursor = t - 0.05;  // follow the rewind down (see Follow)
+            lastT = peakT = t;
+            rewinding = true;
+            return false;
+        }
+        if (t - frozenT < 0.3) return true;
         if (holdRetries < 2 && game::Freeze()) {
             ++holdRetries;
             Log("the song kept playing while held (%.2f s past the stop): paused it again", t - frozenT);
