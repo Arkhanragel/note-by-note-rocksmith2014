@@ -32,6 +32,10 @@ struct Measure {
     double f0 = 0;        // fitted fundamental (Hz)
     double logB = 0;      // log10 of B
     int partials = 0;     // overtones found
+    int maxK = 0;         // the highest one found (B needs one at 6 or above)
+    double levelDb = -120;  // RMS level of the analysed sound (dBFS)
+    bool unstretched = false;  // overtones high enough, but not sharp at all (B <= 0): no single string
+                               // sounds like that (a harmonic, several strings ringing, a pitch that moves)
 };
 
 // x: n samples of one note (from kStartAfter after its attack); f0Guess: the tracker's frequency.
@@ -56,16 +60,32 @@ std::string CheckCalibration(const Calibration& c);
 // tuned down a semitone has a little more B than when it was calibrated.
 double OpenLogB(const Calibration& c, int string, int openMidi);
 
+constexpr int kHandMargin = 3;  // hand tie-break: the nearer spot must be this much nearer (frets; a string = 3)
+constexpr int kWeakTopK = 8;    // a measure whose highest overtone is below this is "weak" (noisier B)...
+constexpr int kWeakReach = 6;   // ...and only trusted this near the hand (in game: 4 weak answers 1 fret from
+                                // the hand looked right, one at 17 = string 5 fret 20 with the hand at G 9, wrong)
+
 struct Guess {
     int string = -1;      // -1 = no answer
     int fret = -1;        // sounding fret from the nut
-    double dist = 0;      // |measured - predicted| log10 B of the best spot
-    double margin = 0;    // how much further the second best spot is
-    bool sure = false;    // dist <= kMaxDist && margin >= kMinMargin
+    double dist = 0;      // |measured - predicted| log10 B of the chosen spot
+    double margin = 0;    // how much further the next best spot is (by sound)
+    bool sure = false;    // dist <= kMaxDist, and the sound (margin >= kMinMargin) or the hand picked it
+    bool byHand = false;  // the sound fitted several spots; the one near the hand was taken
 };
 
 // candidates: (string, sounding fret from the nut) where the heard pitch can be played; open: the
-// song's open strings (MIDI, 0 = thickest).
-Guess Identify(const Calibration& c, const int open[6], double logB, const std::vector<std::pair<int, int>>& candidates);
+// song's open strings (MIDI, 0 = thickest). handString / handFret (sounding): where the fretting
+// hand is, i.e. the note the song waits for (-1 = unknown).
+//
+// Some spots predict almost the same B (e.g. string 3 (G) fret 10 and string 4 (D) fret 15). When
+// the sound fits several, the hand decides: a slip is a fret or a string away, not six frets
+// (in game, 6 of 9 "not sure" notes were such pairs, all with the hand next to one of them). An
+// open string is "near" any fret (brushing the next string is a common slip), so it only costs its
+// string distance; when that leaves two spots about as near, there's no answer.
+// weak: the measure only had low overtones (Measure::maxK < kWeakTopK); then the answer must be
+// within kWeakReach of the hand (no hand = no answer).
+Guess Identify(const Calibration& c, const int open[6], double logB, const std::vector<std::pair<int, int>>& candidates,
+               int handString = -1, int handFret = -1, bool weak = false);
 
 }  // namespace nbn::stringid

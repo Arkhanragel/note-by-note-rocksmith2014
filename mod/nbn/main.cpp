@@ -530,6 +530,7 @@ struct MainLoop {
     int holdRetries = 0;              // times the hold was re-applied during this wait
     hint::Line waitHint;              // how to fix the last wrong note played during this wait
     std::vector<hint::Mark> waitMarks;  // and where it was probably played (the banner's fretboard)
+    bool waitWrong = false;           // a wrong note was played during this wait (its audio is kept)
 
     // String identification (stringid.h): which string a wrong note was played on, from its sound.
     stringid::Calibration stringCal;  // the open strings' sound (ini StringCalibration; the menu redoes it)
@@ -851,7 +852,10 @@ struct MainLoop {
     void WrongNoteSpot(const stringid::Measure& m) {
         if (!frozen || waitFor.time != pendingId.waitT || waitFor.chord || waitFor.midi.empty()) return;
         if (!m.ok) {
-            Log("  string id: %s - too few overtones to tell the string", MidiName(pendingId.midi).c_str());
+            Log("  string id: %s - %s (%.2f s of sound at %.1f dB, %d overtones, highest %d)", MidiName(pendingId.midi).c_str(),
+                m.unstretched ? "overtones not stretched (a harmonic, several strings ringing, or a moving pitch)"
+                              : "too few overtones to tell the string",
+                (pendingId.to - pendingId.from) / (double)stringid::kSr, m.levelDb, m.partials, m.maxK);
             ShowGuess();
             return;
         }
@@ -860,9 +864,13 @@ struct MainLoop {
             const int sf = pendingId.midi - chart.open[s];
             if (sf >= chart.capo && sf <= 24) cands.push_back({s, sf});
         }
-        const stringid::Guess g = stringid::Identify(stringCal, chart.open, m.logB, cands);
-        Log("  string id: %s log10 B %.2f -> %s fret %d (off by %.2f, next best %.2f further): %s", MidiName(pendingId.midi).c_str(),
-            m.logB, g.string >= 0 ? StringName(g.string).c_str() : "?", g.fret, g.dist, g.margin, g.sure ? "sure" : "not sure");
+        // The hand is at the note the song waits for (its sounding fret: an open string with a capo = the capo).
+        const int handFret = (waitFor.fret == 0 && chart.capo > 0) ? chart.capo : waitFor.fret;
+        const bool weak = m.maxK < stringid::kWeakTopK;
+        const stringid::Guess g = stringid::Identify(stringCal, chart.open, m.logB, cands, waitFor.string, handFret, weak);
+        Log("  string id: %s log10 B %.2f%s -> %s fret %d (off by %.2f, next best %.2f further): %s", MidiName(pendingId.midi).c_str(),
+            m.logB, weak ? " (weak: overtones up to 7 only)" : "", g.string >= 0 ? StringName(g.string).c_str() : "?", g.fret, g.dist, g.margin,
+            !g.sure ? "not sure" : g.byHand ? "sure (the sound fits several spots; the one near the hand)" : "sure");
         hint::Mark at;
         const hint::Line l = g.sure ? hint::ForNotePlayedOn(MakeNeck(), waitFor.string, waitFor.fret, waitFor.midi[0], pendingId.midi, g.string, &at)
                                     : hint::Line{};
@@ -1262,6 +1270,7 @@ struct MainLoop {
         waitFor = next;
         waitHint.clear();
         waitMarks.clear();
+        waitWrong = false;
         frozenTick = now;
         waitAudioStart = debugAudio.Pos() - 2LL * 48000;
         // "+N ms": how far past the note the song stopped (chords: up to 200 ms, see Follow()).
@@ -1289,8 +1298,9 @@ struct MainLoop {
         }
         if (!HeardWaitedNote(now)) return;
         Log("HIT  %.3f %s after waiting %.2f s", waitFor.time, Describe(chart, waitFor).c_str(), (now - frozenTick) / 1000.0);
-        // Keep the audio of long waits, and of every chord for now (to tune chord detection offline).
-        if (waitFor.chord || now - frozenTick > 3000) SaveWaitAudio();
+        // Keep the audio of long waits, of waits with a wrong note (string identification), and of every
+        // chord for now (to tune the detection offline).
+        if (waitFor.chord || waitWrong || now - frozenTick > 3000) SaveWaitAudio();
         cursor = waitFor.time;
         // After a long wait, a count-in in the song's tempo before it goes on (the player finds the beat
         // again). The note was played: the song stays held only for the count.
@@ -1361,6 +1371,7 @@ struct MainLoop {
             Log("  heard %s (%+.0f cents, %.1f dB, aper %.2f%s), waiting for %s", MidiName(ev.midi).c_str(), ev.cents, ev.levelDb,
                 ev.aperiodicity, ev.attack ? ", attack" : "", Describe(chart, waitFor).c_str());
             if (ev.attack && adviseNow && !waitFor.chord && !waitFor.midi.empty()) {
+                waitWrong = true;
                 // Without knowing the string: the likely spot and, faded, the others with the same pitch.
                 hint::Mark at;
                 hint::Line guess = hint::ForNote(neck, waitFor.string, waitFor.fret, waitFor.midi[0], ev.midi, &at);

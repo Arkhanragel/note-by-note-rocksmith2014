@@ -71,6 +71,7 @@ MAX_HZ = 7000.0       # overtones searched up to here
 FLOOR_DB = -60.0      # overtones weaker than the strongest peak - 60 dB are ignored
 N_PROFILE = 16        # overtones in the "tone" profile
 PROFILE_FILL = -50.0  # value for an overtone that wasn't found
+MIN_TOP_K = 6         # B needs an overtone at least this high (8 lost dull notes; same in mod/nbn/stringid.cpp)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -359,7 +360,7 @@ def partials(x: np.ndarray, f0_guess: float):
     if keep.sum() >= 5:
         arr = arr[keep]
         f0, b = fit_inharmonic(arr[:, 0], arr[:, 1], arr[:, 2] - floor + 1)
-    if arr[:, 0].max() < 8:  # B is only measurable with high overtones
+    if arr[:, 0].max() < MIN_TOP_K:  # B is only measurable with high enough overtones
         b = float("nan")
     return f0, b, [tuple(r) for r in arr]
 

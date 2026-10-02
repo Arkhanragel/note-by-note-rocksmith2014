@@ -16,6 +16,10 @@ namespace {
 constexpr int kNfft = 1 << 17;      // zero-padded FFT: 0.37 Hz per bin at 48 kHz
 constexpr double kMaxHz = 7000.0;   // overtones searched up to here
 constexpr double kFloorDb = -60.0;  // overtones weaker than the strongest peak - 60 dB are ignored
+// B needs an overtone at least this high (stretch ~ B k^2). 8 lost dull notes (high frets on wound
+// strings: 5-7 overtones) whose B is big enough to show by overtone 6; 6 or 7: 94 % sure on take2
+// instead of 92 %, same 97.4 % right.
+constexpr int kMinTopK = 6;
 constexpr double kPi = 3.14159265358979323846;
 
 struct Peak {
@@ -76,6 +80,9 @@ void FitInharmonic(const std::vector<Partial>& ps, double floor, double* f0, dou
 Measure Analyze(const double* x, int n, double f0Guess, int sr) {
     Measure m;
     if (n < 64 || f0Guess <= 0 || n > kNfft) return m;
+    double energy = 0;
+    for (int i = 0; i < n; ++i) energy += x[i] * x[i];
+    m.levelDb = 10 * std::log10(energy / n + 1e-12);
     std::vector<std::complex<double>> a(kNfft);
     for (int i = 0; i < n; ++i) a[i] = x[i] * (0.5 - 0.5 * std::cos(2 * kPi * i / (n - 1)));  // np.hanning
     Fft(a, false);
@@ -100,6 +107,8 @@ Measure Analyze(const double* x, int n, double f0Guess, int sr) {
         }
         if (found.size() >= 5) FitInharmonic(found, floor, &f0, &b);
     }
+    m.partials = (int)found.size();
+    for (const auto& p : found) m.maxK = std::max(m.maxK, p.k);
     if (found.size() < 3) return m;
     // One outlier pass: drop overtones more than 10 cents away from the fitted curve, then refit.
     std::vector<Partial> kept;
@@ -113,10 +122,11 @@ Measure Analyze(const double* x, int n, double f0Guess, int sr) {
     }
     m.f0 = f0;
     m.partials = (int)found.size();
-    int maxK = 0;
-    for (const auto& p : found) maxK = std::max(maxK, p.k);
-    // B is only measurable with high overtones.
-    m.ok = maxK >= 8 && b > 1e-8;
+    m.maxK = 0;
+    for (const auto& p : found) m.maxK = std::max(m.maxK, p.k);
+    // B is only measurable with high enough overtones.
+    m.ok = m.maxK >= kMinTopK && b > 1e-8;
+    m.unstretched = m.maxK >= kMinTopK && !m.ok;
     m.logB = m.ok ? std::log10(b) : 0;
     return m;
 }
@@ -172,26 +182,58 @@ double OpenLogB(const Calibration& c, int string, int openMidi) {
     return c.logB[string] + 2.0 * (c.midi[string] - openMidi) / 12.0 * std::log10(2.0);
 }
 
-Guess Identify(const Calibration& c, const int open[6], double logB, const std::vector<std::pair<int, int>>& candidates) {
-    Guess g;
-    double best = 1e9, second = 1e9;
+Guess Identify(const Calibration& c, const int open[6], double logB, const std::vector<std::pair<int, int>>& candidates,
+               int handString, int handFret, bool weak) {
+    struct Spot {
+        int s, f;
+        double d;
+    };
+    std::vector<Spot> spots;
     for (const auto& [s, f] : candidates) {
         if (s < 0 || s >= 6 || !c.has[s]) continue;
         // B ~ 1/L^2 and the length halves every 12 frets: +log10(2)/6 per fret.
-        const double d = std::fabs(logB - (OpenLogB(c, s, open[s]) + f / 6.0 * std::log10(2.0)));
-        if (d < best) {
-            second = best;
-            best = d;
-            g.string = s;
-            g.fret = f;
-        } else if (d < second) {
-            second = d;
+        spots.push_back({s, f, std::fabs(logB - (OpenLogB(c, s, open[s]) + f / 6.0 * std::log10(2.0)))});
+    }
+    Guess g;
+    if (spots.empty()) return g;
+    std::sort(spots.begin(), spots.end(), [](const Spot& a, const Spot& b) { return a.d < b.d; });
+    g.string = spots[0].s;
+    g.fret = spots[0].f;
+    g.dist = spots[0].d;
+    g.margin = spots.size() > 1 ? spots[1].d - spots[0].d : 1e9;
+    if (g.dist > kMaxDist) return g;  // fits no spot well: a dead, bent or processed note
+    const bool hand = handString >= 0 && handFret >= 0;
+    // How far a spot is from the hand: frets, and 3 per string; an open string needs no fret.
+    auto cost = [&](const Spot& p) {
+        const int strings = 3 * std::abs(p.s - handString);
+        return p.f == 0 ? strings : std::abs(p.f - handFret) + strings;
+    };
+    // A weak measure (low overtones only) is trusted only near the hand.
+    auto reachable = [&](const Spot& p) { return !weak || (hand && cost(p) <= kWeakReach); };
+    if (g.margin >= kMinMargin) {
+        g.sure = reachable(spots[0]);
+        return g;
+    }
+    // The sound fits several spots about as well: the one near the hand, if clearly nearer.
+    if (!hand) return g;
+    const Spot* near = nullptr;
+    int nearCost = 1 << 20, nextCost = 1 << 20;
+    for (const auto& p : spots) {
+        if (p.d - spots[0].d >= kMinMargin) break;  // the sound tells these apart from the best
+        const int k = cost(p);
+        if (k < nearCost) {
+            nextCost = nearCost;
+            nearCost = k;
+            near = &p;
+        } else if (k < nextCost) {
+            nextCost = k;
         }
     }
-    if (g.string < 0) return g;
-    g.dist = best;
-    g.margin = second - best;
-    g.sure = best <= kMaxDist && g.margin >= kMinMargin;
+    if (!near || near->d > kMaxDist || nextCost - nearCost < kHandMargin || !reachable(*near)) return g;
+    g.string = near->s;
+    g.fret = near->f;
+    g.dist = near->d;
+    g.sure = g.byHand = true;
     return g;
 }
 

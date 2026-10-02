@@ -141,6 +141,8 @@ int RunTake(const fs::path& dir, bool dump) {
             if (cands.size() < 2) continue;
             ++total;
             if (!p.m.ok || !why.empty()) continue;
+            // By sound only: a take has no "hand" (no note the song waits for), so the hand tie-break
+            // and the weak-measure rule (both need it) aren't part of these numbers.
             const sid::Guess g = sid::Identify(cal, kStd, p.m.logB, cands);
             if (!g.sure) continue;
             ++answered;
@@ -209,6 +211,41 @@ int RunSynthetic() {
         std::snprintf(d, sizeof(d), "E4 on string %d fret %d -> string %d fret %d (dist %.2f, margin %.2f)", s, fret, g.string,
                       g.fret, g.dist, g.margin);
         check("identify E4", g.sure && g.string == s && g.fret == fret, d);
+    }
+    // 2b. The hand breaks a tie. A sound that fits two spots equally (F4: G fret 10 vs D fret 15, as in
+    // the game on 2026-10-02): the one next to the hand; no hand = no answer.
+    {
+        const double pG10 = sid::OpenLogB(cal, 3, 55) + 10 / 6.0 * std::log10(2.0);
+        const double pD15 = sid::OpenLogB(cal, 2, 50) + 15 / 6.0 * std::log10(2.0);
+        const double mid = 0.5 * (pG10 + pD15);
+        const auto f4 = Candidates(65);
+        char d[128];
+        std::snprintf(d, sizeof(d), "predictions G10 %.3f, D15 %.3f, measured %.3f", pG10, pD15, mid);
+        const sid::Guess none = sid::Identify(cal, kStd, mid, f4);
+        check("tie, no hand: not sure", !none.sure, d);  // halfway: both equally far
+        const sid::Guess atG9 = sid::Identify(cal, kStd, mid, f4, 3, 9);
+        check("tie, hand at G fret 9 -> G 10", atG9.sure && atG9.byHand && atG9.string == 3 && atG9.fret == 10, d);
+        const sid::Guess atD14 = sid::Identify(cal, kStd, mid, f4, 2, 14);
+        check("tie, hand at D fret 14 -> D 15", atD14.sure && atD14.byHand && atD14.string == 2 && atD14.fret == 15, d);
+        // G3 that fits "D fret 5" and "G open" the same (a G string calibrated to make them equal), with the
+        // hand at D fret 7: brushing the open G is about as likely as fretting 2 frets lower.
+        sid::Calibration tie = cal;
+        const double pD5 = sid::OpenLogB(cal, 2, 50) + 5 / 6.0 * std::log10(2.0);
+        tie.logB[3] = pD5;
+        const sid::Guess open = sid::Identify(tie, kStd, pD5, Candidates(55), 2, 7);
+        std::snprintf(d, sizeof(d), "D5 = G0 = %.3f -> string %d fret %d", pD5, open.string, open.fret);
+        check("tie with an open string: not sure", !open.sure, d);
+        const sid::Guess openNear = sid::Identify(tie, kStd, pD5, Candidates(55), 3, 9);  // hand on the G string
+        check("tie, hand on the open string's string", openNear.sure && openNear.string == 3 && openNear.fret == 0, d);
+        // A weak measure (low overtones only) counts only near the hand: E4 measured as "string 4 fret 14".
+        const double pD14 = sid::OpenLogB(cal, 2, 50) + 14 / 6.0 * std::log10(2.0);
+        check("weak, near the hand: sure", sid::Identify(cal, kStd, pD14, Candidates(64), 2, 12, true).sure, "");
+        check("weak, far from the hand: not sure", !sid::Identify(cal, kStd, pD14, Candidates(64), 4, 3, true).sure, "");
+        check("weak, no hand: not sure", !sid::Identify(cal, kStd, pD14, Candidates(64), -1, -1, true).sure, "");
+        check("strong, far from the hand: sure", sid::Identify(cal, kStd, pD14, Candidates(64), 4, 3, false).sure, "");
+        // A clear sound is never overruled by the hand.
+        const sid::Guess clear = sid::Identify(cal, kStd, sid::OpenLogB(cal, 5, 64), Candidates(64), 2, 14);
+        check("clear sound beats the hand", clear.sure && !clear.byHand && clear.string == 5, "");
     }
     // 3. Tuned down a semitone (Eb standard): the open strings' predicted B grows a little.
     check("tuning correction", sid::OpenLogB(cal, 0, 39) > cal.logB[0] && sid::OpenLogB(cal, 0, 39) - cal.logB[0] < 0.06, "");
