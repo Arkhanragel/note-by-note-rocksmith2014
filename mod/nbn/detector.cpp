@@ -150,6 +150,7 @@ bool NoteTracker::Process(const float* block, NoteEvent* ev) {
     PitchResult p;
     if (voiced) p = Yin(buf_.data(), W, cfg_.sr, cfg_.fmin, cfg_.fmax, cfg_.threshold);
     const int m = p.ok ? (int)std::lround(p.midi) : -1;
+    framePitch_ = p.ok ? p.midi : -1;
 
     // How many windows in a row heard this same note (0 = none heard).
     if (m < 0) stable_ = 0;

@@ -1181,15 +1181,15 @@ void DrawMistakePanel(ImDrawList* dl, const View& v, const Settings& st, float S
     const float head = 30 * s, mid = 24 * s, pad = 20 * s;
     const ImU32 red = Col(theme::kWarning);
 
-    // Header: "You played C" (the advice's first, grey piece without its dash), or for a chord "Not
-    // quite" (its advice starts with a grey "Fix:", dropped). The rest is the advice.
+    // Header: "You played C" or "Out of tune?" (the advice's first, grey piece without its dash), or for a
+    // chord "Not quite" (its advice starts with a grey "Fix:", dropped). The rest is the advice.
     std::string header = v.chord ? "Not quite" : "Wrong note";
     std::vector<Seg> body;
     for (size_t k = 0; k < v.hint.size(); ++k) {
         const auto& h = v.hint[k];
         if (k == 0 && h.color == hint::kGrey) {
             const size_t dash = h.text.find("  -  ");
-            if (h.text.rfind("You played", 0) == 0) header = h.text.substr(0, dash);
+            if (h.text.rfind("You played", 0) == 0 || h.text.rfind("Out of tune", 0) == 0) header = h.text.substr(0, dash);
             if (dash != std::string::npos || h.text.rfind("Fix:", 0) == 0) continue;
         }
         body.push_back({h.text, h.color >= 0 && h.color < 6 ? kStringColor[h.color] : (h.color == hint::kGrey ? Col(theme::kTextDim) : Col(theme::kText))});
@@ -2434,6 +2434,9 @@ void MenuPlaying(Settings& e, const View& v, int* calibration) {
           "notes you already passed greyed out. On: the song doesn't stop for those again (the tab dims them too).");
     Check("Accept the same note an octave higher or lower", &e.acceptOctaves,
           "Useful if you play a riff in another position. Off is stricter: string and fret must match.");
+    Check("Tell me when my guitar sounds out of tune", &e.tuningCheck,
+          "Compares the notes you play with the song's. When a string (or the whole guitar) keeps sounding low or "
+          "high, a message says which one and which way to turn it, and a wrong note it caused says so.");
     ImGui::SeparatorText("Timing");
     ImGui::BeginDisabled(!e.stopSong);  // (only for stops)
     SliderRow("Early notes count", "##early", &e.earlyMs, 0, 1000, "up to %d ms",

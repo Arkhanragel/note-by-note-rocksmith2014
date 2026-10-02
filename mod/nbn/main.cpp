@@ -44,6 +44,7 @@
 #include "stats.h"
 #include "stringid.h"
 #include "tap.h"
+#include "tuning.h"
 
 namespace nbn {
 namespace {
@@ -132,6 +133,8 @@ Config LoadConfig() {
                 "CountInBeats=3\n"
                 "; 1 = the same note one octave higher/lower also counts\n"
                 "AcceptOctaves=0\n"
+                "; 1 = say when a string (or the whole guitar) sounds out of tune with the song\n"
+                "TuningCheck=1\n"
                 "; 1 = after a wrong single note, show only the spot you really played it on (told by its\n"
                 ";     sound). Needs the calibration in the F8 menu (Playing page) and a clean guitar sound\n"
                 "StringDetect=1\n"
@@ -262,6 +265,7 @@ Config LoadConfig() {
     c.initial.lateMs = std::max(0, std::min(400, (int)GetPrivateProfileIntW(L"NoteByNote", L"LateMs", 150, ini.c_str())));
     c.initial.countInBeats = std::max(0, std::min(4, (int)GetPrivateProfileIntW(L"NoteByNote", L"CountInBeats", 3, ini.c_str())));
     c.initial.acceptOctaves = GetPrivateProfileIntW(L"NoteByNote", L"AcceptOctaves", 0, ini.c_str()) != 0;
+    c.initial.tuningCheck = GetPrivateProfileIntW(L"NoteByNote", L"TuningCheck", 1, ini.c_str()) != 0;
     c.initial.stringDetect = GetPrivateProfileIntW(L"NoteByNote", L"StringDetect", 1, ini.c_str()) != 0;
     c.stringCalibration = Narrow(str(L"StringCalibration", L""));
     c.initial.showBanner = GetPrivateProfileIntW(L"NoteByNote", L"ShowBanner", 1, ini.c_str()) != 0;
@@ -335,6 +339,7 @@ void SaveSettings(const overlay::Settings& st) {
     put(L"LateMs", st.lateMs);
     put(L"CountInBeats", st.countInBeats);
     put(L"AcceptOctaves", st.acceptOctaves);
+    put(L"TuningCheck", st.tuningCheck);
     put(L"StringDetect", st.stringDetect);
     put(L"ShowBanner", st.showBanner);
     put(L"BannerFretboard", st.bannerNeck);
@@ -620,6 +625,12 @@ struct MainLoop {
     bool statsChanged = true;         // phraseHeat / runSummary must be worked out again
     std::map<int, int> noteMarks;     // how each note went this time (ms -> TabNote::mark), for the tab
     std::set<int> clearedNow;         // notes cleared this time (ms): the tab keeps their dots, all filled
+    // Tuning check (tuning.h): the steady pitch of the last note heard, and the note the song asked for
+    // then (set by the wait logic: a waited note, or one played on time; string -1 = none, not counted).
+    tuning::SteadyPitch steady;
+    int steadyString = -1, steadyWanted = 0;
+    tuning::Check tuneCheck;
+    tuning::Finding tuneFound;        // what it says now (string -1 and !all = in tune, or not known)
     Target held;                      // the last note played that rings at least overlay::kHoldMinS (the
     bool holding = false;             // banner counts its sustain down: "Keep holding fret 9 ... 540 ms")
     DWORD lastHeardTick = 0;          // when the guitar last gave a note (a miss counts only while playing)
@@ -936,9 +947,17 @@ struct MainLoop {
         size_t used = 0;
         for (; used + NoteTracker::kBlock <= pending.size(); used += NoteTracker::kBlock) {
             NoteEvent ev;
-            if (tracker.Process(&pending[used], &ev)) {
+            const bool got = tracker.Process(&pending[used], &ev);
+            if (got) {
                 events.push_back(ev);
                 eventPos.push_back(base + (long long)(used + NoteTracker::kBlock));
+            }
+            // The tuning check: a note's steady pitch (a new note ends the one before).
+            double pitch = 0;
+            if (got ? steady.Stop(&pitch) : steady.Frame(tracker.FramePitch(), &pitch)) TuneNote(pitch);
+            if (got) {
+                steady.Start(ev.midi);
+                steadyString = -1;  // (until the wait logic says which note it was meant to be)
             }
             ChordResult cr;
             if (chordDet.Process(&pending[used], expectChord, &cr)) chordResults.push_back(cr);
@@ -1296,6 +1315,8 @@ struct MainLoop {
                 noteMarks.clear();
                 clearedNow.clear();
                 holding = false;
+                tuneCheck.Reset();  // (another tuning, maybe)
+                tuneFound = {};
                 clockChecked = false;
                 clockStill = 0;
                 clockTick = 0;
@@ -1518,6 +1539,7 @@ struct MainLoop {
                 (t - after->time) * 1000.0, after->level);
             RecordNote(after->time, stats::Result::kOnTime);
             StartHold(*after);
+            TuneFor(*after);
             cursor = after->time;
         }
     }
@@ -1566,6 +1588,7 @@ struct MainLoop {
             (t - next->time) * 1000.0, next->level);
         RecordNote(next->time, stats::Result::kOnTime);
         StartHold(*next);
+        TuneFor(*next);
         cursor = next->time;
         return chart.NextTarget(cursor, levels);
     }
@@ -1701,12 +1724,62 @@ struct MainLoop {
         return neck;
     }
 
+    // The note just heard was meant to be `x` (a waited note, or one played on time): its steady pitch
+    // goes to the tuning check. Not for notes whose pitch moves on purpose (bends, slides, vibrato,
+    // harmonics) or has none (mutes).
+    void TuneFor(const Target& x) {
+        using namespace technique;
+        constexpr uint32_t kMoves = kBend | kSlide | kUnpitchedSlide | kVibrato | kHarmonic | kPinchHarmonic | kMute | kTremolo;
+        if (x.chord || x.midi.empty() || x.string < 0 || (x.tech.mask & kMoves) || !steady.On()) return;
+        steadyString = x.string;
+        steadyWanted = x.midi[0];
+    }
+
+    // A note's steady pitch is known (fractional MIDI).
+    void TuneNote(double pitch) {
+        if (steadyString < 0 || calString >= 0) return;
+        const double off = pitch - steadyWanted;
+        tuneCheck.Add(steadyString, steadyWanted, pitch);
+        if (std::abs(off) >= 0.25 && std::abs(off) <= 2.5)
+            Log("tuning: %c string, %s wanted, heard %+.0f cents off", "EADGBe"[steadyString], MidiName(steadyWanted).c_str(),
+                off * 100.0);
+        steadyString = -1;
+        const tuning::Finding f = tuneCheck.Get();
+        // Said again only when it changes: another string, another way, or a step more or less.
+        auto same = [](const tuning::Finding& a, const tuning::Finding& b) {
+            return a.string == b.string && a.all == b.all && a.steps == b.steps && (a.offset < 0) == (b.offset < 0);
+        };
+        if (same(f, tuneFound)) {
+            tuneFound = f;
+            return;
+        }
+        tuneFound = f;
+        if (f.string < 0 && !f.all) {
+            Log("tuning: sounds in tune now");
+            if (st.tuningCheck) overlay::Toast("Sounds in tune now", 2500);
+            return;
+        }
+        const std::string text = tuning::AdviceText(f, MakeNeck());
+        Log("tuning: %s", text.c_str());
+        if (st.tuningCheck) overlay::Toast(text.substr(text.find("  -  ") + 5), 7000);
+    }
+
+    // A wrong note `heard` while waiting for `x` is what the guitar's tuning gives there: a string (or
+    // all of them) a half step or two off gives exactly that many; a little off, one half step that way.
+    bool TuningCaused(const Target& x, int heard) const {
+        if (!st.tuningCheck || x.midi.empty() || (tuneFound.string != x.string && !tuneFound.all)) return false;
+        const int d = heard - x.midi[0];
+        if (tuneFound.steps != 0) return d == tuneFound.steps;
+        return d == (tuneFound.offset < 0 ? -1 : 1);
+    }
+
     bool HeardWaitedNote(DWORD now) {
         bool hit = false;
         const hint::Neck neck = MakeNeck();
         // A wrong note gets advice only when it was picked (an attack), and not in the first moment of
         // the wait (that is still the previous note ringing).
         const bool adviseNow = now - frozenTick > 150;
+        if (adviseNow && !events.empty()) TuneFor(waitFor);  // (the last note heard: the one being measured)
         for (size_t i = 0; i < events.size(); ++i) {
             const NoteEvent& ev = events[i];
             if (Matches(st, chart, waitFor, ev.midi)) { hit = true; break; }
@@ -1723,6 +1796,15 @@ struct MainLoop {
                     for (const auto& m : hint::SameNoteElsewhere(neck, at)) marks.push_back(m);
                 }
                 if (guess.empty()) continue;
+                // The guitar is out of tune, and this is the note it gives instead of the right one: say
+                // that, not "move a fret".
+                if (TuningCaused(waitFor, ev.midi)) {
+                    waitHint = tuning::Advice(tuneFound, neck);
+                    waitMarks.clear();
+                    pendingId.on = false;
+                    Log("  advice: %s", hint::Text(waitHint).c_str());
+                    continue;
+                }
                 if (StringIdReady()) {
                     // The note's sound may tell where it was played: nothing is shown until it's measured
                     // (~0.25 s); then the spot, or this guess if the sound can't tell (WrongNoteSpot).

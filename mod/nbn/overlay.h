@@ -48,6 +48,7 @@ struct Settings {
     int countInBeats = 3;        // after a long wait (over 2 s) ends with the note played, count this many
                                  // beats of the song's tempo (3-2-1 on screen) before it goes on; 0 = off
     bool acceptOctaves = false;  // the same note one octave higher/lower also counts
+    bool tuningCheck = true;     // say when the guitar sounds out of tune with the song (tuning.h)
     bool showBanner = true;      // show "play this" while the song is waiting
     bool stringsFromThick = false; // strings are named by number ("string 4 (D)", in the string's colour):
                                  // off = the standard numbering, 1 = the thinnest (high e); on = 1 is the

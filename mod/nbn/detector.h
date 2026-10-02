@@ -66,6 +66,9 @@ public:
     bool Process(const float* block, NoteEvent* ev);
     double Now() const { return (double)samples_ / cfg_.sr; }
     const TrackerConfig& Config() const { return cfg_; }
+    // The pitch of the last block (fractional MIDI; -1 = none), for a note's steady pitch (tuning.h).
+    // (C++ only: tracker.py has no use for it.)
+    double FramePitch() const { return framePitch_; }
 
     static constexpr int kBlock = 256;
 
@@ -79,6 +82,7 @@ private:
     double peakDb_ = -120;
     int lastEventMidi_ = -1;
     double lastEventTime_ = -1;
+    double framePitch_ = -1;
 };
 
 std::string MidiName(int midi);
