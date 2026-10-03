@@ -69,7 +69,8 @@ entirely optional: https://ko-fi.com/arkhanragel
 
 Credits
 -------
-- Note-by-Note by arkhanragel (MIT licence)
+- Note-by-Note by arkhanragel (GNU General Public License, version 3 or later: free software;
+  its source code is on the project's GitHub page, where this zip comes from)
 - RS_ASIO by Micael Dias (MIT licence)
 - MinHook by Tsuda Kageyu (BSD 2-clause licence)
 - Dear ImGui by Omar Cornut (MIT licence)

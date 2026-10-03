@@ -34,7 +34,8 @@ foreach ($f in $files.GetEnumerator()) {
 }
 # LICENSES.txt: Note-by-Note's own licence, then the third-party code inside the DLLs.
 $lic = @(
-    @("Note-by-Note (NoteByNote.dll, the GuitarTap part of RS_ASIO.dll, the setup)", "LICENSE"),
+    @("Note-by-Note (NoteByNote.dll, the GuitarTap part of RS_ASIO.dll, the setup)", "NOTICE.txt"),
+    @("GNU General Public License, version 3 (Note-by-Note's licence)", "LICENSE"),
     @("RS_ASIO (RS_ASIO.dll, avrt.dll) - https://github.com/mdias/rs_asio", "external\rs_asio\LICENSE"),
     @("MinHook (in NoteByNote.dll) - https://github.com/TsudaKageyu/minhook", "external\minhook\LICENSE.txt"),
     @("Dear ImGui (in NoteByNote.dll) - https://github.com/ocornut/imgui", "external\imgui\LICENSE.txt"))

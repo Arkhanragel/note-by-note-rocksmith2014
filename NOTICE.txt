@@ -1,0 +1,32 @@
+Note-by-Note for Rocksmith 2014
+Copyright (C) 2026 arkhanragel
+
+This program is free software: you can redistribute it and/or modify it under the terms of the
+GNU General Public License as published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
+even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with this program (the
+file LICENSE next to the source code; in a release zip, inside LICENSES.txt). If not, see
+<https://www.gnu.org/licenses/>.
+
+
+Additional permission under GNU GPL version 3 section 7
+
+Note-by-Note runs inside Rocksmith 2014, which is not free software. If you modify this Program,
+or any covered work, by linking or combining it with Rocksmith 2014 Edition - Remastered (or a
+modified version of that program), containing parts covered by the terms of that program's
+licence, the licensors of this Program grant you additional permission to convey the resulting
+work.
+
+
+Third-party software
+
+The released files also contain RS_ASIO (MIT licence), MinHook (BSD 2-clause licence) and
+Dear ImGui (MIT licence). Each stays under its own licence; their texts are in the `external`
+folders of the source code and in a release zip's LICENSES.txt.
+
+Note-by-Note is not affiliated with or endorsed by Ubisoft. It contains no game files or song data.

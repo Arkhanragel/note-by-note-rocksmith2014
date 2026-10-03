@@ -138,4 +138,8 @@ Note-by-Note is free and always will be. What helps most is reports of what you 
 
 ## License
 
-[MIT](LICENSE) © 2026 arkhanragel. Please don't share game files, song data or charts made from them.
+© 2026 arkhanragel. Note-by-Note is free software under the [GNU General Public License](LICENSE), version 3 or (at your option) any later version: you may use it, change it and share it, and whatever you share, changed or not, stays under the same licence with its source code. It comes with no warranty.
+
+[NOTICE.txt](NOTICE.txt) has the full notice, including the permission to run it inside Rocksmith 2014 (which is not free software). The third-party code keeps its own licences (see [Credits](#credits)).
+
+Please don't share game files, song data or charts made from them.
