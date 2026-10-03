@@ -98,7 +98,7 @@ Thank you!
 
 ## Building from source
 
-Windows, Visual Studio 2022 (C++ desktop, Win32 toolset), CMake, .NET SDK (for the setup and tools), Git with submodules:
+Windows, Visual Studio 2022 (C++ desktop, Win32 toolset), CMake, .NET SDK (for the setup and tools), Git with submodules. Making the release zip also needs Python 3 with [Pillow](https://pypi.org/project/pillow/) (it builds the guide's web page). Clone into a short folder path: Windows' path length limit breaks the build in a deep one.
 
 ```powershell
 git clone --recurse-submodules <this repo>
