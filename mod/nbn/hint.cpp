@@ -179,8 +179,11 @@ Line NotSounding(const Neck& neck, const int frets[6], const ChordStrings& cs) {
 
 }  // namespace
 
-Line ForChord(const Neck& neck, const int frets[6], const int notes[6], const std::vector<int>& heard,
-              const std::vector<int>& extraPcs, int hits, int needed, std::vector<Mark>* where) {
+Line ForChord(const Neck& neck, const int frets[6], const int notes[6], const ChordHeard& detected,
+              std::vector<Mark>* where) {
+    const std::vector<int>& heard = detected.midi;
+    const std::vector<int>& extraPcs = detected.extraPcs;
+    const int hits = detected.hits, needed = detected.needed;
     if (where) where->clear();
     bool got[12] = {};
     for (int m : heard) got[Pc(m)] = true;

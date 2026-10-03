@@ -47,13 +47,13 @@ int main() {
 
     // Chords.
     const int a5f[6] = {-1, 0, 2, -1, -1, -1}, a5n[6] = {-1, 45, 52, -1, -1, -1};
-    check("A5, finger 1 fret high", nbn::hint::ForChord(gtr, a5f, a5n, {45, 53}, {5}, 1, 2),
+    check("A5, finger 1 fret high", nbn::hint::ForChord(gtr, a5f, a5n, {{45, 53}, {5}, 1, 2}),
           "Fix:  string 4 (D) is 1 fret too high: move DOWN to fret 2");
     const int d5f[6] = {-1, -1, 0, 2, -1, -1}, d5n[6] = {-1, -1, 50, 57, -1, -1};
-    check("D5, low E strummed", nbn::hint::ForChord(gtr, d5f, d5n, {40, 50, 57}, {4}, 2, 2),
+    check("D5, low E strummed", nbn::hint::ForChord(gtr, d5f, d5n, {{40, 50, 57}, {4}, 2, 2}),
           "Fix:  a note that isn't in the chord is ringing (E): don't strum the x strings");
     const int emf[6] = {0, 2, 2, 0, 0, 0}, emn[6] = {40, 47, 52, 55, 59, 64};
-    check("Em, strings not sounding", nbn::hint::ForChord(gtr, emf, emn, {40, 52, 64}, {}, 1, 2),
+    check("Em, strings not sounding", nbn::hint::ForChord(gtr, emf, emn, {{40, 52, 64}, {}, 1, 2}),
           "Fix:  not sounding: string 5 (A) at fret 2, string 3 (G) open, string 2 (B) open - press firmly and strum every string");
 
     // Where the wrong note was probably played (the red X of the banner's fretboard).
@@ -85,7 +85,7 @@ int main() {
     ForNotePlayedOn(capo2, 1, 0, 47, 48, 1, &m);
     at("X: known, capo", m, 1, 3, 48);
     ms.clear();
-    nbn::hint::ForChord(gtr, a5f, a5n, {45, 53}, {5}, 1, 2, &ms);
+    nbn::hint::ForChord(gtr, a5f, a5n, {{45, 53}, {5}, 1, 2}, &ms);
     at("X: A5 finger high", ms.size() == 1 ? ms[0] : nbn::hint::Mark{}, 2, 3, 53);
 
     std::printf("%s\n", fails ? "FAILED" : "all passed");

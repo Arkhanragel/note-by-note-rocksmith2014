@@ -51,11 +51,18 @@ struct Neck {
 // If `where` is given, it gets the spot the wrong note was most likely played at (string -1 = none).
 Line ForNote(const Neck& neck, int string, int fret, int want, int heard, Mark* where = nullptr);
 
-// Chord: frets/notes per string (-1 = not played), what the chord detector heard (MIDI, strongest
-// first), the wrong pitch classes it found (0 = C), and how many of the chord's notes it heard vs.
-// needed. If `where` is given, it gets the spots of the wrong frets the advice names.
-Line ForChord(const Neck& neck, const int frets[6], const int notes[6], const std::vector<int>& heard,
-              const std::vector<int>& extraPcs, int hits, int needed, std::vector<Mark>* where = nullptr);
+// What the chord detector heard when a chord went wrong.
+struct ChordHeard {
+    std::vector<int> midi;      // the notes heard (MIDI), strongest first
+    std::vector<int> extraPcs;  // the wrong pitch classes among them (0 = C)
+    int hits = 0;               // how many of the chord's notes were heard,
+    int needed = 0;             // of how many it takes to count as played
+};
+
+// Chord: frets/notes per string (-1 = not played), and what the chord detector heard. If `where` is
+// given, it gets the spots of the wrong frets the advice names.
+Line ForChord(const Neck& neck, const int frets[6], const int notes[6], const ChordHeard& detected,
+              std::vector<Mark>* where = nullptr);
 
 // Single note, when the sound told WHERE the wrong note was played (stringid.h): on `playedString`
 // (its fret follows from the pitch). Same wording as ForNote, but no guessing:

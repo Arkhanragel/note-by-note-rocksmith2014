@@ -1933,11 +1933,11 @@ struct MainLoop {
             Log("  %s", cr.Describe().c_str());
             hit = hit || cr.match;
             if (!cr.match && !cr.quiet && !cr.heard.empty() && adviseNow) {
-                std::vector<int> heardMidi;
-                heardMidi.reserve(cr.heard.size());
-                for (const auto& h : cr.heard) heardMidi.push_back(h.first);
+                hint::ChordHeard detected{{}, cr.extra, cr.hits, cr.needed};
+                detected.midi.reserve(cr.heard.size());
+                for (const auto& h : cr.heard) detected.midi.push_back(h.first);
                 std::vector<hint::Mark> at;
-                hint::Line l = hint::ForChord(neck, waitFor.frets, waitFor.notes, heardMidi, cr.extra, cr.hits, cr.needed, &at);
+                hint::Line l = hint::ForChord(neck, waitFor.frets, waitFor.notes, detected, &at);
                 if (!l.empty()) {
                     waitHint = l;
                     waitMarks = at;
