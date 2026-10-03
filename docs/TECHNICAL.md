@@ -65,8 +65,6 @@ The Sept 2022 row currently holds RSMods' values (absolute there, exe base 0x400
 | `0xABFEA0` / `0xABFEC0` | `GetGameObjectFromPlayingID` / `GetPlayingIDsFromGameObject` | |
 | `0xAC1300` | Wwise `GetSourcePlayPosition` | used by the clock provider |
 
-The Wwise functions were identified from a memory dump by the message type each one queues. Some entries in RSMods' L&P table were off (e.g. `ExecuteActionOnEvent(id)` pointed 0x30 bytes into the function, and the `char*` entry was really `SeekOnEvent`); the RSMods team fixed them upstream on 2026-09-28.
-
 ## Object layouts
 
 Chains: read the pointer, add the offset, repeat.
