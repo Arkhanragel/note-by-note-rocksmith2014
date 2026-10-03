@@ -193,6 +193,12 @@ Layout g_lay = kLayoutLearnAndPlay;  // the offsets in use (the build's row; unk
 bool g_ready = false;
 uintptr_t g_provider = 0;
 uint32_t g_frozenPid = 0, g_frozenEvent = 0;
+// Wwise counts the pauses of a playback: paused twice, it needs two resumes. The hold watchdog pauses
+// again when the clock says the song went on (right after a song start or the game's own resume the
+// clock jumps ahead by itself, so it does that with the first pause still in place); with one resume the
+// music stayed paused and the song stood still with nothing holding it. So: the pauses not yet resumed
+// on g_frozenPid, all taken back by Unfreeze.
+int g_pauses = 0;
 // Checks for the report: the song clock while frozen, and after resuming.
 double g_freezeClock = 0, g_resumeClock = 0;
 DWORD g_freezeTick = 0, g_resumeTick = 0;
@@ -1009,6 +1015,7 @@ bool Freeze() {
     }
     const int r = ((ExecuteActionOnEvent_t)(g_base + g_addr.executeActionOnEventId))(ev, kActionPause, g_lay.songGameObject, 0, kCurveLinear, pid);
     WriteByte(prov + g_lay.providerStopped, 1);
+    g_pauses = (pid == g_frozenPid && g_frozenEvent) ? g_pauses + 1 : 1;
     g_frozenPid = pid;
     g_frozenEvent = ev;
     if (r != 1) Log("freeze: pause returned %d", r);
@@ -1021,9 +1028,13 @@ bool Freeze() {
 
 bool Unfreeze() {
     const uintptr_t prov = FindProvider();
-    if (g_frozenEvent)
-        ((ExecuteActionOnEvent_t)(g_base + g_addr.executeActionOnEventId))(g_frozenEvent, kActionResume, g_lay.songGameObject, 0,
-                                                                      kCurveLinear, g_frozenPid);
+    if (g_frozenEvent) {
+        for (int i = 0; i < std::max(1, g_pauses); ++i)  // one resume per pause (see g_pauses)
+            ((ExecuteActionOnEvent_t)(g_base + g_addr.executeActionOnEventId))(g_frozenEvent, kActionResume, g_lay.songGameObject, 0,
+                                                                          kCurveLinear, g_frozenPid);
+        if (g_pauses > 1) Log("resume: the music had been paused %d times, resumed as many", g_pauses);
+    }
+    g_pauses = 0;
     // Report: while frozen the song clock must not have moved, and it must run again afterwards
     // (checked in Tick). Held less than half a second says too little.
     if (g_freezeTick && GetTickCount() - g_freezeTick >= 500) {
@@ -1047,6 +1058,7 @@ void PostUiEvent(const char* name) {
 void ResetSongCache() {
     g_provider = 0;
     g_frozenPid = g_frozenEvent = 0;
+    g_pauses = 0;
     g_freezeTick = g_resumeTick = 0;
 }
 

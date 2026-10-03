@@ -97,7 +97,7 @@ Measure Analyze(const double* x, int n, double f0Guess, int sr) {
     double f0 = f0Guess, b = 0;
     int misses = 0;
     for (int k = 1; k <= (int)(kMaxHz / f0Guess); ++k) {
-        Peak pk;
+        Peak pk{};  // (only read when FindPeak filled it)
         if (FindPeak(db, bin, k * f0 * std::sqrt(1 + std::max(b, 0.0) * k * k), 0.25 * f0, &pk) && pk.db > floor &&
             pk.prominence > 12) {
             found.push_back({k, pk.freq, pk.db});

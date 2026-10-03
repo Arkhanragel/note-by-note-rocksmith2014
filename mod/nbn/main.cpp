@@ -140,7 +140,8 @@ Config LoadConfig() {
                 "StringDetect=1\n"
                 "; Written by the F8 menu's Calibrate (each open string's sound); empty = not calibrated\n"
                 "StringCalibration=\n"
-                "; 1 = show what to play (string, colour, fret) while the song waits\n"
+                "; 1 = the banner with the note to play, while the song waits for it (with StopSong=0 the\n"
+                ";     banner is always shown: it is what that mode does)\n"
                 "ShowBanner=1\n"
                 "; 1 = the banner shows the note on a piece of fretboard (and where a wrong note was played),\n"
                 ";     0 = as a small tab\n"
@@ -149,6 +150,12 @@ Config LoadConfig() {
                 "BannerHand=1\n"
                 "; With BannerHand=1: 1 = also draw the hand under the fretboard, 0 = only the finger numbers\n"
                 "BannerFingers=1\n"
+                "; The banner's look: 0 = words beside a fretboard, with the next notes in a \"Then\" row;\n"
+                ";     1 = cards, no sentences: a row of small fretboards, one per note, that stay in place\n"
+                ";     while a highlight moves from one to the next\n"
+                "BannerLayout=0\n"
+                "; How many of the next notes or chords the banner also shows (0..5; 0 = only the one to play)\n"
+                "BannerAhead=3\n"
                 "; 0 = strings are numbered like in guitar books (high e = string 1), 1 = from the thickest\n"
                 ";     (low E = string 1)\n"
                 "StringsFromThickest=0\n"
@@ -274,6 +281,8 @@ Config LoadConfig() {
     c.initial.bannerNeck = GetPrivateProfileIntW(L"NoteByNote", L"BannerFretboard", 1, ini.c_str()) != 0;
     c.initial.bannerHand = GetPrivateProfileIntW(L"NoteByNote", L"BannerHand", 1, ini.c_str()) != 0;
     c.initial.bannerFingers = GetPrivateProfileIntW(L"NoteByNote", L"BannerFingers", 1, ini.c_str()) != 0;
+    c.initial.bannerLayout = GetPrivateProfileIntW(L"NoteByNote", L"BannerLayout", 0, ini.c_str()) == 1 ? 1 : 0;
+    c.initial.bannerAhead = std::max(0, std::min(5, (int)GetPrivateProfileIntW(L"NoteByNote", L"BannerAhead", 3, ini.c_str())));
     c.initial.troubleClear = std::max(1, std::min(10, (int)GetPrivateProfileIntW(L"NoteByNote", L"TroubleClearAfter", 3, ini.c_str())));
     c.initial.stringsFromThick = GetPrivateProfileIntW(L"NoteByNote", L"StringsFromThickest", 0, ini.c_str()) != 0;
     c.initial.waitChords = GetPrivateProfileIntW(L"NoteByNote", L"WaitChords", 1, ini.c_str()) != 0;
@@ -348,6 +357,8 @@ void SaveSettings(const overlay::Settings& st) {
     put(L"BannerFretboard", st.bannerNeck);
     put(L"BannerHand", st.bannerHand);
     put(L"BannerFingers", st.bannerFingers);
+    put(L"BannerLayout", st.bannerLayout);
+    put(L"BannerAhead", st.bannerAhead);
     put(L"TroubleClearAfter", st.troubleClear);
     put(L"StringsFromThickest", st.stringsFromThick);
     put(L"WaitChords", st.waitChords);
@@ -566,6 +577,11 @@ struct MainLoop {
     int shownAnchor = 0, handFrom = 0;  // the note shown before it (for "Hand: move UP to fret 7")
     Target shownShape;                // the note the banner shows (its shape: SameShape), and the size of
     int repeatTotal = 1;              // the quick repeat it is part of (RepeatLeft)
+    double runStartT = -1;            // and the song time of that repeat's first note (the note's own if none)
+    std::vector<overlay::RunNote> runNotes;  // and each of its notes, from that first one (RunNotes)
+    std::vector<overlay::AheadStep> aheadSteps;  // what comes after the banner's note (RefreshAhead), worked out
+    double aheadFor = -1;             // for the note at this song time, again every 50 ms (the levels and
+    DWORD nextAheadRefresh = 0;       // the practice parts can change under it)
     double lastT = -1;
     double peakT = -1;                // the furthest song time since the cursor was last synced
     bool rewinding = false;           // the song is going back (a Riff Repeater loop starting over)
@@ -724,16 +740,68 @@ struct MainLoop {
     }
 
     // How many of the run starting at `first` are still to play, counting it (1 = no repeat). Only the
-    // notes the mode waits for count (a greyed-out or ignored one ends the run).
-    int RepeatLeft(const Target& first) const {
+    // notes the mode waits for count (a greyed-out or ignored one ends the run). last: the run's last note.
+    int RepeatLeft(const Target& first, const Target** last = nullptr) const {
         int n = 1;
-        for (const Target* cur = &first; n < 99; ++n) {
+        const Target* cur = &first;
+        for (; n < 99; ++n) {
             const Target* c = chart.NextTarget(cur->time, levels);
             if (!c || !SameShape(*c, first) || c->time - cur->time > kRepeatGap || !CanWait(*c))
                 break;
             cur = c;
         }
+        if (last) *last = cur;
         return n;
+    }
+
+    // Each note of the quick repeat starting at `first` (the run RepeatLeft counts): how it's played.
+    void RunNotes(const Target& first, std::vector<overlay::RunNote>* out) const {
+        out->clear();
+        const Target* cur = &first;
+        while (out->size() < 99) {
+            // A slide's direction: where it goes, from the note's fret (a chord's: the fret its technique refers to).
+            const int to = (cur->tech.mask & technique::kSlide) ? cur->tech.slideTo
+                         : (cur->tech.mask & technique::kUnpitchedSlide) ? cur->tech.slideUnpitchTo : -1;
+            const int from = cur->chord ? cur->techFret : cur->fret;
+            out->push_back({cur->tech.mask, cur->pick, (to < 0 || from < 0) ? 0 : to > from ? 1 : to < from ? -1 : 0});
+            const Target* c = chart.NextTarget(cur->time, levels);
+            if (!c || !SameShape(*c, first) || c->time - cur->time > kRepeatGap || !CanWait(*c)) break;
+            cur = c;
+        }
+    }
+
+    // What comes after the banner's note (setting bannerAhead), for its "Then" row and its cards: the next
+    // notes and chords the mode waits for, in order, a quick repeat as one step. Worked out when the
+    // banner's note changes and again every 50 ms.
+    void RefreshAhead(const Target& note, DWORD now) {
+        if (note.time == aheadFor && now < nextAheadRefresh) return;
+        aheadFor = note.time;
+        nextAheadRefresh = now + 50;
+        aheadSteps.clear();
+        const Target* cur = &note;
+        RepeatLeft(note, &cur);  // past the banner's own repeat
+        for (int guard = 0; (int)aheadSteps.size() < st.bannerAhead && guard < 200; ++guard) {
+            const Target* c = chart.NextTarget(cur->time, levels);
+            if (!c) break;
+            cur = c;
+            if (!CanWait(*c)) continue;  // not waited for: the banner never shows it
+            overlay::AheadStep a;
+            a.chord = c->chord;
+            a.string = c->string;
+            a.fret = c->fret;
+            a.chordName = c->chordName;
+            std::copy(std::begin(c->frets), std::end(c->frets), a.frets);
+            std::copy(std::begin(c->fingers), std::end(c->fingers), a.fingers);
+            a.tech = c->tech;
+            if (c->chord) std::copy(std::begin(c->strings), std::end(c->strings), a.strings);
+            a.anchorFret = c->anchorFret;
+            a.anchorWidth = c->anchorWidth;
+            a.pick = c->pick;
+            a.time = c->time;
+            RunNotes(*c, &a.run);
+            a.count = RepeatLeft(*c, &cur);
+            aheadSteps.push_back(std::move(a));
+        }
     }
 
     // A note went one way or another (stats.h): kept for the trouble spots.
@@ -792,6 +860,13 @@ struct MainLoop {
     void PublishView(DWORD now) {
         overlay::View v;
         v.inSong = inSong;
+        // The game's pause screen and its Riff Repeater screen: the practice bar works there too, on the
+        // game's own bar (the parts can be chosen with the song stopped, beside Riff Repeater's selection).
+        auto endsWith = [&](const char* tail) {
+            const size_t n = std::char_traits<char>::length(tail);
+            return menu.size() >= n && menu.compare(menu.size() - n, n, tail) == 0;
+        };
+        v.songMenu = !inSong && menuOk && chartOk && (endsWith("_Pause") || endsWith("_RiffRepeater"));
         v.waiting = frozen;
         v.waitTime = frozen ? waitFor.time : -1;
         v.nextWaitTime = frozen ? -1 : nextWaitT;
@@ -837,6 +912,10 @@ struct MainLoop {
             const bool sameRun = shownT >= 0 && SameShape(note, shownShape) && note.time > shownT &&
                                  note.time - shownT <= kRepeatGap;
             repeatTotal = sameRun ? std::max(repeatTotal, left) : left;
+            if (!sameRun) {
+                runStartT = note.time;
+                RunNotes(note, &runNotes);
+            }
             shownShape = note;
             handFrom = shownAnchor;
             shownT = note.time;
@@ -846,6 +925,14 @@ struct MainLoop {
         repeatTotal = std::max(repeatTotal, left);
         v.repeatLeft = left;
         v.repeatTotal = repeatTotal;
+        v.stepTime = runStartT;
+        v.run = runNotes;
+        if (chartOk && st.bannerAhead > 0 && (frozen || v.upcoming)) {
+            RefreshAhead(note, now);
+            v.ahead = aheadSteps;
+        } else {
+            aheadFor = -1;
+        }
         v.phraseStarts.clear();
         if (chartOk)
             for (const auto& p : chart.pis) v.phraseStarts.push_back(p.start);
@@ -862,12 +949,13 @@ struct MainLoop {
         }
         StringIdStatus(&v);
         // The clock works even with the mode off or without a chart (it's just the song time).
-        if (!inSong || !game::GetSongTime(&v.songTime)) v.songTime = -1;
-        if (inSong && !game::GetSongLength(&v.songLength)) v.songLength = 0;
+        const bool songBar = inSong || v.songMenu;
+        if (!songBar || !game::GetSongTime(&v.songTime)) v.songTime = -1;
+        if (songBar && !game::GetSongLength(&v.songLength)) v.songLength = 0;
         // The song's sections (the tab, the clock, the practice bar and page name them).
         v.sections.clear();
         v.section.clear();
-        if (chartOk && inSong)
+        if (chartOk && songBar)
             for (const auto& sec : chart.sections) {
                 v.sections.push_back({sec.start, sec.name});
                 if (v.songTime >= sec.start - 0.05 && v.songTime < sec.end) v.section = sec.name;

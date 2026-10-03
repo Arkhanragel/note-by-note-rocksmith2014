@@ -15,6 +15,7 @@ bool BeatPos(const std::vector<Beat>& beats, double t, size_t* beat, double* fra
     if (beats.size() < 2 || t < beats.front().time - 0.01) return false;
     // The last beat at or before t (a note a hair before its beat belongs to it).
     auto it = std::upper_bound(beats.begin(), beats.end(), t + 0.01, [](double x, const Beat& b) { return x < b.time; });
+    if (it == beats.begin()) return false;  // (t + 0.01 can round to just under the first beat)
     const size_t i = (size_t)(it - beats.begin()) - 1;
     const double len = i + 1 < beats.size() ? beats[i + 1].time - beats[i].time : beats[i].time - beats[i - 1].time;
     if (len <= 0) return false;

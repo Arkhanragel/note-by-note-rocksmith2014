@@ -49,7 +49,8 @@ struct Settings {
                                  // beats of the song's tempo (3-2-1 on screen) before it goes on; 0 = off
     bool acceptOctaves = false;  // the same note one octave higher/lower also counts
     bool tuningCheck = true;     // say when the guitar sounds out of tune with the song (tuning.h)
-    bool showBanner = true;      // show "play this" while the song is waiting
+    bool showBanner = true;      // the banner with the note to play, while the song waits for it. (With
+                                 // stopSong off, "Show the notes", the banner is the mode: always shown)
     bool stringsFromThick = false; // strings are named by number ("string 4 (D)", in the string's colour):
                                  // off = the standard numbering, 1 = the thinnest (high e); on = 1 is the
                                  // thickest (low E)
@@ -62,7 +63,13 @@ struct Settings {
     bool bannerNeck = true;      // the banner's picture is a piece of fretboard (the note as a dot in its
                                  // string's colour with the fret number, a red X where a wrong note was
                                  // played); off = the small tab
-    bool waitChords = true;      // also wait at chords (off = chords pass, only single notes wait)
+    int bannerLayout = 0;        // the banner's look: 0 = words beside a fretboard ("Play fret 7 on string 3 (G)")
+                                 // with the next notes in a "Then" row; 1 = cards, no sentences: a row of small
+                                 // fretboards, one per note or chord, that stay in place while a highlight moves
+                                 // from one to the next (like the tab's pages)
+    int bannerAhead = 3;         // how many of the next notes or chords the banner also shows (0..5; 0 = only
+                                 // the one to play). A quick repeat of one note or chord counts once ("x4")
+    bool waitChords = true;     // also wait at chords (off = chords pass, only single notes wait)
     bool stopSong = true;        // the song stops at each note until it's played; off = guide only: the song
                                  // plays on, the banner shows the next note and moves on as the song passes it
     bool stringDetect = true;    // after a wrong single note, tell from its sound which string it was played on
@@ -167,9 +174,38 @@ struct TabBeat {
     bool downbeat = false;       // first beat of a bar: a strong bar line
 };
 
+// One note of a quick repeat (the same note or chord again and again): how this one is played. The
+// cards list them, since each can differ (picked, then hammered on, then palm-muted...).
+struct RunNote {
+    uint32_t tech = 0;           // its technique bits (technique.h; a chord's: all its strings' merged)
+    int pick = -1;               // pick stroke: 0 = down, 1 = up, -1 = none
+    int slide = 0;               // a slide from this note: +1 = up (to a higher fret), -1 = down, 0 = none
+};
+
+// One of the notes or chords that come after the banner's (setting bannerAhead): what the banner's "Then"
+// row and its cards draw. A quick repeat of one note or chord is one step.
+struct AheadStep {
+    bool chord = false;
+    int string = 0, fret = 0;    // single notes (0 = thickest string, fret 0 = open)
+    std::string chordName;       // chords: as in the song; empty for double stops
+    int frets[6] = {-1, -1, -1, -1, -1, -1};    // chords, per string (0 = thickest): -1 = not played
+    int fingers[6] = {-1, -1, -1, -1, -1, -1};  // per string: 1 = index .. 4 = little, 0 = thumb, -1 = none
+    technique::Technique tech;   // how to play it (as View::tech)
+    technique::Technique strings[6];  // chords: each string's technique
+    int anchorFret = 0, anchorWidth = 0;  // where the fretting hand is (0 = unknown)
+    int count = 1;               // times in a row (a quick repeat: "x4")
+    std::vector<RunNote> run;    // each note of that repeat, in order (one entry for a note played once)
+    int pick = -1;               // pick stroke: 0 = down, 1 = up, -1 = none
+    double time = -1;            // song time of its first note: tells the steps apart (the cards keep each
+                                 // one in its place while the highlight moves over them)
+};
+
 // What the main loop wants on screen. Sent every loop iteration with SetView().
 struct View {
     bool inSong = false;         // on a playing screen ("..._Game")
+    bool songMenu = false;       // on the game's pause screen or its Riff Repeater screen, with a song loaded:
+                                 // they show the same progress bar as the song, so the practice bar works
+                                 // there too (songTime, songLength, sections and phrases are sent as in a song)
     bool waiting = false;        // the song is frozen, waiting for a note
     double waitTime = -1;        // while waiting: the song time of that note (the tab highlights it;
                                  // the song clock stops a few ms after it, so "now" can't tell)
@@ -197,6 +233,11 @@ struct View {
     int repeatLeft = 1;          // a quick repeat of this note (same string and fret, one right after the
     int repeatTotal = 1;         // other): how many are still to play, counting this one, and how many
                                  // the run has. The banner shows "x5" when the run has 2 or more
+    std::vector<RunNote> run;    // each note of that repeat, in order, from the first one the banner showed
+                                 // (the one to play now = the last repeatLeft of them)
+    std::vector<AheadStep> ahead;  // what comes after it, in order (setting bannerAhead; empty = nothing)
+    double stepTime = -1;        // the banner's own step, as AheadStep::time: the song time of the note itself, or
+                                 // of the first note of the quick repeat it belongs to
     technique::Technique tech;  // how to play it (slide, bend...; the banner explains it); chords: all
                                  // strings merged, techFret = the fret it refers to
     int techFret = -1;
