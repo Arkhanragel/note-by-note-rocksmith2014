@@ -64,6 +64,8 @@ After a long wait (more than 2 seconds) the song does not jump straight back in:
 
 The banner stays in one place and keeps its size from note to note. Only its colours, words and dots change. Its frame has the colour of the string to play. Where it sits and how big it is are yours to choose (see [Moving and resizing](#moving-and-resizing)).
 
+A new install shows the plain banner: what to play (1), the repeat counter (2), how to play it (4) and the note on the fretboard (5). The picture also shows the extras, which start switched off: the pick stroke (3), the fingers and hand position (the hand's line in 4, the finger numbers in 5, and 7), the next note (6) and the "Then" row (8). The brackets after each item name the option that switches it on.
+
 1. **What to play**: the fret and the string. Strings are named by number and letter, "string 3 (G)", in the string's colour on the highway. (Which string is number 1: "Number the strings from the thickest", Tab page.)
 2. **The repeat counter**: the same note comes several times in a row. It counts down as you play them.
 3. **The pick stroke**: a bracket means pick down, a V means pick up. ("Show which way to pick", Tab page: it switches the sign on the banner, the cards and the tab together.)
@@ -130,7 +132,7 @@ The cards look has no sentences, no small tab and no hand under the fretboard: t
 
 After the last card, the frame goes back to the first one. When the banner has gone away for a while (the end of a practice part, a long rest), the next notes start again from the first card.
 
-Choose the look with "Look" (Screen page). "Notes shown ahead" (Screen page) sets how many notes follow the one to play, 0 to 5, in both looks, so there are that many cards plus one (fewer if the screen is too narrow for them). A quick repeat of the same note counts as one.
+Choose the look with "Look" (Screen page). "Notes shown ahead" (Screen page) sets how many notes follow the one to play, 0 to 5, in both looks (it starts at 0, and choosing Cards sets it to 3 if it was 0), so there are that many cards plus one (fewer if the screen is too narrow for them). A quick repeat of the same note counts as one.
 
 ### A note played several times
 
@@ -203,6 +205,8 @@ Note-by-Note compares the notes you play with the song's, string by string. When
 ## The tab
 
 ![One row of the tab with its parts numbered](guide/tab.svg)
+
+A new install shows the tab without the pick strokes (3) and the rhythm (12): both are switched on on the Tab page.
 
 1. **The strings**, by letter and colour. Thinnest on top, like printed tab. ("Thickest string on top" and "Left-handed (right to left)", Tab page.)
 2. **Bar numbers**, and the name of a section where it starts. (The bar and beat lines with their numbers: "Bar and beat lines", Tab page.)
@@ -308,9 +312,9 @@ See [Trouble spots](#trouble-spots).
 | Seconds ahead | How much music the tab shows. | 4 s |
 | Repeat previous page | How much of the page before a new page repeats on its left. | 8 % |
 | Bar and beat lines | Bar lines with numbers, and faint lines on the beats. | on |
-| Rhythm under the tab | The stems and beams. | on |
+| Rhythm under the tab | The stems and beams. | off |
 | Spread out fast notes | Fast parts get more room, and a fast repeat is written once ("12 x8"). Off: spacing exactly by time. | on |
-| Show which way to pick | The pick strokes, on the tab and on the banner. | on |
+| Show which way to pick | The pick strokes, on the tab and on the banner. | off |
 | Colour the notes you played | Green, amber and red on the notes you passed. | on |
 | Thickest string on top | For example if you play a flipped guitar. | off |
 | Left-handed (right to left) | Time runs from right to left. | off |
@@ -325,10 +329,10 @@ See [Trouble spots](#trouble-spots).
 |---|---|---|
 | The note to play (the banner) | The banner on or off. In "Show the notes" it is always on. | on |
 | Look | Words and fretboard, or Cards. | Words and fretboard |
-| Notes shown ahead | How many of the next notes the banner shows, 0 to 5. | 3 |
+| Notes shown ahead | How many of the next notes the banner shows, 0 to 5. Choosing the Cards look sets it to 3 if it was 0. | 0 |
 | Show it on a fretboard | Off: the picture is a small tab instead. Words look only. | on |
-| Fingers and hand position | Finger numbers, the shaded frets, and "Hand: move UP to fret 7". | on |
-| Draw the hand under the fretboard | Off: only the finger numbers on the dots. Words look only. | on |
+| Fingers and hand position | Finger numbers, the shaded frets, and "Hand: move UP to fret 7". | off |
+| Draw the hand under the fretboard | With "Fingers and hand position" on. Off: only the finger numbers on the dots. Words look only. | on |
 | Song time | The clock. | on |
 | Practice bar | See [Practising a part](#practising-a-part). | on |
 

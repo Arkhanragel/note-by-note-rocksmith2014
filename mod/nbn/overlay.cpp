@@ -3399,7 +3399,10 @@ void MenuScreen(Settings& e) {
     Help("What to play as a sentence (\"Play fret 7 on string 3 (G)\"), how to play it, and a piece of fretboard. "
          "The next notes are a row of small squares under the words.");
     ImGui::SameLine(0, ImGui::GetFontSize() * 2);
-    if (ImGui::RadioButton("Cards", e.bannerLayout == 1)) e.bannerLayout = 1;
+    if (ImGui::RadioButton("Cards", e.bannerLayout == 1)) {
+        e.bannerLayout = 1;
+        if (e.bannerAhead == 0) e.bannerAhead = 3;  // (cards with nothing ahead would be one lone card)
+    }
     Help("No sentences: a row of small fretboards, one per note or chord. They stay in place and a frame moves from "
          "one to the next, like the cursor over the tab; the one you just played is replaced by a later note. "
          "For when you already know the words.");

@@ -34,6 +34,9 @@ namespace nbn::overlay {
 
 // Player settings the menu can change. main.cpp loads them from NoteByNote.ini, and saves them
 // back when the menu changes them.
+// The defaults are a new install's first screen, kept plain on purpose: the note to play with its
+// fretboard, and a tab of notes and bar lines. The extras (the next notes, fingers and hand position,
+// pick strokes, the rhythm under the tab) start switched off; the menu turns them on.
 struct Settings {
     bool enabled = true;         // the mode itself (the song waits for each note)
     int leadMs = 30;             // stop this long BEFORE the note reaches the line. A little before, not
@@ -54,7 +57,7 @@ struct Settings {
     bool stringsFromThick = false; // strings are named by number ("string 4 (D)", in the string's colour):
                                  // off = the standard numbering, 1 = the thinnest (high e); on = 1 is the
                                  // thickest (low E)
-    bool bannerHand = true;      // fingers and hand position: finger numbers on the fretboard's dots, the
+    bool bannerHand = false;     // fingers and hand position: finger numbers on the fretboard's dots, the
                                  // hand's zone shaded, and "Hand: move UP to fret 7" when it has to move
     bool bannerFingers = true;   // with bannerHand: the hand drawn under the banner's fretboard (four fingers
                                  // over the frets they cover); off = only the numbers on the dots
@@ -67,7 +70,7 @@ struct Settings {
                                  // with the next notes in a "Then" row; 1 = cards, no sentences: a row of small
                                  // fretboards, one per note or chord, that stay in place while a highlight moves
                                  // from one to the next (like the tab's pages)
-    int bannerAhead = 3;         // how many of the next notes or chords the banner also shows (0..5; 0 = only
+    int bannerAhead = 0;         // how many of the next notes or chords the banner also shows (0..5; 0 = only
                                  // the one to play). A quick repeat of one note or chord counts once ("x4")
     bool waitChords = true;     // also wait at chords (off = chords pass, only single notes wait)
     bool stopSong = true;        // the song stops at each note until it's played; off = guide only: the song
@@ -83,8 +86,8 @@ struct Settings {
                                  // choose parts of the song; the mod only waits inside them
     bool showTab = true;         // show the scrolling tab while playing
     bool tabBeats = true;        // bar lines (with bar numbers) and beat lines in the tab
-    bool tabRhythm = true;       // rhythm under the tab: stems + beams (how many notes per beat)
-    bool tabPicks = true;        // pick strokes: marks above the tab's notes, and a line on the banner (picking.h)
+    bool tabRhythm = false;      // rhythm under the tab: stems + beams (how many notes per beat)
+    bool tabPicks = false;       // pick strokes: marks above the tab's notes, and a line on the banner (picking.h)
     bool tabMarks = true;        // a note's box is coloured once the song passed it: green = played on time,
                                  // amber = the song waited for it, red = skipped or missed (TabNote::mark)
     int tabSeconds = 4;          // seconds of music ahead of the "now" line

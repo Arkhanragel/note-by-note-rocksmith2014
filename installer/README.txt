@@ -28,6 +28,8 @@ Install
 In a song, press F8 for the Note-by-Note menu (the mode: Off, Show the notes or Wait for each note;
 the Practice page with the places where you stop most; tab and banner options).
 F9 skips the note the song is waiting for. Settings are saved in NoteByNote.ini in the game folder.
+A new install starts simple (the note to play and a plain tab): the next notes, fingers and hand
+position, pick strokes and the rhythm under the tab are switched on in that menu.
 
 "Note-by-Note Guide.html" (next to this file; opens in your web browser) explains everything on
 screen and every option, with pictures.

@@ -147,7 +147,7 @@ Config LoadConfig() {
                 ";     0 = as a small tab\n"
                 "BannerFretboard=1\n"
                 "; 1 = finger numbers on the fretboard, the hand's zone, and a hint when the hand has to move\n"
-                "BannerHand=1\n"
+                "BannerHand=0\n"
                 "; With BannerHand=1: 1 = also draw the hand under the fretboard, 0 = only the finger numbers\n"
                 "BannerFingers=1\n"
                 "; The banner's look: 0 = words beside a fretboard, with the next notes in a \"Then\" row;\n"
@@ -155,7 +155,7 @@ Config LoadConfig() {
                 ";     while a highlight moves from one to the next\n"
                 "BannerLayout=0\n"
                 "; How many of the next notes or chords the banner also shows (0..5; 0 = only the one to play)\n"
-                "BannerAhead=3\n"
+                "BannerAhead=0\n"
                 "; 0 = strings are numbered like in guitar books (high e = string 1), 1 = from the thickest\n"
                 ";     (low E = string 1)\n"
                 "StringsFromThickest=0\n"
@@ -181,9 +181,9 @@ Config LoadConfig() {
                 "TabBeats=1\n"
                 "; 1 = rhythm under the tab, as in printed tab: a stem per note, beams = notes per beat\n"
                 ";     (no beam = 1, 1 beam = 2, 2 beams = 4, 3 beams = 8; a small 3 = triplets)\n"
-                "TabRhythm=1\n"
+                "TabRhythm=0\n"
                 "; 1 = pick strokes above the tab's notes (down / up): the song's, or suggested from the rhythm\n"
-                "TabPicks=1\n"
+                "TabPicks=0\n"
                 "; 1 = colour each note on the tab once the song has passed it: green = played on time,\n"
                 ";     amber = the song waited for it, red = skipped or not played\n"
                 "TabMarks=1\n"
@@ -279,10 +279,10 @@ Config LoadConfig() {
     c.stringCalibration = Narrow(str(L"StringCalibration", L""));
     c.initial.showBanner = GetPrivateProfileIntW(L"NoteByNote", L"ShowBanner", 1, ini.c_str()) != 0;
     c.initial.bannerNeck = GetPrivateProfileIntW(L"NoteByNote", L"BannerFretboard", 1, ini.c_str()) != 0;
-    c.initial.bannerHand = GetPrivateProfileIntW(L"NoteByNote", L"BannerHand", 1, ini.c_str()) != 0;
+    c.initial.bannerHand = GetPrivateProfileIntW(L"NoteByNote", L"BannerHand", 0, ini.c_str()) != 0;
     c.initial.bannerFingers = GetPrivateProfileIntW(L"NoteByNote", L"BannerFingers", 1, ini.c_str()) != 0;
     c.initial.bannerLayout = GetPrivateProfileIntW(L"NoteByNote", L"BannerLayout", 0, ini.c_str()) == 1 ? 1 : 0;
-    c.initial.bannerAhead = std::max(0, std::min(5, (int)GetPrivateProfileIntW(L"NoteByNote", L"BannerAhead", 3, ini.c_str())));
+    c.initial.bannerAhead = std::max(0, std::min(5, (int)GetPrivateProfileIntW(L"NoteByNote", L"BannerAhead", 0, ini.c_str())));
     c.initial.troubleClear = std::max(1, std::min(10, (int)GetPrivateProfileIntW(L"NoteByNote", L"TroubleClearAfter", 3, ini.c_str())));
     c.initial.stringsFromThick = GetPrivateProfileIntW(L"NoteByNote", L"StringsFromThickest", 0, ini.c_str()) != 0;
     c.initial.waitChords = GetPrivateProfileIntW(L"NoteByNote", L"WaitChords", 1, ini.c_str()) != 0;
@@ -291,9 +291,9 @@ Config LoadConfig() {
     c.initial.showTab = GetPrivateProfileIntW(L"NoteByNote", L"ShowTab", 1, ini.c_str()) != 0;
     c.initial.tabBeats = GetPrivateProfileIntW(L"NoteByNote", L"TabBeats", 1, ini.c_str()) != 0;
     c.initial.tabSeconds = std::max(2, std::min(8, (int)GetPrivateProfileIntW(L"NoteByNote", L"TabSeconds", 4, ini.c_str())));
-    c.initial.tabRhythm = GetPrivateProfileIntW(L"NoteByNote", L"TabRhythm", 1, ini.c_str()) != 0;
+    c.initial.tabRhythm = GetPrivateProfileIntW(L"NoteByNote", L"TabRhythm", 0, ini.c_str()) != 0;
     c.initial.tabMarks = GetPrivateProfileIntW(L"NoteByNote", L"TabMarks", 1, ini.c_str()) != 0;
-    c.initial.tabPicks = GetPrivateProfileIntW(L"NoteByNote", L"TabPicks", 1, ini.c_str()) != 0;
+    c.initial.tabPicks = GetPrivateProfileIntW(L"NoteByNote", L"TabPicks", 0, ini.c_str()) != 0;
     c.initial.tabSpread = GetPrivateProfileIntW(L"NoteByNote", L"TabSpread", 1, ini.c_str()) != 0;
     c.initial.tabPage = GetPrivateProfileIntW(L"NoteByNote", L"TabPages", 1, ini.c_str()) != 0;
     // TabRows; older ini files have TabTwoRows=1 instead.
