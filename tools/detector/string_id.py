@@ -61,6 +61,7 @@ TEST_NOTES = [40, 45, 48, 50, 55, 57, 59, 60, 64, 66]   # E2 A2 C3 D3 G3 A3 B3 C
 
 MIN_GAP_S = 1.2       # plucks closer than this are ignored (each note must ring)
 RING_AFTER_S = 2.0    # keep recording after the last pluck
+META_EXT = ".json"    # a position's notes, next to its .wav
 
 # Analysis
 NFFT = 1 << 17        # zero-padded FFT: 0.37 Hz per bin at 48 kHz
@@ -145,6 +146,21 @@ def load_wav(path: Path) -> np.ndarray:
         return np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float64) / 32768.0
 
 
+def _count_pluck(ev, m: int, plucks: list[float], freqs: list[float], n_plucks: int, now: float) -> bool:
+    """A pick attack heard while recording a position: it counts when it is the right note and not too soon
+    after the pluck before. True = that was the last pluck needed."""
+    if ev.midi != m:
+        print(f"      \x1b[90m(heard {midi_name(ev.midi)}, expected {midi_name(m)} - check the fret)\x1b[0m")
+        return False
+    if plucks and now - plucks[-1] < MIN_GAP_S:
+        print("      \x1b[90m(too soon - let each note ring about 2 seconds)\x1b[0m")
+        return False
+    plucks.append(ev.time)
+    freqs.append(ev.freq)
+    print(f"      pluck {len(plucks)}/{n_plucks} ok")
+    return len(plucks) == n_plucks
+
+
 def record_position(mic: Mic, m: int, n_plucks: int) -> tuple[np.ndarray, list[float], list[float]]:
     """Record until n_plucks of the right note were heard (each with a pick attack), plus some ring."""
     tracker = NoteTracker(TrackerConfig(sr=SR, block=BLOCK))
@@ -164,18 +180,8 @@ def record_position(mic: Mic, m: int, n_plucks: int) -> tuple[np.ndarray, list[f
             continue
         # Only events with a pick attack count: a note still ringing from the previous position
         # would otherwise be taken for the first pluck.
-        if ev is None or not ev.attack:
-            continue
-        if ev.midi != m:
-            print(f"      \x1b[90m(heard {midi_name(ev.midi)}, expected {midi_name(m)} - check the fret)\x1b[0m")
-        elif plucks and now - plucks[-1] < MIN_GAP_S:
-            print("      \x1b[90m(too soon - let each note ring about 2 seconds)\x1b[0m")
-        else:
-            plucks.append(ev.time)
-            freqs.append(ev.freq)
-            print(f"      pluck {len(plucks)}/{n_plucks} ok")
-            if len(plucks) == n_plucks:
-                done_at = now
+        if ev is not None and ev.attack and _count_pluck(ev, m, plucks, freqs, n_plucks, now):
+            done_at = now
     return np.concatenate(audio), plucks, freqs
 
 
@@ -191,7 +197,7 @@ def cmd_record(args):
     plan = []
     for rnd in range(1, args.rounds + 1):
         plan += [(rnd, *p) for p in (pos if rnd % 2 else reversed(pos))]
-    todo = [p for p in plan if not (out / (file_stem(*p) + ".json")).exists()]
+    todo = [p for p in plan if not (out / (file_stem(*p) + META_EXT)).exists()]
     if not todo:
         print(f"Everything is recorded in {out}. Run: string_id.py analyze {out}")
         return
@@ -216,7 +222,7 @@ def cmd_record(args):
         meta = {"file": stem + ".wav", "round": rnd, "midi": m, "string": s, "string_std": 6 - s, "fret": f,
                 "plucks": plucks, "freqs": freqs, "pickup": args.pickup, "guitar": args.guitar, "opens": opens,
                 "sr": SR, "recorded": datetime.datetime.now().isoformat(timespec="seconds")}
-        (out / (stem + ".json")).write_text(json.dumps(meta, indent=1))
+        (out / (stem + META_EXT)).write_text(json.dumps(meta, indent=1))
     print(f"\nDone. Run: .venv\\Scripts\\python tools\\detector\\string_id.py analyze {out}")
 
 
@@ -226,19 +232,12 @@ CLEAN_LOG_B = {45: math.log10(6.2e-5), 50: math.log10(6.3e-5), 55: math.log10(9.
                59: math.log10(2.6e-5), 64: math.log10(1.1e-5)}
 
 
-def cmd_check(args):
-    """Quick check of the signal chain: pluck the open strings and compare with a known clean take."""
-    from wait_sim import find_focusrite
-    os.system("")
-    out = Path(args.out or "recordings/string_id")
-    out.mkdir(parents=True, exist_ok=True)
-    print(f"\nPluck each OPEN string once, thickest first (6 E, 5 A, 4 D, 3 G, 2 B, 1 e), letting each ring "
-          f"~2 seconds.\nRecording for {args.seconds:.0f} seconds...\n")
-    mic = Mic(args.device if args.device is not None else find_focusrite(), args.channel)
+def _listen(mic, seconds: float):
+    """Records for `seconds`: the sound and the plucks heard (pick attacks at least MIN_GAP_S apart)."""
     tracker = NoteTracker(TrackerConfig(sr=SR, block=BLOCK))
     audio, events = [], []
     mic.drain()
-    while tracker.now < args.seconds:
+    while tracker.now < seconds:
         block = mic.get()
         audio.append(block)
         ev = tracker.process(block)
@@ -246,9 +245,12 @@ def cmd_check(args):
             events.append(ev)
             print(f"   {midi_name(ev.midi):4} {ev.level_db:5.1f} dB")
     mic.stream.stop()
-    x = np.concatenate(audio)
-    save_wav(out / "check.wav", x)
-    lines = ["", f"{'note':5} {'level':>6} {'after 0.6 s':>11} {'peak/rms':>8} {'log10 B':>8} {'clean take':>10}"]
+    return np.concatenate(audio), events
+
+
+def _check_table(x: np.ndarray, events, lines: list[str]):
+    """A line per pluck that rang long enough: its level, how it fades, its crest and its stiffness next to
+    the clean take's. Returns how much each faded and how far each stiffness is from the clean take's."""
     drops, deltas = [], []
     for i, ev in enumerate(events):
         t_next = events[i + 1].time if i + 1 < len(events) else len(x) / SR
@@ -267,22 +269,43 @@ def cmd_check(args):
             deltas.append(lb - ref)
         lines.append(f"{midi_name(ev.midi):5} {lv0:5.0f}dB {lv1 - lv0:+9.0f}dB {crest:8.2f} {lb:8.2f} "
                      + (f"{ref:10.2f}" if ref is not None else f"{'':10}"))
+    return drops, deltas
+
+
+def _check_verdict(drops: list[float], deltas: list[float], lines: list[str]):
+    """Is the signal clean? From how the open strings' stiffness compares with the clean take."""
     if not drops:
         lines.append("No usable plucks (each must ring at least 0.85 s). Try again.")
-    else:
-        drop = float(np.median(drops))
-        # The fade is shown for information only: it varies a lot with how the string is muted.
-        lines.append(f"\nThe note fades by {drop:.0f} dB in 0.6 s (median).")
-        if not deltas:
-            lines.append("VERDICT: unsure - no open A, D, G, B or e string was heard clearly. Try again.")
-        else:
-            dl = float(np.median(deltas))
-            lines.append(f"Overtone stiffness vs the clean take: {dl:+.2f} (0 = the same; the processed take "
-                         "of 2026-10-02: about -1.3).")
-            # Every string must match, not just the median: a light overdrive changes the loud wound
-            # strings (E A D) and leaves the plain ones almost untouched (seen 2026-10-02).
-            lines.append("VERDICT: " + ("looks CLEAN - ready to record the test." if min(deltas) > -0.6 else
-                                        "still PROCESSED (drive / compression on some strings) - check the chain."))
+        return
+    drop = float(np.median(drops))
+    # The fade is shown for information only: it varies a lot with how the string is muted.
+    lines.append(f"\nThe note fades by {drop:.0f} dB in 0.6 s (median).")
+    if not deltas:
+        lines.append("VERDICT: unsure - no open A, D, G, B or e string was heard clearly. Try again.")
+        return
+    dl = float(np.median(deltas))
+    lines.append(f"Overtone stiffness vs the clean take: {dl:+.2f} (0 = the same; the processed take "
+                 "of 2026-10-02: about -1.3).")
+    # Every string must match, not just the median: a light overdrive changes the loud wound
+    # strings (E A D) and leaves the plain ones almost untouched (seen 2026-10-02).
+    lines.append("VERDICT: " + ("looks CLEAN - ready to record the test." if min(deltas) > -0.6 else
+                                "still PROCESSED (drive / compression on some strings) - check the chain."))
+
+
+def cmd_check(args):
+    """Quick check of the signal chain: pluck the open strings and compare with a known clean take."""
+    from wait_sim import find_focusrite
+    os.system("")
+    out = Path(args.out or "recordings/string_id")
+    out.mkdir(parents=True, exist_ok=True)
+    print(f"\nPluck each OPEN string once, thickest first (6 E, 5 A, 4 D, 3 G, 2 B, 1 e), letting each ring "
+          f"~2 seconds.\nRecording for {args.seconds:.0f} seconds...\n")
+    mic = Mic(args.device if args.device is not None else find_focusrite(), args.channel)
+    x, events = _listen(mic, args.seconds)
+    save_wav(out / "check.wav", x)
+    lines = ["", f"{'note':5} {'level':>6} {'after 0.6 s':>11} {'peak/rms':>8} {'log10 B':>8} {'clean take':>10}"]
+    drops, deltas = _check_table(x, events, lines)
+    _check_verdict(drops, deltas, lines)
     text = "\n".join(lines)
     print(text)
     (out / "check.txt").write_text(text + "\n", encoding="utf-8")
@@ -545,19 +568,8 @@ def splits(plucks: list[Pluck]):
     return [([q for q in plucks if q is not p], [p]) for p in plucks], False
 
 
-def cmd_analyze(args):
-    folder = Path(args.folder)
-    plucks = load_take(folder)
-    if not plucks:
-        raise SystemExit(f"No plucks found in {folder}")
-    lines: list[str] = []
-    say = lines.append
-    multi = {m: sorted({(p.string, p.fret) for p in plucks if p.midi == m}) for m in sorted({p.midi for p in plucks})}
-    multi = {m: c for m, c in multi.items() if len(c) >= 2}
-    pickups = {json.loads(j.read_text()).get("pickup") for j in folder.glob("*.json")}
-    say(f"Take: {folder}   plucks analysed: {len(plucks)}   pickup: {', '.join(map(str, pickups))}")
-    say("Position names: s4f9 = string 4 (standard numbering, 1 = thinnest) fret 9.\n")
-
+def _report_cues(plucks: list[Pluck], say):
+    """The measured cues of every position: mean and spread over its plucks."""
     say("Measured cues per position (mean +- spread over its plucks):")
     say(f"  {'note':5} {'pos':6} {'n':>3} {'log10 B':>14} {'brightness':>12} {'decay dB/s':>12} {'overtones':>9}")
     for m in sorted({p.midi for p in plucks}):
@@ -570,7 +582,17 @@ def cmd_analyze(args):
                 f"{np.mean(ce):6.1f} +-{np.std(ce):3.1f} {np.nanmean(de):7.0f} +-{np.nanstd(de):3.0f} "
                 f"{np.mean([p.n_partials for p in g]):9.0f}")
 
-    pairs, cross_round = splits(plucks)
+
+def _calibrated(pairs, m: int, feat):
+    """Method A's answers for note m over every (train, test) pair, with the cues `feat`."""
+    res = []
+    for tr, te in pairs:
+        res += classify_calibrated([p for p in tr if p.midi == m], [p for p in te if p.midi == m], feat)
+    return res
+
+
+def _report_calibrated(multi: dict, pairs, cross_round: bool, say):
+    """Method A: how often each note's position is recognized, per set of cues, and the confusions."""
     say("\nA. Calibrated per note (every note recorded at every position on this guitar)")
     say("   " + ("trained on one round, tested on the other" if cross_round else
                  "only one round: each pluck tested against the others (OPTIMISTIC - record 2 rounds)"))
@@ -579,9 +601,7 @@ def cmd_analyze(args):
     for m, cands in multi.items():
         row = []
         for name, feat in FEATURE_SETS.items():
-            res = []
-            for tr, te in pairs:
-                res += classify_calibrated([p for p in tr if p.midi == m], [p for p in te if p.midi == m], feat)
+            res = _calibrated(pairs, m, feat)
             overall[name] += res
             row.append(f"{100 * accuracy(res):6.0f}%")
         say(f"   {midi_name(m):5} {len(cands):9} {100 / len(cands):6.0f}% " + " ".join(row))
@@ -589,14 +609,14 @@ def cmd_analyze(args):
     say("   with every cue, answering only when sure: " + coverage_line(overall["all"]))
     say("\n   Confusions (every cue): true position -> how often each position was answered")
     for m, cands in multi.items():
-        res = []
-        for tr, te in pairs:
-            res += classify_calibrated([p for p in tr if p.midi == m], [p for p in te if p.midi == m],
-                                       FEATURE_SETS["all"])
+        res = _calibrated(pairs, m, FEATURE_SETS["all"])
         say(f"   {midi_name(m)}: " + "   ".join(
             short_pos(*c) + " -> " + " ".join(f"{short_pos(*d)}:{sum(1 for p, pr, _ in res if (p.string, p.fret) == c and pr == d)}"
                                              for d in cands) for c in cands))
 
+
+def _report_physics(plucks: list[Pluck], multi: dict, pairs, cross_round: bool, say):
+    """Method B: the physics model fitted on the open strings, tested on the notes with several positions."""
     say("\nB. Physics model calibrated on the OPEN strings only (what the mod could ship)")
     phys_res = {k: [] for k in ("inharm", "comb", "both")}
     fitted = None
@@ -610,16 +630,35 @@ def cmd_analyze(args):
             phys_res[mode] += classify_physics(ph, te, multi, mode)
     if fitted is None:
         say("   no open-string plucks recorded: can't calibrate")
-    else:
-        say(f"   fitted: pickup-or-pick fractions {fitted.rp:.3f} and {fitted.rq:.3f} of the string, "
-            f"tilt {fitted.alpha:.2f}; log10 B of the opens: "
-            + ", ".join(f"{string_label(s, False)} {v:.2f}" for s, v in sorted(fitted.log_b_open.items(), reverse=True)))
-        if not cross_round:
-            say("   (only one round: calibrated and tested on the same plucks - OPTIMISTIC)")
-        for mode, res in phys_res.items():
-            fretted = [r for r in res if r[0].fret > 0]
-            say(f"   {mode:7}: {100 * accuracy(res):3.0f}% right (fretted notes only: {100 * accuracy(fretted):3.0f}%)")
-        say("   both, answering only when sure: " + coverage_line(phys_res["both"]))
+        return
+    say(f"   fitted: pickup-or-pick fractions {fitted.rp:.3f} and {fitted.rq:.3f} of the string, "
+        f"tilt {fitted.alpha:.2f}; log10 B of the opens: "
+        + ", ".join(f"{string_label(s, False)} {v:.2f}" for s, v in sorted(fitted.log_b_open.items(), reverse=True)))
+    if not cross_round:
+        say("   (only one round: calibrated and tested on the same plucks - OPTIMISTIC)")
+    for mode, res in phys_res.items():
+        fretted = [r for r in res if r[0].fret > 0]
+        say(f"   {mode:7}: {100 * accuracy(res):3.0f}% right (fretted notes only: {100 * accuracy(fretted):3.0f}%)")
+    say("   both, answering only when sure: " + coverage_line(phys_res["both"]))
+
+
+def cmd_analyze(args):
+    folder = Path(args.folder)
+    plucks = load_take(folder)
+    if not plucks:
+        raise SystemExit(f"No plucks found in {folder}")
+    lines: list[str] = []
+    say = lines.append
+    multi = {m: sorted({(p.string, p.fret) for p in plucks if p.midi == m}) for m in sorted({p.midi for p in plucks})}
+    multi = {m: c for m, c in multi.items() if len(c) >= 2}
+    pickups = {json.loads(j.read_text()).get("pickup") for j in folder.glob("*.json")}
+    say(f"Take: {folder}   plucks analysed: {len(plucks)}   pickup: {', '.join(map(str, pickups))}")
+    say("Position names: s4f9 = string 4 (standard numbering, 1 = thinnest) fret 9.\n")
+
+    _report_cues(plucks, say)
+    pairs, cross_round = splits(plucks)
+    _report_calibrated(multi, pairs, cross_round, say)
+    _report_physics(plucks, multi, pairs, cross_round, say)
     say("\nHow to read it: chance = guessing. Above ~90% (or ~95% on the most confident half) is good")
     say("enough to show a single red X; otherwise the mod keeps the faint alternatives.")
     text = "\n".join(lines)
@@ -632,6 +671,25 @@ def cmd_analyze(args):
 # Self test on synthetic strings (checks the code, says nothing about real guitars)
 # ---------------------------------------------------------------------------------------------
 
+def _synthetic_pluck(rng, m: int, s: int, f: int, b_open: list[float], rp: float) -> np.ndarray:
+    """Two seconds of a made-up string: note m played at fret f of string s, with that string's stiffness and
+    the pickup's and the pick's comb filters."""
+    f0 = 440 * 2 ** ((m - 69) / 12) * 2 ** (rng.normal(0, 3) / 1200)
+    b = b_open[s] * 2 ** (f / 6) * (1 + rng.normal(0, 0.05))
+    rq = (0.13 + rng.normal(0, 0.015)) * 2 ** (f / 12)   # the pick moves a little each time
+    n = int(2.0 * SR)
+    t = np.arange(n) / SR
+    y = np.zeros(n)
+    for k in range(1, 200):
+        fk = k * f0 * math.sqrt(1 + b * k * k)
+        if fk > 6000:
+            break
+        amp = abs(math.sin(math.pi * k * rp * 2 ** (f / 12))) * abs(math.sin(math.pi * k * rq)) / k
+        y += amp * np.exp(-(1 + 0.3 * k * f0 / 200) * t) * np.sin(2 * np.pi * fk * t + rng.uniform(0, 6.3))
+    y *= (1 - np.exp(-t / 0.002)) * 0.3 * rng.uniform(0.5, 1) / (np.abs(y).max() + 1e-9)
+    return y
+
+
 def cmd_selftest(args):
     rng = np.random.default_rng(1)
     out = Path(args.out or tempfile.mkdtemp(prefix="string_id_selftest_"))
@@ -642,30 +700,18 @@ def cmd_selftest(args):
         for m, s, f in positions(STD_OPENS, TEST_NOTES, 15):
             onsets = [0.5 + 2.0 * i for i in range(5)]
             x = np.zeros(int(11 * SR))
-            for i, t0 in enumerate(onsets):
-                f0 = 440 * 2 ** ((m - 69) / 12) * 2 ** (rng.normal(0, 3) / 1200)
-                b = b_open[s] * 2 ** (f / 6) * (1 + rng.normal(0, 0.05))
-                rq = (0.13 + rng.normal(0, 0.015)) * 2 ** (f / 12)   # the pick moves a little each time
-                n = int(2.0 * SR)
-                t = np.arange(n) / SR
-                y = np.zeros(n)
-                for k in range(1, 200):
-                    fk = k * f0 * math.sqrt(1 + b * k * k)
-                    if fk > 6000:
-                        break
-                    amp = abs(math.sin(math.pi * k * rp * 2 ** (f / 12))) * abs(math.sin(math.pi * k * rq)) / k
-                    y += amp * np.exp(-(1 + 0.3 * k * f0 / 200) * t) * np.sin(2 * np.pi * fk * t + rng.uniform(0, 6.3))
-                y *= (1 - np.exp(-t / 0.002)) * 0.3 * rng.uniform(0.5, 1) / (np.abs(y).max() + 1e-9)
+            for t0 in onsets:
+                y = _synthetic_pluck(rng, m, s, f, b_open, rp)
                 a = int(t0 * SR)
                 x[a:] = 0  # the new pluck stops the previous note
-                x[a:a + n] += y[:len(x) - a]
+                x[a:a + len(y)] += y[:len(x) - a]
             x += rng.normal(0, 10 ** (-70 / 20), len(x))
             stem = file_stem(rnd, m, s, f)
             save_wav(out / (stem + ".wav"), x)
             meta = {"file": stem + ".wav", "round": rnd, "midi": m, "string": s, "string_std": 6 - s, "fret": f,
                     "plucks": [t0 + 0.025 for t0 in onsets], "freqs": [440 * 2 ** ((m - 69) / 12)] * 5,
                     "pickup": "synthetic", "opens": STD_OPENS, "sr": SR}
-            (out / (stem + ".json")).write_text(json.dumps(meta))
+            (out / (stem + META_EXT)).write_text(json.dumps(meta))
     print(f"Synthetic take written to {out}\n")
     args.folder = str(out)
     cmd_analyze(args)

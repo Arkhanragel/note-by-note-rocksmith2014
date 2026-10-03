@@ -46,11 +46,81 @@ def inline(t):
     return t
 
 
+_ITEM = re.compile(r'^(\d+\.|-) ')  # a list's item starts with "1. " or "- "
+
+
+def _heading(m, toc):
+    lvl, title = len(m.group(1)), m.group(2)
+    if lvl > 1:
+        toc.append((lvl, title, slug(title)))
+    return f'<h{lvl} id="{slug(title)}">{inline(title)}</h{lvl}>'
+
+
+def _picture(pic, pictures):
+    """A picture, drawn into the page (its own width and height dropped: the page sizes it)."""
+    art = re.sub(r' (width|height)="\d+"', '', pictures[pic.group(2)], count=2)
+    return f'<figure class="pic w{pic.group(2)}">{art}</figure>'
+
+
+# The blocks of several lines: each takes the lines and where the block starts, and returns its HTML and
+# the index of the first line after it.
+
+def _table(lines, i):
+    rows = []
+    while i < len(lines) and lines[i].startswith('|'):
+        rows.append([c.strip() for c in lines[i].strip().strip('|').split('|')])
+        i += 1
+    head, body = rows[0], rows[2:]
+    t = '<div class="table"><table><thead><tr>' + ''.join(f'<th>{inline(c)}</th>' for c in head) + '</tr></thead><tbody>'
+    for r in body:
+        t += '<tr>' + ''.join(f'<td>{inline(c)}</td>' for c in r) + '</tr>'
+    return t + '</tbody></table></div>', i
+
+
+def _list(lines, i):
+    """A numbered or a plain list; an item goes on over the lines indented under it."""
+    ordered = lines[i][0].isdigit()
+    items = []
+    while i < len(lines) and (_ITEM.match(lines[i]) or (lines[i].startswith('   ') and lines[i].strip())):
+        if _ITEM.match(lines[i]):
+            items.append(_ITEM.sub('', lines[i], count=1))
+        else:
+            items[-1] += ' ' + lines[i].strip()
+        i += 1
+    tag = 'ol' if ordered else 'ul'
+    return f'<{tag}>' + ''.join(f'<li>{inline(it)}</li>' for it in items) + f'</{tag}>', i
+
+
+def _quote(lines, i):
+    quote = []
+    while i < len(lines) and lines[i].startswith('>'):
+        quote.append(lines[i][1:].strip())
+        i += 1
+    return '<blockquote><p>' + inline(' '.join(quote)) + '</p></blockquote>', i
+
+
+def _block(lines, i, pictures, toc):
+    """The block that starts at line i, if it is one: (its HTML, the index after it); else (None, i + 1)."""
+    ln = lines[i]
+    m = re.match(r'(#{1,3}) (.+)', ln)
+    if m:
+        return _heading(m, toc), i + 1
+    pic = re.match(r'!\[([^\]]*)\]\(guide/([\w\-]+)\.svg\)', ln)
+    if pic:
+        return _picture(pic, pictures), i + 1
+    if ln.startswith('|'):
+        return _table(lines, i)
+    if _ITEM.match(ln):
+        return _list(lines, i)
+    if ln.startswith('> '):
+        return _quote(lines, i)
+    return None, i + 1
+
+
 def to_html(md, pictures):
     """The guide's body, and its table of contents [(level, title, anchor)]."""
     out, toc = [], []
     lines = md.split('\n')
-    i = 0
     para = []
 
     def flush():
@@ -58,58 +128,16 @@ def to_html(md, pictures):
             out.append('<p>' + inline(' '.join(para)) + '</p>')
             para.clear()
 
+    i = 0
     while i < len(lines):
-        ln = lines[i]
-        m = re.match(r'(#{1,3}) (.+)', ln)
-        pic = re.match(r'!\[([^\]]*)\]\(guide/([\w\-]+)\.svg\)', ln)
-        if m:
+        block, after = _block(lines, i, pictures, toc)
+        if block is None and lines[i].strip():
+            para.append(lines[i].strip())  # a paragraph's line
+        else:  # a block, or an empty line: the paragraph before it ends
             flush()
-            lvl, title = len(m.group(1)), m.group(2)
-            if lvl > 1:
-                toc.append((lvl, title, slug(title)))
-            out.append(f'<h{lvl} id="{slug(title)}">{inline(title)}</h{lvl}>')
-        elif pic:
-            flush()
-            art = re.sub(r' (width|height)="\d+"', '', pictures[pic.group(2)], count=2)
-            out.append(f'<figure class="pic w{pic.group(2)}">{art}</figure>')
-        elif ln.startswith('|'):
-            flush()
-            rows = []
-            while i < len(lines) and lines[i].startswith('|'):
-                rows.append([c.strip() for c in lines[i].strip().strip('|').split('|')])
-                i += 1
-            i -= 1
-            head, body = rows[0], rows[2:]
-            t = '<div class="table"><table><thead><tr>' + ''.join(f'<th>{inline(c)}</th>' for c in head) + '</tr></thead><tbody>'
-            for r in body:
-                t += '<tr>' + ''.join(f'<td>{inline(c)}</td>' for c in r) + '</tr>'
-            out.append(t + '</tbody></table></div>')
-        elif re.match(r'(\d+\.|-) ', ln):
-            flush()
-            ordered = ln[0].isdigit()
-            items = []
-            while i < len(lines) and (re.match(r'(\d+\.|-) ', lines[i]) or (lines[i].startswith('   ') and lines[i].strip())):
-                if re.match(r'(\d+\.|-) ', lines[i]):
-                    items.append(re.sub(r'^(\d+\.|-) ', '', lines[i]))
-                else:
-                    items[-1] += ' ' + lines[i].strip()
-                i += 1
-            i -= 1
-            tag = 'ol' if ordered else 'ul'
-            out.append(f'<{tag}>' + ''.join(f'<li>{inline(it)}</li>' for it in items) + f'</{tag}>')
-        elif ln.startswith('> '):
-            flush()
-            quote = []
-            while i < len(lines) and lines[i].startswith('>'):
-                quote.append(lines[i][1:].strip())
-                i += 1
-            i -= 1
-            out.append('<blockquote><p>' + inline(' '.join(quote)) + '</p></blockquote>')
-        elif not ln.strip():
-            flush()
-        else:
-            para.append(ln.strip())
-        i += 1
+            if block is not None:
+                out.append(block)
+        i = after
     flush()
     return '\n'.join(out), toc
 

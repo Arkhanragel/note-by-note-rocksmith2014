@@ -55,7 +55,11 @@ def T(x, y, text, size, fill=TEXT, anchor='start', w=600, op=1):
     segs = text if isinstance(text, list) else [(str(text), fill)]
     segs = [(s[0], s[1], s[2] if len(s) > 2 else w) for s in segs]
     total = sum(tw(s[0], size, s[2]) for s in segs)
-    x0 = x - total / 2 if anchor == 'middle' else x - total if anchor == 'end' else x
+    x0 = x
+    if anchor == 'middle':
+        x0 = x - total / 2
+    elif anchor == 'end':
+        x0 = x - total
     out = ''
     for t, col, wt in segs:
         wd = tw(t, size, wt)
@@ -198,7 +202,52 @@ def svg(w, h, label, inner):
 
 # ---------------------------------------------------------------- the fretboard
 class Neck:
-    pass
+    """A piece of the neck, measured and drawn by neck(): .g = its svg, .FX(fret) and .Y(string) = where a
+    fret and a string are, .w and .h = its size."""
+
+
+def _neck_wood(n, gap, zone):
+    """The wood, the hand's frets shaded (zone), inlays, fret wires and the nut (or a faint edge when the
+    window starts higher up)."""
+    s, lo, hi, top, bottom = n.s, n.lo, n.hi, n.yT, n.yB
+    mid = (n.Y(0) + n.Y(5)) / 2
+    g = rect(n.L, top, n.R - n.L, bottom - top, '#000', 4 * s, 0.45)
+    if zone:
+        a, b = max(lo, zone[0]), min(hi, zone[1])
+        g += rect(n.L + (a - lo) * n.cell, top, (b - a + 1) * n.cell, bottom - top, '#fff', 3 * s, 0.1)
+    for f in range(lo, hi + 1):
+        k, cx = f % 12, n.FX(f)
+        if k == 0:
+            for dy in (-gap, gap):
+                g += f'<circle cx="{f1(cx)}" cy="{f1(mid + dy)}" r="{f1(4.5 * s)}" fill="#fff" opacity=".15"/>'
+        elif k in (3, 5, 7, 9):
+            g += f'<circle cx="{f1(cx)}" cy="{f1(mid)}" r="{f1(4.5 * s)}" fill="#fff" opacity=".15"/>'
+        fx = n.L + (f - lo + 1) * n.cell
+        g += line(fx, top, fx, bottom, DIM, 1.6 * s, 0.5)
+    if lo == 1:
+        return g + line(n.L, top, n.L, bottom, TEXT, 5 * s, 0.85)
+    return g + line(n.L, top, n.L, bottom, DIM, 1.6 * s, 0.35)
+
+
+def _neck_strings(n, start, name_x, used):
+    """The strings in their colours from x = start (the ones in use brighter), with their names centred on
+    name_x (None = no names)."""
+    g = ''
+    for i in range(6):
+        on = i in used
+        g += line(start, n.Y(i), n.R, n.Y(i), SC[i], (1.3 + 0.45 * (5 - i)) * n.s, 1 if on else 0.45)
+        if name_x is not None:
+            g += T(name_x, n.Y(i), f'{6 - i} {SN[i]}', 14 * n.s, SC[i], 'middle', 400, 1 if on else 0.55)
+    return g
+
+
+def _neck_numbers(n, bright):
+    """The fret numbers under the neck, the ones in `bright` bold."""
+    g = ''
+    for f in range(n.lo, n.hi + 1):
+        b = f in bright
+        g += T(n.FX(f), n.yB + 13 * n.s, f, 15 * n.s, TEXT if b else DIM, 'middle', 700 if b else 400, 1 if b else 0.75)
+    return g
 
 
 def neck(x, y, lo, hi, s=1.0, gap=22, cell=46, rad=14, names=True, tail=20, zone=None, used=(), bright=()):
@@ -207,37 +256,16 @@ def neck(x, y, lo, hi, s=1.0, gap=22, cell=46, rad=14, names=True, tail=20, zone
     n = Neck()
     cells = hi - lo + 1
     gap, cell, rad = gap * s, cell * s, rad * s
-    nameW, openW, tailW, top = (38 if names else 4) * s, 30 * s, tail * s, 18 * s
-    neckL = x + nameW + openW
-    neckR = neckL + cells * cell
-    Y = lambda i: y + top + i * gap
-    FX = lambda f: x + nameW + openW * 0.5 if f == 0 else neckL + (f - lo + 0.5) * cell
-    yT, yB, mid = Y(0) - 9 * s, Y(5) + 9 * s, (Y(0) + Y(5)) / 2
-    g = rect(neckL, yT, neckR - neckL, yB - yT, '#000', 4 * s, 0.45)
-    if zone:
-        a, b = max(lo, zone[0]), min(hi, zone[1])
-        g += rect(neckL + (a - lo) * cell, yT, (b - a + 1) * cell, yB - yT, '#fff', 3 * s, 0.1)
-    for f in range(lo, hi + 1):
-        k, cx = f % 12, FX(f)
-        if k == 0:
-            for dy in (-gap, gap):
-                g += f'<circle cx="{f1(cx)}" cy="{f1(mid + dy)}" r="{f1(4.5 * s)}" fill="#fff" opacity=".15"/>'
-        elif k in (3, 5, 7, 9):
-            g += f'<circle cx="{f1(cx)}" cy="{f1(mid)}" r="{f1(4.5 * s)}" fill="#fff" opacity=".15"/>'
-        fx = neckL + (f - lo + 1) * cell
-        g += line(fx, yT, fx, yB, DIM, 1.6 * s, 0.5)
-    g += line(neckL, yT, neckL, yB, TEXT, 5 * s, 0.85) if lo == 1 else line(neckL, yT, neckL, yB, DIM, 1.6 * s, 0.35)
-    for i in range(6):
-        on = i in used
-        g += line(neckL - openW * 0.55, Y(i), neckR, Y(i), SC[i], (1.3 + 0.45 * (5 - i)) * s, 1 if on else 0.45)
-        if names:
-            g += T(x + nameW * 0.5, Y(i), f'{6 - i} {SN[i]}', 14 * s, SC[i], 'middle', 400, 1 if on else 0.55)
-    for f in range(lo, hi + 1):
-        b = f in bright
-        g += T(FX(f), yB + 13 * s, f, 15 * s, TEXT if b else DIM, 'middle', 700 if b else 400, 1 if b else 0.75)
-    n.g, n.x, n.y, n.s, n.rad, n.FX, n.Y = g, x, y, s, rad, FX, Y
-    n.w, n.h = nameW + openW + cells * cell + tailW, top + 5 * gap + 10 * s + 22 * s
-    n.cell, n.lo, n.hi, n.yT, n.yB, n.L, n.R = cell, lo, hi, yT, yB, neckL, neckR
+    name_w, open_w, tail_w, top = (38 if names else 4) * s, 30 * s, tail * s, 18 * s
+    left = x + name_w + open_w
+    n.x, n.y, n.s, n.rad, n.cell, n.lo, n.hi = x, y, s, rad, cell, lo, hi
+    n.L, n.R = left, left + cells * cell
+    n.Y = lambda i: y + top + i * gap
+    n.FX = lambda f: x + name_w + open_w * 0.5 if f == 0 else left + (f - lo + 0.5) * cell
+    n.yT, n.yB = n.Y(0) - 9 * s, n.Y(5) + 9 * s
+    n.w, n.h = name_w + open_w + cells * cell + tail_w, top + 5 * gap + 10 * s + 22 * s
+    n.g = (_neck_wood(n, gap, zone) + _neck_strings(n, left - open_w * 0.55, x + name_w * 0.5 if names else None, used)
+           + _neck_numbers(n, bright))
     return n
 
 
@@ -299,11 +327,147 @@ def hand(nk, first, active=None, col=TEXT, light=False):
         cx, on = nk.FX(first + k), (k + 1 in active if isinstance(active, (set, list, tuple)) else k + 1 == active)
         top, h = (y, 30 * s) if on else (y + 7 * s, 23 * s)
         g += rect(cx - 9 * s, top, 18 * s, h, col if on else '#3a3a44', 7 * s, 1, '#fff' if on else DIM, 1.4 * s)
-        g += T(cx, top + 10 * s, k + 1, 11 * s, (INK if light else '#fff') if on else DIM, 'middle', 700)
+        ink = INK if light else '#fff'
+        g += T(cx, top + 10 * s, k + 1, 11 * s, ink if on else DIM, 'middle', 700)
     return g
 
 
 # ---------------------------------------------------------------- the tab's staff
+class _Staff:
+    """A row of the tab, measured: where its strings, its lanes and its times are (see staff)."""
+
+    def __init__(self, x, y, w, s, names):
+        self.s = s
+        self.gap = 20 * s
+        self.left, self.right = x + (24 * s if names else 4 * s), x + w
+        self.top = y + 52 * s
+        self.lane1, self.lane2 = self.top - 36 * s, self.top - 20 * s  # chord names, sections, bar numbers; pick signs
+        self.bot = self.top + 5 * self.gap
+        self.bh = self.gap * 0.46  # half a fret box's height
+
+    def row_y(self, st):
+        return self.top + (5 - st) * self.gap
+
+    def tx(self, t):
+        return self.left + 16 * self.s + t * (self.right - self.left - 32 * self.s)
+
+
+def _staff_lines(sf, x, names, beats, bars, recap):
+    """The strings (with their letters), the beat lines and the bar lines with their numbers; under them
+    the end of the page before, repeated (dimmed) at the start of a page."""
+    s, top, bot, tx = sf.s, sf.top, sf.bot, sf.tx
+    g = ''
+    if recap:
+        g += rect(tx(recap[0]) - 12 * s, top - 12 * s, tx(recap[1]) - tx(recap[0]) + 12 * s, 5 * sf.gap + 24 * s, '#fff', 4 * s, 0.07)
+    for i in range(6):
+        g += line(sf.left, sf.row_y(i), sf.right, sf.row_y(i), SC[i], 1.2 * s, 0.5)
+        if names:
+            g += T(x + 9 * s, sf.row_y(i), SN[i], 11 * s, SC[i], 'middle', 600, 0.9)
+    for t in beats:
+        g += line(tx(t), top - 6 * s, tx(t), bot + 6 * s, '#fff', 1 * s, 0.13)
+    for t, num in bars:
+        g += line(tx(t), top - 8 * s, tx(t), bot + 8 * s, '#fff', 1.6 * s, 0.55)
+        if num is not None:
+            g += T(tx(t) - 5 * s, sf.lane1, num, 9 * s, '#dcdce6', 'end', 400, 0.8)
+    return g
+
+
+def _staff_labels(sf, sections, brackets, ghost, cursor):
+    """The sections' names, a held chord shape's name with a bracket over its notes, and the cursors."""
+    s, top, bot, tx = sf.s, sf.top, sf.bot, sf.tx
+    g = ''
+    for t, name in sections:
+        g += T(tx(t) + 4 * s, sf.lane1, name, 9.5 * s, GOLD, 'start', 700)
+    for t0, t1, name in brackets:
+        yb = sf.lane1
+        wn = tw(name, 10 * s, 700)
+        g += T(tx(t0), yb, name, 10 * s, GOLD, 'middle', 700)
+        g += line(tx(t0) + wn / 2 + 5 * s, yb, tx(t1), yb, GOLD, 1.4 * s, 0.8) + line(tx(t1), yb, tx(t1), yb + 6 * s, GOLD, 1.4 * s, 0.8)
+    if ghost is not None:
+        g += line(tx(ghost), top - 12 * s, tx(ghost), bot + 12 * s, '#fff', 2 * s, 0.35)
+    if cursor is not None:
+        g += line(tx(cursor), top - 12 * s, tx(cursor), bot + 12 * s, '#fff', 2.4 * s)
+    return g
+
+
+def _fret_box(sf, nt, st, f, nx):
+    """A note's box on its string: its tail, the box (coloured once the song passed it, framed in white
+    when it is the note to play), the fret and a repeat's "x8". Returns (svg, half the box's width)."""
+    s, bh, yy = sf.s, sf.bh, sf.row_y(st)
+    label = str(f)
+    run = nt.get('run')
+    bw = (tw(label, 11.5 * s, 700) + (tw(run, 9 * s, 400) + 3 * s if run else 0)) / 2 + 5 * s
+    q = ''
+    if nt.get('tail') is not None:
+        q += rect(nx, yy - 3 * s, sf.tx(nt['tail']) - nx, 6 * s, SC[st], 3 * s, 0.6)
+    q += rect(nx - bw, yy - bh, 2 * bw, 2 * bh, PANEL, 4 * s)
+    mark = {'g': GREEN, 'a': AMBER, 'r': RED}.get(nt.get('mark'))
+    if mark:
+        q += rect(nx - bw, yy - bh, 2 * bw, 2 * bh, mark, 4 * s, 0.62)
+    if nt.get('next'):
+        q += rect(nx - bw - 2 * s, yy - bh - 2 * s, 2 * bw + 4 * s, 2 * bh + 4 * s, 'none', 5 * s, 1, '#fff', 2.4 * s)
+    else:
+        q += rect(nx - bw, yy - bh, 2 * bw, 2 * bh, 'none', 4 * s, 1, SC[st], 1.7 * s)
+    if run:
+        lx = nx - bw + 5 * s
+        q += T(lx, yy, label, 11.5 * s, TEXT, 'start', 700) + T(lx + tw(label, 11.5 * s, 700) + 3 * s, yy + 0.5 * s, run, 9 * s, DIM, 'start', 400)
+    else:
+        q += T(nx, yy, label, 11.5 * s, TEXT, 'middle', 700)
+    return q, bw
+
+
+def _box_marks(sf, nt, nx, yy, bw):
+    """What the tab writes around a box: a slide, a bend with its steps, a harmonic's angle brackets, and
+    under it the dots of a trouble note (played right, of those needed)."""
+    s, bh = sf.s, sf.bh
+    q = ''
+    after = nx + bw + 2 * s
+    if nt.get('slide'):
+        up = nt['slide'] == '/'
+        q += line(after, yy + (bh * 0.8 if up else -bh * 0.8), after + 8 * s, yy - (bh * 0.8 if up else -bh * 0.8), TEXT, 2 * s)
+    if nt.get('bend'):
+        ax, tp = after + 5 * s, yy - bh - 4 * s
+        q += line(ax, yy - 2 * s, ax, tp + 4 * s, TEXT, 1.8 * s)
+        q += f'<polygon points="{f1(ax)},{f1(tp - 2 * s)} {f1(ax - 4 * s)},{f1(tp + 5 * s)} {f1(ax + 4 * s)},{f1(tp + 5 * s)}" fill="{TEXT}"/>'
+        q += T(ax + 4 * s, tp - 3 * s, nt['bend'], 9 * s, TEXT, 'start', 700)
+    if nt.get('harm'):
+        for side in (-1, 1):
+            ex = nx + side * (bw + 3 * s)
+            q += line(ex + side * 5 * s, yy - bh * 0.7, ex, yy, TEXT, 1.7 * s) + line(ex, yy, ex + side * 5 * s, yy + bh * 0.7, TEXT, 1.7 * s)
+    if nt.get('dots'):
+        got, need = nt['dots']
+        for k in range(need):
+            cx, cy = nx - (need - 1) * 4.6 * s + k * 9.2 * s, yy + bh + 6.5 * s
+            q += f'<circle cx="{f1(cx)}" cy="{f1(cy)}" r="{f1(4.4 * s)}" fill="{PANEL}"/>'
+            q += (f'<circle cx="{f1(cx)}" cy="{f1(cy)}" r="{f1(3.3 * s)}" fill="#46c864"/>' if k < got else
+                  f'<circle cx="{f1(cx)}" cy="{f1(cy)}" r="{f1(2.9 * s)}" fill="none" stroke="#fff" stroke-width="{f1(1.4 * s)}" opacity=".8"/>')
+    return q
+
+
+def _staff_note(sf, nt):
+    """A note or a chord of the row (see staff for its keys)."""
+    s, bh = sf.s, sf.bh
+    nx, op = sf.tx(nt['t']), nt.get('op', 1)
+    strs = nt.get('chord') or [(nt['st'], nt['f'])]
+    q = ''
+    if len(strs) > 1:
+        q += line(nx, sf.row_y(max(a for a, _ in strs)), nx, sf.row_y(min(a for a, _ in strs)), GOLD, 2 * s, 0.7)
+    if nt.get('name'):
+        q += T(nx, sf.lane1, nt['name'], 10 * s, GOLD, 'middle', 700)
+    for st, f in strs:
+        box, bw = _fret_box(sf, nt, st, f, nx)
+        q += box + _box_marks(sf, nt, nx, sf.row_y(st), bw)
+    if nt.get('above'):
+        ty_ = sf.row_y(max(a for a, _ in strs)) - bh - 7 * s
+        wa = tw(nt['above'], 9 * s, 700)
+        q += rect(nx - wa / 2 - 2 * s, ty_ - 6 * s, wa + 4 * s, 12 * s, PANEL, 3 * s, 0.8) + T(nx, ty_, nt['above'], 9 * s, TEXT, 'middle', 700)
+    if nt.get('pick'):
+        q += pick_sign(nx, sf.lane2, 4.6 * s, nt['pick'], '#dcdce6', 1.8 * s)
+    if nt.get('stem'):
+        q += line(nx, sf.bot + 16 * s, nx, sf.bot + 32 * s, '#dcdce6', 1.5 * s, 0.9)
+    return f'<g opacity="{op}">{q}</g>' if op != 1 else q
+
+
 def staff(x, y, w, s, notes, bars=(), beats=(), cursor=None, ghost=None, sections=(), beams=(), names=True,
           recap=None, brackets=()):
     """A row of the tab: thinnest string on top (like printed tab). Times run 0..1 from left to right.
@@ -312,99 +476,14 @@ def staff(x, y, w, s, notes, bars=(), beats=(), cursor=None, ghost=None, section
     harm, pick ('down' / 'up'), next (the note to play), dots (played right, needed), run ("x8"),
     chord ([(st, f)...] with name), op (faded), stem (1 = a stem; beams are given apart).
     Returns (svg, height, tx, RowY)."""
-    gap = 20 * s
-    left, right = x + (24 * s if names else 4 * s), x + w
-    top = y + 52 * s
-    lane1, lane2 = top - 36 * s, top - 20 * s  # chord names, sections, bar numbers; pick signs
-    RowY = lambda st: top + (5 - st) * gap
-    bot = top + 5 * gap
-    tx = lambda t: left + 16 * s + t * (right - left - 32 * s)
-    g = ''
-    if recap:  # the end of the page before, repeated (dimmed) at the start of a page
-        g += rect(tx(recap[0]) - 12 * s, top - 12 * s, tx(recap[1]) - tx(recap[0]) + 12 * s, 5 * gap + 24 * s, '#fff', 4 * s, 0.07)
-    for i in range(6):
-        g += line(left, RowY(i), right, RowY(i), SC[i], 1.2 * s, 0.5)
-        if names:
-            g += T(x + 9 * s, RowY(i), SN[i], 11 * s, SC[i], 'middle', 600, 0.9)
-    for t in beats:
-        g += line(tx(t), top - 6 * s, tx(t), bot + 6 * s, '#fff', 1 * s, 0.13)
-    for t, num in bars:
-        g += line(tx(t), top - 8 * s, tx(t), bot + 8 * s, '#fff', 1.6 * s, 0.55)
-        if num is not None:
-            g += T(tx(t) - 5 * s, lane1, num, 9 * s, '#dcdce6', 'end', 400, 0.8)
-    for t, name in sections:
-        g += T(tx(t) + 4 * s, lane1, name, 9.5 * s, GOLD, 'start', 700)
-    for t0, t1, name in brackets:  # a held chord shape: its name and a bracket over its notes
-        yb = lane1
-        wn = tw(name, 10 * s, 700)
-        g += T(tx(t0), yb, name, 10 * s, GOLD, 'middle', 700)
-        g += line(tx(t0) + wn / 2 + 5 * s, yb, tx(t1), yb, GOLD, 1.4 * s, 0.8) + line(tx(t1), yb, tx(t1), yb + 6 * s, GOLD, 1.4 * s, 0.8)
-    if ghost is not None:
-        g += line(tx(ghost), top - 12 * s, tx(ghost), bot + 12 * s, '#fff', 2 * s, 0.35)
-    if cursor is not None:
-        g += line(tx(cursor), top - 12 * s, tx(cursor), bot + 12 * s, '#fff', 2.4 * s)
-    bh = gap * 0.46
+    sf = _Staff(x, y, w, s, names)
+    g = _staff_lines(sf, x, names, beats, bars, recap) + _staff_labels(sf, sections, brackets, ghost, cursor)
     for nt in notes:
-        X, op = tx(nt['t']), nt.get('op', 1)
-        strs = nt.get('chord') or [(nt['st'], nt['f'])]
-        q = ''
-        if len(strs) > 1:
-            q += line(X, RowY(max(a for a, _ in strs)), X, RowY(min(a for a, _ in strs)), GOLD, 2 * s, 0.7)
-        if nt.get('name'):
-            q += T(X, lane1, nt['name'], 10 * s, GOLD, 'middle', 700)
-        for st, f in strs:
-            yy = RowY(st)
-            label = str(f)
-            run = nt.get('run')
-            bw = (tw(label, 11.5 * s, 700) + (tw(run, 9 * s, 400) + 3 * s if run else 0)) / 2 + 5 * s
-            if nt.get('tail') is not None:
-                q += rect(X, yy - 3 * s, tx(nt['tail']) - X, 6 * s, SC[st], 3 * s, 0.6)
-            q += rect(X - bw, yy - bh, 2 * bw, 2 * bh, PANEL, 4 * s)
-            mark = {'g': GREEN, 'a': AMBER, 'r': RED}.get(nt.get('mark'))
-            if mark:
-                q += rect(X - bw, yy - bh, 2 * bw, 2 * bh, mark, 4 * s, 0.62)
-            if nt.get('next'):
-                q += rect(X - bw - 2 * s, yy - bh - 2 * s, 2 * bw + 4 * s, 2 * bh + 4 * s, 'none', 5 * s, 1, '#fff', 2.4 * s)
-            else:
-                q += rect(X - bw, yy - bh, 2 * bw, 2 * bh, 'none', 4 * s, 1, SC[st], 1.7 * s)
-            if run:
-                lx = X - bw + 5 * s
-                q += T(lx, yy, label, 11.5 * s, TEXT, 'start', 700) + T(lx + tw(label, 11.5 * s, 700) + 3 * s, yy + 0.5 * s, run, 9 * s, DIM, 'start', 400)
-            else:
-                q += T(X, yy, label, 11.5 * s, TEXT, 'middle', 700)
-            after = X + bw + 2 * s
-            if nt.get('slide'):
-                up = nt['slide'] == '/'
-                q += line(after, yy + (bh * 0.8 if up else -bh * 0.8), after + 8 * s, yy - (bh * 0.8 if up else -bh * 0.8), TEXT, 2 * s)
-            if nt.get('bend'):
-                ax, tp = after + 5 * s, yy - bh - 4 * s
-                q += line(ax, yy - 2 * s, ax, tp + 4 * s, TEXT, 1.8 * s)
-                q += f'<polygon points="{f1(ax)},{f1(tp - 2 * s)} {f1(ax - 4 * s)},{f1(tp + 5 * s)} {f1(ax + 4 * s)},{f1(tp + 5 * s)}" fill="{TEXT}"/>'
-                q += T(ax + 4 * s, tp - 3 * s, nt['bend'], 9 * s, TEXT, 'start', 700)
-            if nt.get('harm'):
-                for side in (-1, 1):
-                    ex = X + side * (bw + 3 * s)
-                    q += line(ex + side * 5 * s, yy - bh * 0.7, ex, yy, TEXT, 1.7 * s) + line(ex, yy, ex + side * 5 * s, yy + bh * 0.7, TEXT, 1.7 * s)
-            if nt.get('dots'):
-                got, need = nt['dots']
-                for k in range(need):
-                    cx, cy = X - (need - 1) * 4.6 * s + k * 9.2 * s, yy + bh + 6.5 * s
-                    q += f'<circle cx="{f1(cx)}" cy="{f1(cy)}" r="{f1(4.4 * s)}" fill="{PANEL}"/>'
-                    q += (f'<circle cx="{f1(cx)}" cy="{f1(cy)}" r="{f1(3.3 * s)}" fill="#46c864"/>' if k < got else
-                          f'<circle cx="{f1(cx)}" cy="{f1(cy)}" r="{f1(2.9 * s)}" fill="none" stroke="#fff" stroke-width="{f1(1.4 * s)}" opacity=".8"/>')
-        if nt.get('above'):
-            ty_ = RowY(max(a for a, _ in strs)) - bh - 7 * s
-            wa = tw(nt['above'], 9 * s, 700)
-            q += rect(X - wa / 2 - 2 * s, ty_ - 6 * s, wa + 4 * s, 12 * s, PANEL, 3 * s, 0.8) + T(X, ty_, nt['above'], 9 * s, TEXT, 'middle', 700)
-        if nt.get('pick'):
-            q += pick_sign(X, lane2, 4.6 * s, nt['pick'], '#dcdce6', 1.8 * s)
-        if nt.get('stem'):
-            q += line(X, bot + 16 * s, X, bot + 32 * s, '#dcdce6', 1.5 * s, 0.9)
-        g += f'<g opacity="{op}">{q}</g>' if op != 1 else q
+        g += _staff_note(sf, nt)
     for t0, t1, lvl in beams:
-        yy = bot + 32 * s - (lvl - 1) * 5 * s
-        g += line(tx(t0), yy, tx(t1), yy, '#dcdce6', 2.6 * s, 0.9)
-    return g, 52 * s + 5 * gap + 40 * s, tx, RowY
+        yy = sf.bot + 32 * s - (lvl - 1) * 5 * s
+        g += line(sf.tx(t0), yy, sf.tx(t1), yy, '#dcdce6', 2.6 * s, 0.9)
+    return g, 52 * s + 5 * sf.gap + 40 * s, sf.tx, sf.row_y
 
 
 # ---------------------------------------------------------------- the game's progress bar

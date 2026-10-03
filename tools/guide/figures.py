@@ -69,46 +69,63 @@ def fig_overview():
 
 
 # ---------------------------------------------------------------- the three modes
+_MODE_FRETS = [(2, 5), (2, 7), (3, 5), (3, 7), (3, 9)]  # the five notes of each row: (string, fret)
+
+
+def _mode_note(x, y, st, f, fill=None):
+    """A note of a row, as a tab box (fill: how it went)."""
+    q = rect(x - 12, y - 12, 24, 24, PANEL, 5)
+    if fill:
+        q += rect(x - 12, y - 12, 24, 24, fill, 5, 0.62)
+    return q + rect(x - 12, y - 12, 24, 24, 'none', 5, 1, SC[st], 1.8) + T(x, y, f, 13, TEXT, 'middle', 700)
+
+
+def _mode_song(waits, y, end):
+    """The song as an arrow of time under the notes; waits: it stops at the third note until it is played."""
+    if not waits:
+        return arrow(310, y + 30, end, y + 30, 0, 0, 1.3, '#d0d0dc', outline=False)
+    g = line(310, y + 30, 610, y + 30, '#d0d0dc', 2.8)
+    g += line(610, y + 30, 730, y + 30, AMBER, 2.8, 1, '3 7')
+    g += arrow(730, y + 30, end, y + 30, 0, 0, 1.3, '#d0d0dc', outline=False)
+    g += rect(601, y + 20, 7, 20, AMBER, 2) + rect(612, y + 20, 7, 20, AMBER, 2)
+    return g + T(670, y + 50, 'waits until you play it', 12.5, AMBER, 'middle', 600)
+
+
+def _mode_fill(waits, k):
+    """"Wait for each note": the notes already played are green, the one the song waits at amber."""
+    if not waits or k > 2:
+        return None
+    return GREEN if k < 2 else AMBER
+
+
+def _mode_sign(x, y, st):
+    """The banner, as a small sign over the note it names."""
+    return (rect(x - 22, y - 44, 44, 22, PANEL, 5, 0.95, SC[st], 1.8)
+            + f'<circle cx="{f1(x - 10)}" cy="{f1(y - 33)}" r="5" fill="{SC[st]}"/>' + line(x - 1, y - 33, x + 15, y - 33, TEXT, 2, 0.8))
+
+
 def fig_modes():
     W, H = 1040, 340
     g = ''
-    frets = [(2, 5), (2, 7), (3, 5), (3, 7), (3, 9)]
-
-    def note(x, y, st, f, fill=None):
-        q = rect(x - 12, y - 12, 24, 24, PANEL, 5)
-        if fill:
-            q += rect(x - 12, y - 12, 24, 24, fill, 5, 0.62)
-        return q + rect(x - 12, y - 12, 24, 24, 'none', 5, 1, SC[st], 1.8) + T(x, y, f, 13, TEXT, 'middle', 700)
-
     rows = [('Off', ['The game as usual. The tab and', 'the clock can still show.']),
             ('Show the notes', ['The banner names each note as it', 'comes. The song never stops.']),
             ('Wait for each note', ['The song stops at a note you have', 'not played, and goes on when you do.'])]
     for r, (name, sub) in enumerate(rows):
+        waits = r == 2
         y = 62 + r * 106
         g += T(24, y - 14, name, 18, TEXT, w=700)
         for k, ln in enumerate(sub):
             g += T(24, y + 12 + k * 19, ln, 13.5, DIM, w=400)
-        xs = [350, 480, 610, 740, 870] if r < 2 else [350, 480, 610, 800, 930]
+        xs = [350, 480, 610, 800, 930] if waits else [350, 480, 610, 740, 870]
         end = 1010
-        if r < 2:
-            g += arrow(310, y + 30, end, y + 30, 0, 0, 1.3, '#d0d0dc', outline=False)
-        else:
-            g += line(310, y + 30, 610, y + 30, '#d0d0dc', 2.8)
-            g += line(610, y + 30, 730, y + 30, AMBER, 2.8, 1, '3 7')
-            g += arrow(730, y + 30, end, y + 30, 0, 0, 1.3, '#d0d0dc', outline=False)
-            g += rect(601, y + 20, 7, 20, AMBER, 2) + rect(612, y + 20, 7, 20, AMBER, 2)
-            g += T(670, y + 50, 'waits until you play it', 12.5, AMBER, 'middle', 600)
+        g += _mode_song(waits, y, end)
         for k, x in enumerate(xs):
-            st, f = frets[k]
-            fill = None
-            if r == 2:
-                fill = GREEN if k < 2 else AMBER if k == 2 else None
-            g += note(x, y, st, f, fill)
+            st, f = _MODE_FRETS[k]
+            g += _mode_note(x, y, st, f, _mode_fill(waits, k))
             g += line(x, y + 12, x, y + 30, '#d0d0dc', 1.2, 0.5)
-            if r == 1 or (r == 2 and k == 2):  # the banner, as a small sign over the note it names
-                g += rect(x - 22, y - 44, 44, 22, PANEL, 5, 0.95, SC[st], 1.8)
-                g += f'<circle cx="{f1(x - 10)}" cy="{f1(y - 33)}" r="5" fill="{SC[st]}"/>' + line(x - 1, y - 33, x + 15, y - 33, TEXT, 2, 0.8)
-        if r < 2:
+            if r == 1 or (waits and k == 2):
+                g += _mode_sign(x, y, st)
+        if not waits:
             g += T(end, y + 50, 'the song', 12.5, DIM, 'end', 400)
     return svg(W, H, 'The three modes: Off, Show the notes, Wait for each note', g)
 
