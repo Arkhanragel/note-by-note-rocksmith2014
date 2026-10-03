@@ -22,6 +22,8 @@ A free, fan-made mod for **Rocksmith 2014 Edition - Remastered** (PC, Steam): th
 - **In-game menu (F8):** choose the mode (Off, Show the notes, Wait for each note), wait for chords too or only single notes, timing, and tab and display options. You can drag and resize everything with the mouse while the menu is open. On the game's progress bar, click a phrase or drag over a part to practise only that. Colour themes (Default, High contrast, Midnight, Vintage, Paper), and any colour can be changed with a colour wheel or a hex code; the string colours stay the game's. F9 skips the note it's waiting for.
 - Extras: optionally closes the Ubisoft login popups at start-up, plays the start-up logos faster, and works around one of the game's own random crashes.
 
+**The [user guide](docs/GUIDE.md)** explains everything on screen and every menu option, with pictures.
+
 ## Game versions
 
 Note-by-Note checks which version of the game you have and **stays switched off on any version it doesn't know**, so it can't misbehave there.
@@ -102,7 +104,7 @@ Windows, Visual Studio 2022 (C++ desktop, Win32 toolset), CMake, .NET SDK (for t
 git clone --recurse-submodules <this repo>
 .\mod\build.ps1            # NoteByNote.dll + tests (mod\build\Release)
 .\mod\build_rs_asio.ps1    # RS_ASIO v0.7.5 + guitar tap, and avrt.dll (mod\build\rs_asio)
-.\package.ps1 -Version 0.1.0 -SkipBuild   # dist\NoteByNote-0.1.0.zip (setup + README + licences)
+.\package.ps1 -Version 0.1.0 -SkipBuild   # dist\NoteByNote-0.1.0.zip (setup + README + guide + licences)
 ```
 
 Everything is 32-bit (the game is a 32-bit program). Layout:
@@ -115,11 +117,16 @@ Everything is 32-bit (the game is a 32-bit program). Layout:
 | `installer` | the setup program (C#, .NET Framework 4.8) |
 | `tools/detector` | Python versions of the detectors, with test and simulation tools |
 | `tools/ChartDump` | reads charts from the player's own song files (development/testing) |
+| `tools/guide` | draws the user guide's pictures (`docs/guide/*.svg`) and builds its web-page version from `docs/GUIDE.md` |
 | `external` | submodules: RS_ASIO, MinHook, Dear ImGui, Rocksmith2014.NET |
 
 ## Plans
 
 Left-handed tab options, theme files for sharing skins, capo-free play together with pitch-shifting mods, working alongside (or inside) [RSMods](https://github.com/Lovrom8/RSMods), and an audio-to-CDLC tool.
+
+## Supporting the project
+
+Note-by-Note is free and always will be. What helps most is reports of what you find ([issues](../../issues)), testers for the [older game version](#help-test-the-older-game-version), and ideas. If it helped you learn a song and you'd like to say thanks, there is a tip page: [ko-fi.com/arkhanragel](https://ko-fi.com/arkhanragel). Entirely optional; nothing is locked behind it.
 
 ## Credits
 

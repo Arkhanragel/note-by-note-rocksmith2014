@@ -1,6 +1,7 @@
 # Builds a release of Note-by-Note: dist\NoteByNote-<version>.zip with
 #   Note-by-Note Setup.exe   the installer (the mod's files are embedded in it)
 #   README.txt, LICENSES.txt
+#   Note-by-Note Guide.html  the user guide as one web page (made from docs\GUIDE.md)
 # Steps: build the mod and RS_ASIO (+ avrt), stage the files the setup embeds in dist\payload,
 # build the setup (installer\), zip. Only our own builds and licence texts go in: no game files,
 # song data or charts.
@@ -56,6 +57,11 @@ Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $stage | Out-Null
 Copy-Item (Join-Path $out "NoteByNoteSetup.exe") (Join-Path $stage "Note-by-Note Setup.exe")
 Copy-Item (Join-Path $payload "README.txt"), (Join-Path $payload "LICENSES.txt") $stage
+# The user guide as one web page (tools\guide; needs Python with Pillow, the repo's .venv has it).
+$python = Join-Path $root ".venv\Scripts\python.exe"
+if (-not (Test-Path $python)) { $python = "python" }
+& $python (Join-Path $root "tools\guide\build_guide.py") --html (Join-Path $stage "Note-by-Note Guide.html")
+if ($LASTEXITCODE -ne 0) { throw "The user guide could not be built (tools\guide\build_guide.py)" }
 $zip = Join-Path $dist "NoteByNote-$Version.zip"
 Remove-Item $zip -ErrorAction SilentlyContinue
 Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $zip

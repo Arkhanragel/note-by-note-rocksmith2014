@@ -29,6 +29,9 @@ In a song, press F8 for the Note-by-Note menu (the mode: Off, Show the notes or 
 the Practice page with the places where you stop most; tab and banner options).
 F9 skips the note the song is waiting for. Settings are saved in NoteByNote.ini in the game folder.
 
+"Note-by-Note Guide.html" (next to this file; opens in your web browser) explains everything on
+screen and every option, with pictures.
+
 
 Uninstall
 ---------
@@ -55,6 +58,13 @@ Troubleshooting
   version" means your Rocksmith2014.exe is a version the mod doesn't know; it stays switched off.
 - No sound / the game says no guitar: check RS_ASIO.ini (driver name and input channel). See
   https://github.com/mdias/rs_asio for RS_ASIO's own help.
+
+
+Supporting the project
+----------------------
+Note-by-Note is free and always will be. Reports of what you find and ideas help most (the
+project's GitHub page). If it helped you and you'd like to say thanks, there is a tip page,
+entirely optional: https://ko-fi.com/arkhanragel
 
 
 Credits
