@@ -279,7 +279,7 @@ class GameInstall {
             }
         }
         if (removeUserData) RemoveUserData();
-        else log("Your Note-by-Note settings (NoteByNote.ini) were kept.");
+        else log("Your Note-by-Note settings, practice records and log were kept.");
 
         if (clean) RemoveInstallDir();
         else log($"Some files were kept (see above); {InstallDirName} still has their backups.");
@@ -329,16 +329,19 @@ class GameInstall {
         return true;
     }
 
-    // Everything the mod creates by itself while running (settings, log, debug recordings, old copies).
+    // Everything the mod creates by itself while running: all of it is named NoteByNote.* or
+    // NoteByNote_* in the game folder (settings and their backups, log, report, old copies of the
+    // DLL; the folders of practice records, debug recordings and charts). NoteByNote.dll and
+    // NoteByNote_install are not touched here: Undo and RemoveInstallDir deal with those.
     void RemoveUserData() {
-        foreach (var f in new[] { "NoteByNote.ini", "NoteByNote.log", "NoteByNote.unload" })
-            TryDelete(Path.Combine(game, f));
-        foreach (var f in Directory.GetFiles(game, "NoteByNote.dll.old_*")) TryDelete(f);
-        foreach (var d in new[] { "NoteByNote_debug", "NoteByNote_charts" }) {
-            var p = Path.Combine(game, d);
-            if (Directory.Exists(p)) try { Directory.Delete(p, true); } catch (Exception ex) { log($"{d}: {ex.Message}"); }
+        bool Named(string path, string name) =>
+            string.Equals(Path.GetFileName(path), name, StringComparison.OrdinalIgnoreCase);
+        var files = new[] { "NoteByNote.*", "NoteByNote_*" }.SelectMany(pattern => Directory.GetFiles(game, pattern));
+        foreach (var f in files.Where(f => !Named(f, "NoteByNote.dll"))) TryDelete(f);
+        foreach (var p in Directory.GetDirectories(game, "NoteByNote_*").Where(p => !Named(p, InstallDirName))) {
+            try { Directory.Delete(p, true); } catch (Exception ex) { log($"{Path.GetFileName(p)}: {ex.Message}"); }
         }
-        log("Your Note-by-Note settings and logs were deleted.");
+        log("Your Note-by-Note settings, practice records and logs were deleted.");
     }
 
     // Deletes NoteByNote_install. If this program runs from there, it can't delete itself while

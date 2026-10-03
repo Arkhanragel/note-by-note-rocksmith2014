@@ -47,7 +47,7 @@ Not sure which one you have? The setup tells you when it finds your game folder.
 2. Close Rocksmith, run **`Note-by-Note Setup.exe`**, check the game folder it found and press **Install**.
 3. Start the game as usual. In a song, press **F8** for the menu.
 
-The setup backs up every game-folder file it replaces, and **Uninstall** puts them back exactly as they were (a copy of the setup stays in `<game>\NoteByNote_install\`). Settings live in `NoteByNote.ini` in the game folder.
+The setup backs up every game-folder file it replaces, and **Uninstall** puts them back exactly as they were (a copy of the setup stays in `<game>\NoteByNote_install\`). Settings live in `NoteByNote.ini` in the game folder. Your settings, practice records and the log stay after an uninstall, so a later install finds them again; tick **"also delete my settings, records and logs"** to remove everything the mod created.
 
 ## Help test the older game version
 
@@ -83,7 +83,7 @@ Many players still run the **older Rocksmith 2014 Remastered** (September 2022; 
 
 **Before you post:** the files contain no personal data: only the game's version numbers, the names of the songs you opened and what the mod found. No folder paths, and never game files, songs or charts. Have a look at them in Notepad if you like.
 
-**Afterwards:** set both lines back to `0`, or uninstall (run the setup again and press **Uninstall**: every game file it changed is put back as it was; your `NoteByNote.ini` and the log stay unless you delete them). If the report shows everything works, the next version will switch the older game version on for everyone, and you'll be credited as a tester (tell me if you'd rather not be).
+**Afterwards:** set both lines back to `0`, or uninstall (run the setup again and press **Uninstall**: every game file it changed is put back as it was; your settings, practice records and the log stay unless you tick "also delete my settings, records and logs"). If the report shows everything works, the next version will switch the older game version on for everyone, and you'll be credited as a tester (tell me if you'd rather not be).
 
 Thank you!
 

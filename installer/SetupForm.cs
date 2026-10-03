@@ -75,7 +75,7 @@ class SetupForm : Form {
         uninstall.SetBounds(172, y, 110, 34);
         uninstall.Click += (s, e) => Run(false);
         Controls.Add(uninstall);
-        removeData.Text = "When uninstalling, also delete my settings and logs";
+        removeData.Text = "Uninstall: also delete my settings, records and logs";
         removeData.AutoSize = true;
         removeData.Location = new Point(296, y + 8);
         Controls.Add(removeData);

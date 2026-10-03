@@ -37,7 +37,9 @@ Uninstall
 ---------
 Run "NoteByNote_install\Note-by-Note Setup.exe" in the game folder (or this setup again) and press
 Uninstall. Every file the setup replaced was backed up, and is put back; files it added are removed.
-Tick "also delete my settings and logs" to remove NoteByNote.ini and the log as well.
+Tick "also delete my settings, records and logs" to remove everything the mod itself created as
+well: NoteByNote.ini, the log and report, your practice records (NoteByNote_stats) and the debug
+recordings. Without the tick those stay, so a later install finds your settings and records again.
 
 
 What the setup changes in the game folder
