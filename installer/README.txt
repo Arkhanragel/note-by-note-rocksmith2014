@@ -62,15 +62,16 @@ Troubleshooting
 
 Supporting the project
 ----------------------
-Note-by-Note is free and always will be. Reports of what you find and ideas help most (the
-project's GitHub page). If it helped you and you'd like to say thanks, there is a tip page,
-entirely optional: https://ko-fi.com/arkhanragel
+Note-by-Note is free and always will be. Reports of what you find and ideas help most, on the
+project's page: https://github.com/Arkhanragel/note-by-note-rocksmith2014
+If it helped you and you'd like to say thanks, there is a tip page, entirely optional:
+https://ko-fi.com/arkhanragel
 
 
 Credits
 -------
 - Note-by-Note by arkhanragel (GNU General Public License, version 3 or later: free software;
-  its source code is on the project's GitHub page, where this zip comes from)
+  its source code: https://github.com/Arkhanragel/note-by-note-rocksmith2014)
 - RS_ASIO by Micael Dias (MIT licence)
 - MinHook by Tsuda Kageyu (BSD 2-clause licence)
 - Dear ImGui by Omar Cornut (MIT licence)
