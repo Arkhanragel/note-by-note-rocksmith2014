@@ -170,7 +170,7 @@ On the tab, three things are drawn instead of written: a slide is a slanted line
 3. **How to fix it**, in words.
 4. **Where you probably played it**: a red X on the fretboard, with an arrow to the right spot.
 
-The panel sits beside the banner and follows it. You can also drag it to another place and resize it.
+The panel sits beside the banner and follows it. On a screen with no room beside the banner (most 16:9 screens) it goes under the banner, next to the tab. It is always drawn over the tab and the clock, so nothing hides it. You can also drag it to another place and resize it (with the menu open, see "Moving and resizing").
 
 The advice depends on the mistake:
 
@@ -218,7 +218,7 @@ A new install shows the tab without the pick strokes (3) and the rhythm (12): bo
 8. **A chord**: its notes one above the other, with its name on top. A mark shared by the whole chord is written once above it.
 9. **A bend**: an arrow up, and how far.
 10. **A fast repeat** of one fret is written once: "12 x8" means fret 12, eight more times. The number counts down. ("Spread out fast notes", Tab page; off, every note is written at its exact time.)
-11. **Trouble dots**: under a note that went wrong before. One fills green each time you play it on time; when all are green the note is cleared (see [Trouble spots](#trouble-spots)). (How many dots: "Clear a note after", Practice page.)
+11. **Progress dots**: under every note you have not yet played on time enough times in a row, so a new song has them from its first note, and under a note that went wrong before. One fills green each time you play it on time; when all are green the note is cleared (see [Trouble spots](#trouble-spots)). (How many dots: "Clear a note after", Practice page.)
 12. **The rhythm**: a stem under each note. Notes joined by a beam share a beat: one beam = 2 notes in a beat, two beams = 4, three = 8. A small 3 means triplets. ("Rhythm under the tab", Tab page.)
 
 Over notes picked one by one inside a held chord shape, the tab draws a thin gold bracket with the chord's name.

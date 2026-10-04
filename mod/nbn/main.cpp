@@ -810,6 +810,8 @@ struct MainLoop {
             Log("trouble spots: %.3f cleared (%d times on time in a row)", t, st.troubleClear);
             clearedNow.insert((int)std::lround(t * 1000.0));
         }
+        // (a note that never went wrong, now played right that many times: its dots stay, all filled, this time)
+        if (r == stats::Result::kOnTime && songStats.Streak(t) == st.troubleClear) clearedNow.insert((int)std::lround(t * 1000.0));
         statsChanged = true;
         noteMarks[(int)std::lround(t * 1000.0)] = r == stats::Result::kOnTime ? 1 : r == stats::Result::kWaited ? 2 : 3;
     }
@@ -1027,10 +1029,15 @@ struct MainLoop {
             // Progress dots: every note the mode waits for in a trouble spot (a red phrase), and any note that
             // went wrong until it's cleared (and this time, after): its good tries in a row so far. (Only the
             // notes that went wrong had them at first; the user missed them on the rest of the spot.)
+            // And every note the mode waits for that hasn't been played right that many times in a row yet,
+            // so a song played for the first time has its (empty) dots from the first note on. (They used to
+            // appear only after the first note the song had to wait for: "not activated until a bit late".)
             int streak = 0;
+            const int ms = (int)std::lround(t->time * 1000.0);
             const bool troubled = songStats.Progress(t->time, &streak);
             const bool inSpot = t->pi >= 0 && t->pi < (int)phraseHeat.size() && phraseHeat[t->pi] > 0 && CanWait(*t);
-            if ((troubled && (streak < st.troubleClear || clearedNow.count((int)std::lround(t->time * 1000.0)))) || inSpot) {
+            const bool toLearn = CanWait(*t) && (songStats.Streak(t->time) < st.troubleClear || clearedNow.count(ms));
+            if ((troubled && (streak < st.troubleClear || clearedNow.count(ms))) || inSpot || toLearn) {
                 tn.streak = troubled ? streak : songStats.Streak(t->time);
                 tn.need = st.troubleClear;
             }
@@ -1622,6 +1629,7 @@ struct MainLoop {
         // is heard some 50-150 ms after its time (the attack, the detector, the audio buffer), and
         // stopping before it made on-beat playing stop-and-go. Otherwise it stops LeadMs before the note.
         const double stopAt = st.lateMs > 0 ? next->time + st.lateMs / 1000.0 : next->time - leadS;
+        if (t < stopAt - 0.3) game::PrepareFreeze();  // (the slow search of the first stop, done before it)
         if (t >= stopAt && now >= nextFreezeTry) FreezeAt(*next, t, now);
     }
 

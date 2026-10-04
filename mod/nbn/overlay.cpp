@@ -87,6 +87,12 @@ struct Box {
     bool drawn = false;  // drawn this frame
 };
 Box g_box[kParts];
+Box g_tabBefore;  // the tab's box in the previous frame (the wrong-note panel, drawn before the tab, keeps clear of it)
+
+// The parts are drawn on two layers (ImDrawList channels, DrawParts): the wrong-note panel, the
+// arranging hints and the messages go on the upper one, over the banner, the clock and the tab
+// whatever the order they are drawn in.
+enum Layer { kLayerParts, kLayerTop, kLayers };
 
 struct Drag {
     int part = -1;       // -1 = no drag
@@ -1797,15 +1803,26 @@ std::vector<std::vector<Seg>> WrapSegs(ImFont* f, float size, const std::vector<
 }
 
 // Where the panel goes: beside the banner (b0, b1 = its box), moved by the player's offset. Without
-// an offset, on the banner's right, else its left, else under it.
+// an offset, the first of these places with room on the screen and clear of the tab: on the banner's
+// right, on its left, under it, under it beside the tab (on the tab's right, then on its left). On a
+// 16:9 screen there is no room beside the banner, and right under it the tab is in the way: it goes
+// under the banner, on the tab's right. With no such place (a wide tab right under the banner): under
+// the banner, over the tab.
 ImVec2 MistakePlace(const Settings& st, float S, float w, float h, ImVec2 ds, ImVec2 b0, ImVec2 b1) {
-    const float side = 16 * S;
-    ImVec2 p(b1.x + side + st.mistakeX * S, b0.y + st.mistakeY * S);
-    if (st.mistakeX == 0 && st.mistakeY == 0) {
-        if (p.x + w > ds.x - 8 * S) p.x = b0.x - side - w;
-        if (p.x < 8 * S) p = ImVec2((b0.x + b1.x - w) * 0.5f, b1.y + side);
+    const float side = 16 * S, edge = 8 * S;
+    if (st.mistakeX != 0 || st.mistakeY != 0) return Place(b1.x + side + st.mistakeX * S, b0.y + st.mistakeY * S, w, h, ds);
+    const Box& tab = g_tabBefore;
+    const ImVec2 under((b0.x + b1.x - w) * 0.5f, b1.y + side);
+    const ImVec2 spots[] = {ImVec2(b1.x + side, b0.y), ImVec2(b0.x - side - w, b0.y), under,
+                            ImVec2(tab.p1.x + side, under.y), ImVec2(tab.p0.x - side - w, under.y)};
+    const int count = tab.drawn ? 5 : 3;  // (no tab on screen: nothing to go beside)
+    for (int i = 0; i < count; ++i) {
+        if (spots[i].x < edge || spots[i].x + w > ds.x - edge) continue;  // no room there
+        const ImVec2 p = Place(spots[i].x, spots[i].y, w, h, ds);
+        const bool onTab = tab.drawn && p.x < tab.p1.x && p.x + w > tab.p0.x && p.y < tab.p1.y && p.y + h > tab.p0.y;
+        if (!onTab) return p;
     }
-    return Place(p.x, p.y, w, h, ds);
+    return Place(under.x, under.y, w, h, ds);
 }
 
 // b0, b1: the banner's box.
@@ -1847,6 +1864,9 @@ void DrawMistakePanel(ImDrawList* dl, const View& v, const Settings& st, float S
         s_key = key;
         s_since = ImGui::GetTime();
     }
+    // On the upper layer: the tab (drawn after it) must never hide what went wrong, wherever the
+    // player put the two.
+    dl->ChannelsSetCurrent(kLayerTop);
     const int vtx0 = dl->VtxBuffer.Size;
     dl->AddRectFilled(p0, p1, Col(theme::kPanel, 222), 14 * s);
     dl->AddRect(p0, p1, red, 14 * s, 0, 3 * s);
@@ -1859,6 +1879,7 @@ void DrawMistakePanel(ImDrawList* dl, const View& v, const Settings& st, float S
     }
     if (pic) neck.Draw(dl, st, ImVec2(p0.x + (w - neck.w) * 0.5f, t.y + 6 * s));
     FadeFrom(dl, vtx0, (float)std::min(1.0, (ImGui::GetTime() - s_since) / 0.2));
+    dl->ChannelsSetCurrent(kLayerParts);
 }
 
 // The banner, calm (no flashing): shown while the song waits, and while it plays towards the next stop
@@ -2448,15 +2469,20 @@ TabPages TurningPage(TabStaff* tab, double now, float pageL, double recap, doubl
     static double s_pageT = -1e9;   // song time at the left edge of the page (where it's going)
     static double s_shownT = -1e9;  // same, as shown (glides to s_pageT)
     static double s_pageNeed = 1.0; // zoom need the page was laid out for
+    static float s_pagePx = 0;      // and the tab's speed then (pixels per second, before the zoom)
     tab->originX = pageL;
     const float width = tab->lineR - pageL;
     auto pageLen = [&](double need) { return width / (tab->pxPerS * TabZoom(need)); };  // seconds on a page
     const double cursor = (now - s_pageT) / pageLen(s_pageNeed);  // 0..1 across the page
     const bool jumped = now < s_shownT - 0.05 || now > s_shownT + 3 * pageLen(s_pageNeed);  // seek / new song
+    // "Seconds ahead" or the tab's width changed (menu): the page is laid out again from here. (Its zoom
+    // was kept until the next page turn: after 8 s -> 4 s the page showed about one second of music.)
+    const bool resized = std::fabs(tab->pxPerS - s_pagePx) > 0.5f;
     const double turnAt = recap + (1.0 - recap) * 0.73;  // 75 % of the width with the default recap
-    if (jumped || cursor > turnAt || target > s_pageNeed * 1.25) {
+    if (jumped || resized || cursor > turnAt || target > s_pageNeed * 1.25) {
         s_pageNeed = target;
         s_pageT = now - recap * pageLen(target);
+        s_pagePx = tab->pxPerS;
         if (jumped) { s_shownT = s_pageT; g_tabZoom = s_pageNeed; }
     }
     const double k = 1.0 - std::exp(-frameS / 0.1);
@@ -2477,13 +2503,17 @@ TabPages RowPages(TabStaff* tab, const std::vector<TabItem>& items, bool spread,
     static double s_rowT = -1e9;   // song time at the left edge of the current page
     static double s_rowNeed = 1.0; // its zoom need
     static int s_row = 0;          // the row the current page is on
+    static float s_rowPx = 0;      // the tab's speed (pixels per second) the current page was laid out at
     tab->originX = pageL;
     const float width = tab->lineR - pageL;
     auto pageLen = [&](double need) { return width / (tab->pxPerS * TabZoom(need)); };  // seconds on a page
     // The need of the page starting at t: measured over the longest a page can be (need 1).
     auto pageNeed = [&](double t) { return ZoomNeed(items, *tab, spread, t - 0.2, t + pageLen(1.0)); };
     auto after = [&](double t, double need) { return t + pageLen(need) * (1.0 - recap); };
-    if (now < s_rowT - 0.05 || now > s_rowT + 2 * pageLen(s_rowNeed)) {  // seek / new song
+    // (resized: "Seconds ahead" or the tab's width changed in the menu, see TurningPage)
+    const bool resized = std::fabs(tab->pxPerS - s_rowPx) > 0.5f;
+    s_rowPx = tab->pxPerS;
+    if (resized || now < s_rowT - 0.05 || now > s_rowT + 2 * pageLen(s_rowNeed)) {  // seek / new song
         s_rowNeed = pageNeed(now);
         s_rowT = now - recap * pageLen(s_rowNeed);
         s_row = 0;
@@ -3919,9 +3949,11 @@ void DrawParts(const View& v, const Settings& st, const std::string& toast, DWOR
     // Mouse arranging (menu open) uses last frame's boxes; then this frame's drawing records new ones.
     Settings lay = st;  // the settings, with the layout being dragged
     Arrange(menu, &lay, s, ds);
+    g_tabBefore = g_box[kTab];
     for (Box& b : g_box) b.drawn = false;
 
     ImDrawList* dl = ImGui::GetBackgroundDrawList();  // under the menu window
+    dl->ChannelsSplit(kLayers);                       // (the layers: see Layer)
     const bool bannerOn = st.enabled && (st.showBanner || !st.stopSong);  // ("Show the notes" is the banner)
     const bool bannerShown = DrawCalmBanner(dl, v, lay, bannerOn, s, ds);
     if (st.enabled) DrawCountIn(dl, v, s, ds);
@@ -3930,8 +3962,10 @@ void DrawParts(const View& v, const Settings& st, const std::string& toast, DWOR
     if (!bannerShown && bannerOn && menu) DrawExampleBanner(dl, v, lay, s, ds);
     if (bannerOn && menu && g_box[kBanner].drawn && !g_box[kMistake].drawn) DrawExampleMistake(dl, v, lay, bannerShown, s, ds);
     DrawClockAndTab(dl, v, st, lay, menu, s, ds);
+    dl->ChannelsSetCurrent(kLayerTop);
     if (menu) DrawArrangeHints(dl, s);
     DrawToastCalm(dl, toast, toastUntil, s, ds);
+    dl->ChannelsMerge();
     if (menu) DrawMenu(v, st, s, ds);
 }
 

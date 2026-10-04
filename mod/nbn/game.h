@@ -67,6 +67,7 @@ bool ReadSongChart(Chart* chart);
 
 // Freezes / resumes the song: pauses the Wwise playback the clock follows AND sets the clock
 // provider's "stopped" flag, so music and highway stop together and resume in sync.
+void PrepareFreeze();  // finds what Freeze needs ahead of time (the search can take most of a second)
 bool Freeze();
 bool Unfreeze();
 

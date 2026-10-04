@@ -1002,6 +1002,19 @@ bool ReadSongChart(Chart* chart) {
     return true;
 }
 
+// The search for the clock provider can take most of a second (seen: 0.7 s, in the first song after the
+// game started): done at the first stop, the song ran that far past its first note before it was held.
+// So the main loop asks for it ahead of time, while the song plays towards a note. Not found (the song
+// is still loading): tried again 1 s later. The one found earlier is checked every time (three reads):
+// the game makes a new provider when the song resumes from its pause menu or from Riff Repeater, and
+// the first stop after that was just as late.
+void PrepareFreeze() {
+    static DWORD s_nextTry = 0;
+    if (g_provider && IsProvider(g_provider, SongObject())) return;
+    if (GetTickCount() < s_nextTry) return;
+    if (!FindProvider()) s_nextTry = GetTickCount() + 1000;
+}
+
 bool Freeze() {
     const uintptr_t prov = FindProvider();
     uint32_t pid;

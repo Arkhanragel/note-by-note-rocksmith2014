@@ -129,8 +129,8 @@ struct Settings {
     int tabWidth = 640;              // tab's width (more width = more room between the notes)
     int tabSize = 100;               // tab's height and text size
     int mistakeX = 0, mistakeY = 0;  // the wrong-note panel: offset from its place beside the banner (right
-                                     // of it, tops level), so it follows the banner; 0, 0 = beside it (on
-                                     // its left or under it when there's no room on the right)
+                                     // of it, tops level), so it follows the banner; 0, 0 = beside it, or
+                                     // where there's room: on its left, under it, clear of the tab
     int mistakeSize = 100;           // the wrong-note panel's size
 
     bool operator==(const Settings&) const = default;
