@@ -1,10 +1,11 @@
 // game.h: everything the mod knows about Rocksmith2014.exe.
 //
-// Verified build: Steam "Learn & Play" (December 2024, RSMods "LPDecember2024"): every address was
+// Verified builds: Steam "Learn & Play" (December 2024, RSMods "LPDecember2024"): every address was
 // checked by disassembling a memory dump of the running game (the exe is encrypted on disk and
-// protected by VMProtect; see docs/TECHNICAL.md, "Pausing the song without a pause screen"). Other builds (the older
-// Remastered of September 2022) are handled by finding the same addresses by byte pattern; they
-// only run in test mode until verified, and NoteByNote_report.txt says what was found.
+// protected by VMProtect; see docs/TECHNICAL.md, "Pausing the song without a pause screen"); and the
+// older Remastered of September 2022 (RSMods "RemasteredSeptember2022"), verified with the report's
+// checks. Any other build is handled by finding the same addresses by byte pattern; it only runs
+// in test mode until verified, and NoteByNote_report.txt says what was found.
 // Nothing here modifies game CODE: we only read/write game DATA and call game functions.
 #pragma once
 #include <cstdint>

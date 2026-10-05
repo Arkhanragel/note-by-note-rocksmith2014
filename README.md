@@ -2,9 +2,9 @@
 
 A free, fan-made mod for **Rocksmith 2014 Edition - Remastered** (PC, Steam): the song **waits at each note and chord until you play it**, so you can learn a part at your own pace instead of chasing the highway.
 
-> **Status: early preview.** It works on the current Steam version of the game (the "Learn & Play" update, see [Game versions](#game-versions)), and it's being tested by one player. Expect rough edges, and please report what you find.
+> **Status: early preview.** It works on the current Steam version of the game (the "Learn & Play" update) and, from version 0.3.1, on the older Remastered version of September 2022 (see [Game versions](#game-versions)). It's being tested by very few players. Expect rough edges, and please report what you find.
 >
-> **🙋 Help wanted:** do you play the **older** Remastered version (September 2022)? Note-by-Note doesn't work on it yet, and you can help make it work, even without a guitar. See [Help test the older game version](#help-test-the-older-game-version).
+> **🙋 Help wanted:** do you play the **older** Remastered version (September 2022)? It is supported now, but it has been tried far less. Tell me how it goes: see [The older game version](#the-older-game-version).
 >
 > Not affiliated with or endorsed by Ubisoft. Rocksmith is a trademark of Ubisoft Entertainment. This project contains no game files or song data.
 
@@ -32,7 +32,7 @@ Note-by-Note checks which version of the game you have and **stays switched off 
 | Game version | Who has it | Note-by-Note |
 |---|---|---|
 | **Rocksmith 2014 Edition - Remastered, "Learn & Play" update** (December 2024 onwards; Steam build 16576867) | players who got the game from Steam after the December 2024 relaunch | ✅ **Supported** |
-| **Rocksmith 2014 Edition - Remastered, September 2022** (the older version) | many players who bought the game before the relaunch (the version most of the modding community uses) | 🧪 **Not yet: testers needed.** The mod can already look for what it needs in this version by itself; it needs someone with it to try it. [How to help](#help-test-the-older-game-version) (no guitar needed, about 10 minutes) |
+| **Rocksmith 2014 Edition - Remastered, September 2022** (the older version) | many players who bought the game before the relaunch (the version most of the modding community uses) | ✅ **Supported** from version 0.3.1. Tried far less than the current version: [reports welcome](#the-older-game-version) |
 | Any other version (Mac, consoles, older than Remastered) | | ❌ Not supported |
 
 Not sure which one you have? The setup tells you when it finds your game folder.
@@ -50,41 +50,20 @@ Not sure which one you have? The setup tells you when it finds your game folder.
 
 The setup backs up every game-folder file it replaces, and **Uninstall** puts them back exactly as they were (a copy of the setup stays in `<game>\NoteByNote_install\`). Settings live in `NoteByNote.ini` in the game folder. Your settings, practice records and the log stay after an uninstall, so a later install finds them again; tick **"also delete my settings, records and logs"** to remove everything the mod created.
 
-## Help test the older game version
+## The older game version
 
-Many players still run the **older Rocksmith 2014 Remastered** (September 2022; Steam kept it for players who bought the game before the relaunch). Note-by-Note was made on the current version, and the older one isn't available to me, so I can't test it myself. The mod already knows how to look for what it needs in the older game by itself; it just needs someone with that version to try it and send back a report.
+Many players still run the **older Rocksmith 2014 Remastered** (September 2022; Steam kept it for players who bought the game before the relaunch). Note-by-Note supports it from version 0.3.1. It has had far less play time than the current version, so reports from players who have it are very welcome, good or bad.
 
-**You don't need a guitar or an audio interface**, and it takes about 10 minutes.
+Not sure which one you have? The setup tells you when you pick the game folder: *"Game version: supported (the older Rocksmith 2014 Remastered, September 2022)"*.
 
-**What you need:** Rocksmith 2014 Remastered, the older version, on Steam. Not sure which one you have? The setup tells you when you pick the game folder: *"Game version: the older Rocksmith 2014 Remastered (September 2022)"*.
+**If something goes wrong** (the game doesn't start, the song doesn't stop at notes, anything strange), please send these two files from the game folder:
 
-**Steps**
+- `NoteByNote_report.txt`: a short summary: the game's version numbers, where the mod found what it needs, and whether each check passed.
+- `NoteByNote.log`: the mod's full log.
 
-1. Download the latest `NoteByNote-<version>.zip` from [Releases](../../releases) (0.2.0 or newer) and unzip it.
-2. Close Rocksmith and run **`Note-by-Note Setup.exe`**. Check it says "the older Rocksmith 2014 Remastered (September 2022)", and press **Install**.
-   - No guitar cable or audio interface? In the **Audio** box ("ASIO driver of your audio interface"), choose [ASIO4ALL](https://asio4all.org) (install it first) with your computer's built-in sound. Note-by-Note only needs *an* ASIO device to start; it won't hear anything, and that's fine for this test.
-3. Start the game once, until the main menu, then quit. This creates `NoteByNote.ini` in the game folder.
-4. Open `NoteByNote.ini` (in the game folder) with Notepad and change these two lines:
-   ```ini
-   TestUnverifiedGame=1
-   TestAutoPassMs=2000
-   ```
-   The first one lets the mod run on a game version it doesn't know yet. The second one makes every wait pass by itself after 2 seconds, as if you had played the note.
-5. Start the game and go to **Learn a Song**, pick any song and play it.
-   - You should see the song stop at notes for about 2 seconds, with a banner saying what to play, and a tab on the left.
-   - Press **F8**, wait 2 seconds, press **F8** again (the menu opens and closes).
-   - Let it play for about 30 seconds, then quit the game.
-6. Send these two files from the game folder:
-   - `NoteByNote_report.txt`: a short summary: the game's version numbers, where the mod found what it needs, and whether each check passed.
-   - `NoteByNote.log`: the mod's full log.
-
-   Nothing showed up, or the game crashed? Please send them anyway: that's exactly what they are for.
-
-   **Where:** open an [issue](../../issues/new) called *"Older version report"*, say what you saw on screen (did the song stop? was the banner and tab shown? anything strange?), and attach both files.
+**Where:** open an [issue](../../issues/new) called *"Older version report"*, say what you saw on screen, and attach both files.
 
 **Before you post:** the files contain no personal data: only the game's version numbers, the names of the songs you opened and what the mod found. No folder paths, and never game files, songs or charts. Have a look at them in Notepad if you like.
-
-**Afterwards:** set both lines back to `0`, or uninstall (run the setup again and press **Uninstall**: every game file it changed is put back as it was; your settings, practice records and the log stay unless you tick "also delete my settings, records and logs"). If the report shows everything works, the next version will switch the older game version on for everyone, and you'll be credited as a tester (tell me if you'd rather not be).
 
 Thank you!
 
@@ -127,7 +106,7 @@ Left-handed tab options, theme files for sharing skins, capo-free play together 
 
 ## Supporting the project
 
-Note-by-Note is free and always will be. What helps most is reports of what you find ([issues](../../issues)), testers for the [older game version](#help-test-the-older-game-version), and ideas. If it helped you learn a song and you'd like to say thanks, there is a tip page: [ko-fi.com/arkhanragel](https://ko-fi.com/arkhanragel). Entirely optional; nothing is locked behind it.
+Note-by-Note is free and always will be. What helps most is reports of what you find ([issues](../../issues)), reports from players of the [older game version](#the-older-game-version), and ideas. If it helped you learn a song and you'd like to say thanks, there is a tip page: [ko-fi.com/arkhanragel](https://ko-fi.com/arkhanragel). Entirely optional; nothing is locked behind it.
 
 ## Credits
 

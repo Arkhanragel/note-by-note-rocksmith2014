@@ -110,12 +110,16 @@ constexpr Build kBuilds[] = {
     {"Learn & Play (December 2024)", 0x0176EC34, 0x67497D00, true,
      {0x00F6062C, 0x00F60514, 0x00DA0E70, 0x00AC4870, 0x00AC4900, 0x00ABFE80},
      kLayoutLearnAndPlay},
-    // The older build most players have (RSMods' "RemasteredSeptember2022"). From RSMods' tables
-    // (absolute there, exe base 0x400000), NOT verified; the provider vtable isn't known. Their
-    // ExecuteActionOnEvent(id) was 0x30 past the real start on our build, maybe here too.
-    {"Remastered (September 2022)", 0x00B13D7C, 0, false,
-     {0x00F5F62C, 0x00F5F514, 0, 0x00AC51B0, 0x00AC5240, 0x00AC0850},
-     kLayoutLearnAndPlay},  // RSMods: "the offsets stay the same"; the report checks each one
+    // The older build most players have (RSMods' "RemasteredSeptember2022"; the exe loads at the
+    // fixed base 0x400000, RSMods lists these as absolute addresses). The patterns find all six on
+    // that build (first seen in a tester's report, 2026-10-04) and five are RSMods' own values; the
+    // provider vtable is ours. The functions behind them, and the game code that uses the object
+    // offsets, are the same as on Learn & Play outside addresses. Verified 2026-10-05 with the
+    // report's checks in a song: chart, Dynamic Difficulty, freeze (clock held) and resume.
+    // Not checked there: the grey-time and loop chain (Riff Repeater).
+    {"Remastered (September 2022)", 0x00B13D7C, 0x63012822, true,
+     {0x00F5F62C, 0x00F5F514, 0x00D9F668, 0x00AC51B0, 0x00AC5240, 0x00AC0850},
+     kLayoutLearnAndPlay},  // RSMods: "the offsets stay the same"
 };
 
 // The loaded arrangement ([song + Layout::songData]) has the SNG file's layout (from the disassembly

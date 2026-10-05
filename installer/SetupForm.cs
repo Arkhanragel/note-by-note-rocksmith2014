@@ -124,14 +124,13 @@ class SetupForm : Form {
         }
         var st = new GameInstall(gameDir, Log).Status();
         var lines = new System.Collections.Generic.List<string> { "Found: " + gameDir };
-        if (st.VersionSupported)
+        if (st.VersionOlder)
+            lines.Add("Game version: supported (the older Rocksmith 2014 Remastered, September 2022).");
+        else if (st.VersionSupported)
             lines.Add("Game version: supported.");
         else if (st.VersionModified)
             lines.Add("Game version: supported, but Rocksmith2014.exe was changed (patched?). Note-by-Note will try; "
                       + "if it stays off, please report: " + st.ExeInfo + ".");
-        else if (st.VersionOlder)
-            lines.Add("Game version: the older Rocksmith 2014 Remastered (September 2022). Note-by-Note isn't verified "
-                      + "on it yet: it stays switched off, except for testers (TestUnverifiedGame=1 in NoteByNote.ini).");
         else
             lines.Add("Game version: NOT the one Note-by-Note was made for (it will stay switched off). "
                       + "Please report: " + st.ExeInfo + ".");

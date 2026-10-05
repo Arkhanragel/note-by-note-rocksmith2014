@@ -75,7 +75,7 @@ class GameStatus {
     public bool GameFound;
     public bool VersionSupported;  // the exe the mod was made for (else the mod stays switched off)
     public bool VersionModified;   // that same build, but changed on disk (a patched exe): may work
-    public bool VersionOlder;      // the older Remastered build (September 2022), not supported yet
+    public bool VersionOlder;      // the older Remastered build (September 2022), supported too
     public string ExeInfo;         // the exe's numbers, for a bug report when it isn't supported
     public bool RsAsio;            // RS_ASIO is installed (avrt.dll + RS_ASIO.dll + RS_ASIO.ini)
     public bool RsAsioIni;         // RS_ASIO.ini is there: the install keeps it (and the player's audio device)
@@ -123,7 +123,7 @@ class GameInstall {
         try {
             var b = File.ReadAllBytes(Path.Combine(game, GameLocator.ExeName));
             uint sum = PeChecksum(b), header = PeHeaderChecksum(b), time = PeTimestamp(b);
-            st.VersionSupported = sum == SupportedChecksum;
+            st.VersionSupported = sum == SupportedChecksum || sum == OlderChecksum;
             st.VersionModified = !st.VersionSupported && header == SupportedChecksum && time == SupportedTimestamp;
             st.VersionOlder = sum == OlderChecksum;
             st.ExeInfo = $"checksum {sum:X8}, header {header:X8}, time {time:X8}, size {b.Length}";

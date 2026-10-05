@@ -385,7 +385,7 @@ All of these are in the game's folder.
 Note-by-Note is free and made in spare time. These are the things that help it most:
 
 - **Tell what you find.** A note it did not hear, advice that was wrong, something hard to read on screen: open an issue on [the project's GitHub page](https://github.com/Arkhanragel/note-by-note-rocksmith2014/issues) and say what happened and in which song. Attach `NoteByNote.log` from the game's folder; it has no personal data.
-- **Test the older game version.** If you play the Rocksmith 2014 Remastered of September 2022, the mod needs someone with that version to try it. It takes about 10 minutes and no guitar; the README on the project's page has the steps.
+- **Tell me how the older game version goes.** If you play the Rocksmith 2014 Remastered of September 2022: it is supported, but it has been tried far less than the current version. The README on the project's page says what to send if something goes wrong.
 - **Share your ideas.** Many things in the mod started as a player's remark: the cards, the switches on the Practice page, the practice bar on the Riff Repeater screen.
 - **Tell other players**, and give the project a star [on GitHub](https://github.com/Arkhanragel/note-by-note-rocksmith2014) so they can find it.
 - **Buy me a coffee**, if the mod helped you and you feel like it: [ko-fi.com/arkhanragel](https://ko-fi.com/arkhanragel). It is entirely optional. Note-by-Note is free and always will be, and nothing is locked behind a tip.

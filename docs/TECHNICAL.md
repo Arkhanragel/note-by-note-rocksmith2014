@@ -2,7 +2,7 @@
 
 What Note-by-Note found out about Rocksmith 2014 Remastered and how the mod uses it. Written for other modders, especially the [RSMods](https://github.com/Lovrom8/RSMods) community, whose research this project built on. Everything here was checked on the running game.
 
-- Game build: **Learn & Play** (Steam, December 2024 onwards, RSMods `LPDecember2024`), PE checksum `0x0176EC34`, link time `0x67497D00`, 24,514,584 bytes. The older Remastered build (Sept 2022, `0x00B13D7C`) is in testing, see [Game builds](#game-builds-and-where-addresses-live).
+- Game build: **Learn & Play** (Steam, December 2024 onwards, RSMods `LPDecember2024`), PE checksum `0x0176EC34`, link time `0x67497D00`, 24,514,584 bytes. The older Remastered build (Sept 2022, RSMods `RemasteredSeptember2022`, `0x00B13D7C`, link time `0x63012822`, 11,615,272 bytes, fixed base `0x00400000`) is supported too, see [Game builds](#game-builds-and-where-addresses-live).
 - All addresses are **RVAs** (add the exe's load address; the L&P exe uses ASLR). Offsets are hex bytes.
 - 32-bit process. Nothing in the game's code is patched: the mod reads/writes data, calls existing functions, and hooks system DLLs (d3d9, ntdll, winmm) only.
 
@@ -46,7 +46,7 @@ Differences from RSMods' approach, in case they're useful:
 - **Object offsets are per build too** (`Layout`), so if a report shows one moved on another build, the fix is one table entry.
 - **The report** (`NoteByNote_report.txt`) lists the exe numbers, each address (pattern vs table), the layout in use, and checks made while playing: chart read, DD vector size == phrase-iteration count, clock moves ~1 s per s, freeze holds the clock (< 0.1 s drift), resume runs it again.
 
-The Sept 2022 row currently holds RSMods' values (absolute there, exe base 0x400000) and is marked unverified; the provider vtable isn't known for it. Testers are being asked for reports, see the [README](../README.md#help-test-the-older-game-version).
+The Sept 2022 row: root `0xF5F62C`, preview name `0xF5F514`, provider vtable `0xD9F668`, PostEvent `0xAC51B0`, ExecuteActionOnEvent(id) `0xAC5240`, GetEventIDFromPlayingID `0xAC0850` (RVAs; RSMods lists the five it has as absolute addresses, base 0x400000, and they are the same; on this build its ExecuteActionOnEvent is the function's real start). The patterns made from L&P find all six, the object offsets are L&P's, and the report's checks in a song pass (chart, DD, freeze, resume). Not checked on it: the grey-time / Riff Repeater loop chain. Reports from players of that build: see the [README](../README.md#the-older-game-version).
 
 ## Addresses (Learn & Play)
 

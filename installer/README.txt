@@ -10,7 +10,8 @@ Not affiliated with or endorsed by Ubisoft. Rocksmith is a trademark of Ubisoft 
 
 What you need
 -------------
-- Rocksmith 2014 Edition - Remastered (Steam, PC), the current version.
+- Rocksmith 2014 Edition - Remastered (Steam, PC): the current version ("Learn & Play"), or the
+  older one of September 2022. The setup says which one it found.
 - An audio interface with an ASIO driver (or ASIO4ALL). Note-by-Note hears your guitar through
   RS_ASIO, which the setup installs if you don't have it yet.
 
