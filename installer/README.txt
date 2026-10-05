@@ -61,8 +61,13 @@ Troubleshooting
 ---------------
 - Nothing appears in the game: look at NoteByNote.log in the game folder. "UNSUPPORTED game
   version" means your Rocksmith2014.exe is a version the mod doesn't know; it stays switched off.
-- No sound / the game says no guitar: check RS_ASIO.ini (driver name and input channel). See
-  https://github.com/mdias/rs_asio for RS_ASIO's own help.
+- No sound, the game says no guitar, or a song closes by itself after a few seconds: check
+  RS_ASIO.ini (driver name and input channel): it must name the ASIO driver of the interface
+  your guitar is plugged into. See https://github.com/mdias/rs_asio for RS_ASIO's own help.
+- Anything else, also a crash: please report it. Copy NoteByNote.log and NoteByNote_report.txt
+  from the game folder right after the problem (they are written again at the next start) and
+  attach them to an issue on the project's page, with a few words on what happened:
+  https://github.com/Arkhanragel/note-by-note-rocksmith2014/issues
 
 
 Supporting the project

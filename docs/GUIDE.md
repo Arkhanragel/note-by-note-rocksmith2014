@@ -368,7 +368,8 @@ All of these are in the game's folder.
 |---|---|
 | `NoteByNote.ini` | Your settings. The menu writes it; you can also edit it with Notepad while the game is closed. The menu and skip keys can only be changed here (`MenuKey`, `SkipKey`). |
 | `NoteByNote_stats` | A folder with your trouble spots, one small file for each song and arrangement. |
-| `NoteByNote.log` | What the mod did in the last session. Useful when you report a problem. |
+| `NoteByNote.log` | What the mod did in the last session, and where the game crashed if it did. Send it when you report a problem. |
+| `NoteByNote_report.txt` | A short summary of the last session: your game's version and whether the mod's checks passed. Send it too. |
 
 ## If something is not right
 
@@ -384,8 +385,7 @@ All of these are in the game's folder.
 
 Note-by-Note is free and made in spare time. These are the things that help it most:
 
-- **Tell what you find.** A note it did not hear, advice that was wrong, something hard to read on screen: open an issue on [the project's GitHub page](https://github.com/Arkhanragel/note-by-note-rocksmith2014/issues) and say what happened and in which song. Attach `NoteByNote.log` from the game's folder; it has no personal data.
-- **Tell me how the older game version goes.** If you play the Rocksmith 2014 Remastered of September 2022: it is supported, but it has been tried far less than the current version. The README on the project's page says what to send if something goes wrong.
+- **Tell what you find.** A note it did not hear, advice that was wrong, something hard to read on screen, a crash: open an issue on [the project's GitHub page](https://github.com/Arkhanragel/note-by-note-rocksmith2014/issues) and say what happened and in which song. Attach `NoteByNote.log` and `NoteByNote_report.txt` from the game's folder, as they are right after the problem (they are written again at the next start); they have no personal data. The README on the project's page lists what else helps for each kind of problem.
 - **Share your ideas.** Many things in the mod started as a player's remark: the cards, the switches on the Practice page, the practice bar on the Riff Repeater screen.
 - **Tell other players**, and give the project a star [on GitHub](https://github.com/Arkhanragel/note-by-note-rocksmith2014) so they can find it.
 - **Buy me a coffee**, if the mod helped you and you feel like it: [ko-fi.com/arkhanragel](https://ko-fi.com/arkhanragel). It is entirely optional. Note-by-Note is free and always will be, and nothing is locked behind a tip.

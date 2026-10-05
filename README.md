@@ -2,9 +2,7 @@
 
 A free, fan-made mod for **Rocksmith 2014 Edition - Remastered** (PC, Steam): the song **waits at each note and chord until you play it**, so you can learn a part at your own pace instead of chasing the highway.
 
-> **Status: early preview.** It works on the current Steam version of the game (the "Learn & Play" update) and, from version 0.3.1, on the older Remastered version of September 2022 (see [Game versions](#game-versions)). It's being tested by very few players. Expect rough edges, and please report what you find.
->
-> **🙋 Help wanted:** do you play the **older** Remastered version (September 2022)? It is supported now, but it has been tried far less. Tell me how it goes: see [The older game version](#the-older-game-version).
+> **Status: early preview.** It works on both versions of the game that are on Steam: the current one (the "Learn & Play" update) and, from version 0.3.1, the older Remastered of September 2022 (see [Game versions](#game-versions)). It's being tested by very few players. Expect rough edges, and if something goes wrong, [tell me](#reporting-a-problem): the mod keeps a log made for that.
 >
 > Not affiliated with or endorsed by Ubisoft. Rocksmith is a trademark of Ubisoft Entertainment. This project contains no game files or song data.
 
@@ -32,7 +30,7 @@ Note-by-Note checks which version of the game you have and **stays switched off 
 | Game version | Who has it | Note-by-Note |
 |---|---|---|
 | **Rocksmith 2014 Edition - Remastered, "Learn & Play" update** (December 2024 onwards; Steam build 16576867) | players who got the game from Steam after the December 2024 relaunch | ✅ **Supported** |
-| **Rocksmith 2014 Edition - Remastered, September 2022** (the older version) | many players who bought the game before the relaunch (the version most of the modding community uses) | ✅ **Supported** from version 0.3.1. Tried far less than the current version: [reports welcome](#the-older-game-version) |
+| **Rocksmith 2014 Edition - Remastered, September 2022** (the older version) | many players who bought the game before the relaunch (the version most of the modding community uses) | ✅ **Supported** from version 0.3.1 (it has had less play time than the current version) |
 | Any other version (Mac, consoles, older than Remastered) | | ❌ Not supported |
 
 Not sure which one you have? The setup tells you when it finds your game folder.
@@ -50,22 +48,26 @@ Not sure which one you have? The setup tells you when it finds your game folder.
 
 The setup backs up every game-folder file it replaces, and **Uninstall** puts them back exactly as they were (a copy of the setup stays in `<game>\NoteByNote_install\`). Settings live in `NoteByNote.ini` in the game folder. Your settings, practice records and the log stay after an uninstall, so a later install finds them again; tick **"also delete my settings, records and logs"** to remove everything the mod created.
 
-## The older game version
+## Reporting a problem
 
-Many players still run the **older Rocksmith 2014 Remastered** (September 2022; Steam kept it for players who bought the game before the relaunch). Note-by-Note supports it from version 0.3.1. It has had far less play time than the current version, so reports from players who have it are very welcome, good or bad.
+Something didn't work: the game closed, a song stopped by itself, a note you played wasn't heard, the advice was wrong, something on screen is hard to read? Please tell me. You don't need to make it happen again first: the mod writes down what it did while you played.
 
-Not sure which one you have? The setup tells you when you pick the game folder: *"Game version: supported (the older Rocksmith 2014 Remastered, September 2022)"*.
+**Send these two files from the game folder** (the folder with `Rocksmith2014.exe`), as they are right after the problem. They are written again every time the game starts, so copy them before you start it again.
 
-**If something goes wrong** (the game doesn't start, the song doesn't stop at notes, anything strange), please send these two files from the game folder:
+| File | What it holds |
+|---|---|
+| `NoteByNote.log` | Everything the mod did in that session: the screens you went through, every wait and what it heard, and, if the game crashed, where it happened. |
+| `NoteByNote_report.txt` | A short summary: which version of the game you have, whether the mod found what it needs in it, and whether its own checks passed while you played. |
 
-- `NoteByNote_report.txt`: a short summary: the game's version numbers, where the mod found what it needs, and whether each check passed.
-- `NoteByNote.log`: the mod's full log.
+Depending on the problem, one more thing helps:
 
-**Where:** open an [issue](../../issues/new) called *"Older version report"*, say what you saw on screen, and attach both files.
+- **The game has no sound, a song closes by itself after a few seconds, or the guitar isn't heard at all:** also send `RS_ASIO-log.txt` (same folder). This is nearly always the audio device: check that the setup's Audio box, or `RS_ASIO.ini`, names the ASIO driver of the interface your guitar is plugged into.
+- **A note you played wasn't recognised:** set `SaveWaitAudio=1` in `NoteByNote.ini`, play that part again and send the newest `wait_….wav` from the `NoteByNote_debug` folder too (it is a recording of your guitar at that note; set it back to `0` afterwards, the files add up).
+- **Something looks wrong on screen:** a screenshot.
 
-**Before you post:** the files contain no personal data: only the game's version numbers, the names of the songs you opened and what the mod found. No folder paths, and never game files, songs or charts. Have a look at them in Notepad if you like.
+**Where:** open an [issue](../../issues/new), say what you were doing and what happened (which song, and whether it was the first time), and attach the files.
 
-Thank you!
+**What is in the files:** the two Note-by-Note files hold the game's version numbers, the names of the songs you opened, your Note-by-Note settings and what the mod did. No folder paths or account names, and never game files, songs or charts. RS_ASIO's log lists your computer's audio devices and what the game asked of them. All are plain text: have a look in Notepad before you post if you like.
 
 ## How it works (short version)
 
@@ -106,7 +108,7 @@ Left-handed tab options, theme files for sharing skins, capo-free play together 
 
 ## Supporting the project
 
-Note-by-Note is free and always will be. What helps most is reports of what you find ([issues](../../issues)), reports from players of the [older game version](#the-older-game-version), and ideas. If it helped you learn a song and you'd like to say thanks, there is a tip page: [ko-fi.com/arkhanragel](https://ko-fi.com/arkhanragel). Entirely optional; nothing is locked behind it.
+Note-by-Note is free and always will be. What helps most is [reports of what you find](#reporting-a-problem) and ideas. If it helped you learn a song and you'd like to say thanks, there is a tip page: [ko-fi.com/arkhanragel](https://ko-fi.com/arkhanragel). Entirely optional; nothing is locked behind it.
 
 ## Credits
 
