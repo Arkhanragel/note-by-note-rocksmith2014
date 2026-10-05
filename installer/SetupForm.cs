@@ -92,7 +92,11 @@ class SetupForm : Form {
             ForeColor = SystemColors.GrayText, AutoSize = false, Size = new Size(616, 36) }, 12, ClientSize.Height - 40);
 
         foreach (var d in GameLocator.AsioDrivers()) driver.Items.Add(d);
-        if (driver.Items.Count > 0) driver.SelectedIndex = 0;
+        // Only one driver: that's the one. Several: nothing is preselected and Install asks for a
+        // choice. The setup can't tell which device the guitar is on, and the first of the list is
+        // often a generic one ("ASIO4ALL v2" sorts first): with the wrong driver the game has no
+        // sound and leaves every song after a few seconds.
+        if (driver.Items.Count == 1) driver.SelectedIndex = 0;
 
         // Started from NoteByNote_install inside the game folder: that game. Else ask Steam.
         var here = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
@@ -164,6 +168,13 @@ class SetupForm : Form {
         if (gameDir == null) return;
         if (GameInstall.GameRunning()) {
             MessageBox.Show(this, "Close Rocksmith 2014 first (its files are in use).", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+        if (doInstall && newIni && driver.Items.Count > 0 && driver.SelectedIndex < 0) {
+            MessageBox.Show(this, "Choose the ASIO driver of your audio interface first (the Audio box): the one your guitar is "
+                            + "plugged into.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            driver.Focus();
+            driver.DroppedDown = true;
             return;
         }
         if (!doInstall && MessageBox.Show(this, "Uninstall Note-by-Note and put back the original files?", Text,
