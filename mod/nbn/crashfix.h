@@ -16,11 +16,12 @@
 namespace nbn::crashfix {
 
 // Repairs the hook if it is there (call as early as possible; logs what it did). on = false: only
-// logs whether the hook is there.
+// logs whether the hook is there. If the hook isn't there yet (the mod started before the protector
+// finished), Tick repairs it when it appears.
 void Start(bool on);
 
-// Call now and then (every few seconds): logs (once) if the protector puts its hook back, and
-// repairs it again.
+// Call every main-loop iteration (one byte is read): repairs the hook when it appears after Start,
+// and again if the protector puts it back (logged; at most 10 times).
 void Tick();
 
 }  // namespace nbn::crashfix

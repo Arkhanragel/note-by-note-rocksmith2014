@@ -351,7 +351,7 @@ These apply from the next time you start the game.
 | Option | What it does | Starts |
 |---|---|---|
 | Close the Ubisoft login and server popups | Answers those dialogs by itself. "Press Enter" and the choice of profile stay yours. | on |
-| Play the start-up logos 4x faster | Shorter wait before the title screen. | on |
+| Play the start-up logos 4x faster | Shorter wait before the title screen. | off |
 | Avoid the game's own random crash / freeze | Fixes a crash of the game that happens mostly at start-up. | on |
 
 ### Moving and resizing

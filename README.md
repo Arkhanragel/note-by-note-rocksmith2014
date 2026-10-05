@@ -21,7 +21,7 @@ A free, fan-made mod for **Rocksmith 2014 Edition - Remastered** (PC, Steam): th
 - **Follows the game.** It uses the difficulty (Dynamic Difficulty) you are playing at. Tested mostly with guitar in Learn a Song; Riff Repeater and bass are supported, but less tested.
 - **Starts simple.** A new install shows the note to play with its fretboard and a plain tab. The next notes, fingers and hand position, pick strokes and the rhythm under the tab are switched on in the menu when you want them.
 - **In-game menu (F8):** choose the mode (Off, Show the notes, Wait for each note), wait for chords too or only single notes, timing, and tab and display options. You can drag and resize everything with the mouse while the menu is open. On the game's progress bar, click a phrase or drag over a part to practise only that. Colour themes (Default, High contrast, Midnight, Vintage, Paper), and any colour can be changed with a colour wheel or a hex code; the string colours stay the game's. F9 skips the note it's waiting for.
-- Extras: optionally closes the Ubisoft login popups at start-up, plays the start-up logos faster, and works around one of the game's own random crashes.
+- Extras: closes the Ubisoft login popups at start-up, can play the start-up logos faster (off unless you switch it on in the menu), and works around one of the game's own random crashes.
 
 **The [user guide](docs/GUIDE.md)** explains everything on screen and every menu option, with pictures.
 

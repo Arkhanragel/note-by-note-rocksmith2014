@@ -191,6 +191,7 @@ size_t g_imageSize = 0;
 Addresses g_addr;  // the addresses in use (from kBuilds, or found by pattern)
 Layout g_lay = kLayoutLearnAndPlay;  // the offsets in use (the build's row; unknown build: L&P's)
 bool g_ready = false;
+bool g_verified = false;  // running on a verified build's table (not on addresses found by pattern)
 uintptr_t g_provider = 0;
 uint32_t g_frozenPid = 0, g_frozenEvent = 0;
 // Wwise counts the pauses of a playback: paused twice, it needs two resumes. The hold watchdog pauses
@@ -497,6 +498,7 @@ bool Init(bool allowUnverified, bool patternsOnly) {
     // Dev test: behave as on an unknown build (only the patterns), on a build we know.
     if (patternsOnly) report::Line("TestPatternsOnly=1: the verified addresses are ignored.");
     const bool verified = build && build->verified && !patternsOnly;
+    g_verified = verified;
     report::Line("Build: %s%s%s", build ? build->name : "unknown", patched ? ", patched on disk" : "",
                  verified ? " (supported)" : build ? " (not verified yet)" : "");
     Log("build: %s%s", build ? build->name : "unknown", patched ? " (modified on disk)" : "");
@@ -561,6 +563,8 @@ bool Init(bool allowUnverified, bool patternsOnly) {
     report::Line("Checks while playing:");
     return true;
 }
+
+bool Verified() { return g_verified; }
 
 void Tick() {
     // One second after a resume, the song clock must be running again.

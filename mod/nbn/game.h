@@ -24,6 +24,10 @@ namespace nbn::game {
 // Writes the start of the report (report.h), which must be open.
 bool Init(bool allowUnverified, bool patternsOnly = false);
 
+// True after Init on a build whose addresses are verified (false: unknown build, a build only found
+// by pattern, or the dev's patternsOnly). What has never run on a build stays off there: see main.cpp.
+bool Verified();
+
 // Call often from the main loop: finishes the report's checks that need time (song clock after a resume).
 void Tick();
 

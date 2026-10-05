@@ -35,6 +35,7 @@
 #include "chart.h"
 #include "detector.h"
 #include "crashfix.h"
+#include "crashlog.h"
 #include "fastintro.h"
 #include "game.h"
 #include "log.h"
@@ -60,9 +61,11 @@ struct Config {
     std::string menuSuffix = "_Game";    // the mode only acts on screens whose name ends like this
     std::string menuSound = "Nav_InGame_Options";
     bool saveWaitAudio = false;          // record each wait to NoteByNote_debug\ (for bug reports)
+    bool crashLog = true;                // write the game's serious errors to the log (crashlog.h)
     bool testUnverifiedGame = false;     // run on a game build nobody verified (addresses found by pattern)
     int testAutoPassMs = 0;              // a wait passes by itself after this long (testing without a guitar)
     bool testPatternsOnly = false;       // dev: ignore the verified addresses, use only the patterns
+    bool testFastIntro = false;          // the fast intro also on a game build that isn't verified (to try it there)
     std::string stringCalibration;       // the string identification's calibration (stringid::Calibration text)
 };
 
@@ -221,14 +224,17 @@ Config LoadConfig() {
                 "; 1 = at game start, close the Ubisoft login and \"servers not available\" popups by\n"
                 ";     themselves (the title's Press Enter and the profile choice stay yours)\n"
                 "SkipUbisoftPopups=1\n"
-                "; Play the start-up logos this many times faster (1 = normal speed, up to 8)\n"
-                "FastIntro=4\n"
+                "; Play the start-up logos this many times faster (1 = normal speed, up to 8; 4 is what the menu sets)\n"
+                "FastIntro=1\n"
                 "; 1 = work around the game's own random crash / freeze (mostly at start-up): puts back\n"
                 ";     a Windows function the game's copy protection redirects (in memory only)\n"
                 "FixGameCrash=1\n"
                 "; 1 = save the guitar audio of each wait to NoteByNote_debug\\wait_<time>.wav (useful\n"
                 ";     to report a note that wasn't recognised; the files add up, delete them by hand)\n"
                 "SaveWaitAudio=0\n"
+                "; 1 = if the game hits a serious error (a crash), write where it happened to\n"
+                ";     NoteByNote.log, so the log can be sent with a report right away (0 = off)\n"
+                "CrashLog=1\n"
                 "; For testers of other game versions (leave both at 0 otherwise):\n"
                 "; 1 = on a game version Note-by-Note doesn't know yet, use the game addresses it finds by\n"
                 ";     itself (see NoteByNote_report.txt)\n"
@@ -313,12 +319,14 @@ Config LoadConfig() {
     c.initial.skipGreyed = GetPrivateProfileIntW(L"NoteByNote", L"SkipGreyedNotes", 1, ini.c_str()) != 0;
     c.initial.stopSong = GetPrivateProfileIntW(L"NoteByNote", L"StopSong", 1, ini.c_str()) != 0;
     c.initial.skipPopups = GetPrivateProfileIntW(L"NoteByNote", L"SkipUbisoftPopups", 1, ini.c_str()) != 0;
-    c.initial.fastIntro = std::max(1, std::min(8, (int)GetPrivateProfileIntW(L"NoteByNote", L"FastIntro", 4, ini.c_str())));
+    c.initial.fastIntro = std::max(1, std::min(8, (int)GetPrivateProfileIntW(L"NoteByNote", L"FastIntro", 1, ini.c_str())));
     c.initial.fixCrash = GetPrivateProfileIntW(L"NoteByNote", L"FixGameCrash", 1, ini.c_str()) != 0;
     c.saveWaitAudio = GetPrivateProfileIntW(L"NoteByNote", L"SaveWaitAudio", 0, ini.c_str()) != 0;
+    c.crashLog = GetPrivateProfileIntW(L"NoteByNote", L"CrashLog", 1, ini.c_str()) != 0;
     c.testUnverifiedGame = GetPrivateProfileIntW(L"NoteByNote", L"TestUnverifiedGame", 0, ini.c_str()) != 0;
     c.testAutoPassMs = std::max(0, (int)GetPrivateProfileIntW(L"NoteByNote", L"TestAutoPassMs", 0, ini.c_str()));
     c.testPatternsOnly = GetPrivateProfileIntW(L"NoteByNote", L"TestPatternsOnly", 0, ini.c_str()) != 0;  // not in the default ini
+    c.testFastIntro = GetPrivateProfileIntW(L"NoteByNote", L"TestFastIntro", 0, ini.c_str()) != 0;        // not in the default ini
     // Layout (defaults from overlay::Settings; sizes kept in the range the mouse allows).
     const overlay::Settings d;
     auto num = [&](const wchar_t* key, int def) { return (int)GetPrivateProfileIntW(L"NoteByNote", key, def, ini.c_str()); };
@@ -1351,6 +1359,7 @@ struct MainLoop {
             }
         }
         fastintro::Tick(menuOk || lastPreMenu == "TitleScreen");
+        crashfix::Tick();  // the protector's redirect can appear after the mod started
         if (now - lastHeartbeat > 5000) Heartbeat(now);
         startup::Tick(st.skipPopups, menuOk, menu, overlay::GameWindow(), now);  // Ubisoft popups at game start
         if (!menuOk) return false;
@@ -1377,7 +1386,6 @@ struct MainLoop {
     // What the mod sees, every 5 s (diagnostics).
     void Heartbeat(DWORD now) {
         lastHeartbeat = now;
-        crashfix::Tick();
         songStats.Save();  // (only if something changed: a game crash or exit loses at most 5 s)
         double ht = -1;
         const bool tOk = game::GetSongTime(&ht);
@@ -1468,7 +1476,9 @@ struct MainLoop {
             clockT = ct;
         } else if (now - clockTick >= 1000) {
             const double moved = ct - clockT;
-            if (moved == 0 && ++clockStill < 20) {
+            // A second that began at exactly 0 doesn't count either: when the music starts the clock
+            // jumps to where the music is (seen: 0.00 -> 2.96 s), which is not its speed.
+            if ((moved == 0 || clockT == 0) && ++clockStill < 20) {
                 clockTick = 0;  // not started yet (the song's intro): measure again
             } else {
                 report::Limited("clock", 3, "  Song clock: moved %.2f s in 1 s: %s", moved,
@@ -1967,10 +1977,19 @@ DWORD WINAPI MainThread(LPVOID) {
         st.enabled, cfg.menuKey, cfg.skipKey, st.leadMs, st.earlyMs, st.lateMs, st.acceptOctaves, st.showBanner,
         st.waitChords);
     crashfix::Start(st.fixCrash);    // first of all: the game can crash any moment until then
-    fastintro::Start(st.fastIntro);  // then: the logos are already playing
+    if (cfg.crashLog) crashlog::Start();  // and if it does crash, the log says where
+    else Log("crash log: off (CrashLog=0)");
     if (cfg.testUnverifiedGame || cfg.testAutoPassMs)
         report::Line("Test settings: TestUnverifiedGame=%d, TestAutoPassMs=%d", cfg.testUnverifiedGame, cfg.testAutoPassMs);
-    if (!game::Init(cfg.testUnverifiedGame, cfg.testPatternsOnly)) { fastintro::Tick(true); return 0; }
+    if (!game::Init(cfg.testUnverifiedGame, cfg.testPatternsOnly)) return 0;
+    // After Init: it tells which build this is and waits until the game's code is decrypted (the mod
+    // can start while the protector is still at work). The Windows clocks are only made faster on a
+    // build where that has been seen to work; on a build under test the game must start as it does
+    // without the mod. TestFastIntro=1 tries it there.
+    if (game::Verified() || cfg.testFastIntro)
+        fastintro::Start(st.fastIntro);  // the logos are already playing
+    else
+        Log("fast intro: off (this game version isn't verified yet; TestFastIntro=1 tries it)");
     overlay::Start(st);
 
     timeBeginPeriod(1);

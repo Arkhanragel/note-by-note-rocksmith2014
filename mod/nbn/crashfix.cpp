@@ -21,6 +21,7 @@ uint8_t* g_fn = nullptr;       // ntdll!NtProtectVirtualMemory in memory
 uint8_t g_orig[5] = {};        // its original first instruction (mov eax, <system call number>)
 NtProtectFn g_direct = nullptr;  // our own stub: the original instruction + jmp to the rest of the function
 bool g_on = false;
+bool g_wanted = false;         // the player's setting (false: only log what is seen)
 int g_repairs = 0;
 
 // The first 16 bytes of an ntdll export as they are in ntdll.dll on disk, with the one absolute
@@ -78,15 +79,12 @@ bool Repair() {
     return std::memcmp(g_fn, g_orig, 5) == 0;
 }
 
-}  // namespace
-
-void Start(bool on) {
+// The redirect is there (g_fn starts with a jmp): checks it is the hook we know and removes it.
+// Whatever happens, this runs once: on any doubt g_fn is cleared and nothing is tried again.
+void Install() {
     const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
-    g_fn = ntdll ? (uint8_t*)GetProcAddress(ntdll, "NtProtectVirtualMemory") : nullptr;
-    if (!g_fn) { Log("crash fix: NtProtectVirtualMemory not found"); return; }
-    if (g_fn[0] != 0xE9) { Log("crash fix: NtProtectVirtualMemory is not redirected, nothing to do"); g_fn = nullptr; return; }
     const uint8_t* target = g_fn + 5 + *(const int32_t*)(g_fn + 1);
-    if (!on) { Log("crash fix: off (NtProtectVirtualMemory is redirected to %p)", target); g_fn = nullptr; return; }
+    if (!g_wanted) { Log("crash fix: off (NtProtectVirtualMemory is redirected to %p)", target); g_fn = nullptr; return; }
 
     // Only a plain "mov eax, n" whose following bytes are exactly ntdll's: anything else is not the
     // hook we know, so we leave it alone.
@@ -115,8 +113,38 @@ void Start(bool on) {
     Log("crash fix: NtProtectVirtualMemory redirect (to %p) %s", target, ok ? "removed, original instruction back" : "could NOT be removed");
 }
 
+}  // namespace
+
+void Start(bool on) {
+    g_wanted = on;
+    const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    g_fn = ntdll ? (uint8_t*)GetProcAddress(ntdll, "NtProtectVirtualMemory") : nullptr;
+    if (!g_fn) { Log("crash fix: NtProtectVirtualMemory not found"); return; }
+    // The mod can be running before the protector has finished starting the game (seen on the
+    // September 2022 build: the game's code was still encrypted then). The redirect isn't there yet
+    // in that case, so Tick keeps looking for it.
+    if (g_fn[0] != 0xE9) { Log("crash fix: NtProtectVirtualMemory is not redirected (yet): watching for it"); return; }
+    Install();
+}
+
 void Tick() {
-    if (!g_on || g_fn[0] != 0xE9) return;
+    if (!g_fn || g_fn[0] != 0xE9) return;
+    if (!g_on) {  // the redirect appeared after the start
+        // The protector may be writing its jmp right now: act only on one that has been the same
+        // for a while (ours would otherwise be overwritten half-way by the rest of theirs).
+        static uint8_t seen[5];
+        static DWORD seenTick = 0;
+        const DWORD now = GetTickCount();
+        if (!seenTick || std::memcmp(seen, g_fn, 5) != 0) {
+            std::memcpy(seen, g_fn, 5);
+            seenTick = now ? now : 1;
+            return;
+        }
+        if (now - seenTick < 200) return;
+        Log("crash fix: NtProtectVirtualMemory is redirected now");
+        Install();
+        return;
+    }
     // The protector put its hook back (not seen so far). Repair again, but not forever.
     if (g_repairs >= 10) return;
     const bool ok = Repair();

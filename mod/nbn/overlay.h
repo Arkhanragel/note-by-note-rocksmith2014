@@ -110,7 +110,7 @@ struct Settings {
     int tabNoteSize = 100;       // size of the tab's fret numbers, percent (60..130); fast passages
                                  // shrink them a little below this by themselves
     bool skipPopups = true;      // at game start, answer the Ubisoft login/server dialogs (startup.h)
-    int fastIntro = 4;           // start-up logos this many times faster, 1 = normal (fastintro.h)
+    int fastIntro = 1;           // start-up logos this many times faster, 1 = normal = the default (fastintro.h)
     bool fixCrash = true;        // remove the protector's NtProtectVirtualMemory redirect (crashfix.h)
 
     // Colours (theme.h): a ready-made theme, and the player's own colour for any of its slots
