@@ -2552,6 +2552,9 @@ struct TabShow {
     bool nextFound = false;   // the next note to play is highlighted once (on the cursor's row first)
     float highlight = 1.0f;   // strength of that highlight (the dimmed copy on a coming row: fainter)
     float pulse = 1.0f;       // the highlight's pulsing
+    // The item being drawn: the width its trouble-spot dots may take (the room up to the nearest other
+    // note that has them). Set by DrawTabItem for its fret boxes.
+    float dotsMax = FLT_MAX;
 };
 
 // Played/passed notes fade out over half a second after they end (held notes stay while they ring);
@@ -2744,14 +2747,28 @@ void DrawFretBox(const TabStaff& tab, const TabShow& sh, const TabItem& it, int 
         // A trouble spot's note: one dot per good try needed, filled green for each time it was played on
         // time in a row since it went wrong (all filled = cleared).
         const int need = std::min(it.note->need, 10), got = std::min(it.note->streak, need);
-        const float z = std::max(0.9f, tab.nsz), r = 3.8f * s * z, step = 10.5f * s * z, dy = y + bh + r + 3 * s;
-        const float dx0 = x - (need - 1) * step * 0.5f;
+        const float z = std::max(0.9f, tab.nsz), r0 = 3.8f * s * z, step0 = 10.5f * s * z, dy = y + bh + r0 + 3 * s;
         const float da = std::max(a, 0.6f);
-        for (int k = 0; k < need; ++k) {
-            const ImVec2 c(dx0 + k * step, dy);
-            tab.dl->AddCircleFilled(c, r + 1.2f * s, Col(theme::kPanel, (int)(230 * da)));
-            if (k < got) tab.dl->AddCircleFilled(c, r, IM_COL32(70, 200, 100, (int)(255 * da)));
-            else tab.dl->AddCircle(c, r - 0.4f * s, Col(theme::kText, (int)(200 * da)), 0, 1.6f * s);
+        const ImU32 green = IM_COL32(70, 200, 100, (int)(255 * da));
+        // Notes close together: the dots get smaller so they stay clear of the next note's (dotsMax =
+        // the room there is). Past a point they'd be too small to count: a bar that fills up instead.
+        const float natural = (need - 1) * step0 + 2 * (r0 + 1.2f * s), dotsMax = sh.dotsMax;
+        const float k = dotsMax < natural ? std::max(0.0f, dotsMax) / natural : 1.0f;
+        if (k >= 0.6f) {
+            const float r = r0 * k, step = step0 * k;
+            const float dx0 = x - (need - 1) * step * 0.5f;
+            for (int d = 0; d < need; ++d) {
+                const ImVec2 c(dx0 + d * step, dy);
+                tab.dl->AddCircleFilled(c, r + 1.2f * s * k, Col(theme::kPanel, (int)(230 * da)));
+                if (d < got) tab.dl->AddCircleFilled(c, r, green);
+                else tab.dl->AddCircle(c, r - 0.4f * s, Col(theme::kText, (int)(200 * da)), 0, 1.6f * s * k);
+            }
+        } else {
+            const float hw = std::max(5 * s, std::max(0.0f, dotsMax) * 0.5f), hh = r0 * 0.75f;
+            const ImVec2 p0(x - hw, dy - hh), p1(x + hw, dy + hh);
+            tab.dl->AddRectFilled(p0, p1, Col(theme::kPanel, (int)(230 * da)), hh);
+            if (got > 0) tab.dl->AddRectFilled(p0, ImVec2(p0.x + 2 * hw * got / need, p1.y), green, hh);
+            tab.dl->AddRect(p0, p1, Col(theme::kText, (int)(200 * da)), hh, 0, 1.3f * s);
         }
     }
     if (run.empty()) {
@@ -2878,6 +2895,12 @@ void DrawTabItem(const TabStaff& tab, TabShow& sh, const TabItem& it) {
             if (t.frets[str] >= 0)
                 tab.dl->AddRectFilled(ImVec2(std::min(x, xEnd), tab.RowY(str) - 3 * s), ImVec2(std::max(x, xEnd), tab.RowY(str) + 3 * s),
                                     (kStringColor[str] & 0x00FFFFFF) | ((ImU32)(150 * a) << 24), 3 * s);
+    // Trouble-spot dots: no wider than the room up to the nearest other note that has them.
+    sh.dotsMax = FLT_MAX;
+    if (t.streak >= 0 && t.need > 0)
+        for (const TabItem& o : *sh.items)
+            if (&o != &it && o.note->streak >= 0 && o.note->need > 0)
+                sh.dotsMax = std::min(sh.dotsMax, std::abs(tab.TimeX(o.time) - x) - 4 * s);
     for (int str = 0; str < tab.n; ++str)
         if (t.frets[str] >= 0) DrawFretBox(tab, sh, it, str, x, a, next);
     // Techniques: what every string of a chord shares (palm mute, mute, accent...) is marked once above
@@ -2993,7 +3016,9 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
     tab.gap = 28 * s;
     tab.top = 60 * s;
     const float w = std::min(ds.x, st.tabWidth * S), labelW = 26 * s, pad = 12 * s;
-    const float bottom = rhythm ? 18 * s + tab.stemLen + 18 * s : 18 * s;
+    // (Without the rhythm lane: 30, not 18, so a trouble spot's dots under the lowest string fit in
+    // the row; with 18 they were cut in half by the row's edge.)
+    const float bottom = rhythm ? 18 * s + tab.stemLen + 18 * s : 30 * s;
     // Rows (pages only, setting tabRows): the box holds 1..4 staffs, one under the other.
     const int rows = st.tabPage ? std::max(1, std::min(kMaxRows, st.tabRows)) : 1;
     tab.rowH = tab.top + tab.gap * (tab.n - 1) + bottom;
