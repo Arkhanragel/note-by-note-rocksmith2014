@@ -15,4 +15,8 @@ namespace nbn::crashlog {
 // Installs the handler (once).
 void Start();
 
+// Removes it. Must be called before the DLL is freed (the dev unload): a handler left registered
+// points into freed memory, and the game's next exception, even a harmless one, jumps there.
+void Stop();
+
 }  // namespace nbn::crashlog

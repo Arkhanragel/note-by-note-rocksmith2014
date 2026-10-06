@@ -102,6 +102,8 @@ LONG CALLBACK Handler(EXCEPTION_POINTERS* info) {
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
+void* g_registration = nullptr;  // what AddVectoredExceptionHandler returned, for Stop
+
 }  // namespace
 
 void Start() {
@@ -113,8 +115,14 @@ void Start() {
     g_selfEnd = g_self + ((const IMAGE_NT_HEADERS*)(g_self + dos->e_lfanew))->OptionalHeader.SizeOfImage;
     g_exe = (uintptr_t)GetModuleHandleW(nullptr);
     // 0 = after the handlers already registered: ours only looks.
-    const bool ok = AddVectoredExceptionHandler(0, Handler) != nullptr;
+    g_registration = AddVectoredExceptionHandler(0, Handler);
+    const bool ok = g_registration != nullptr;
     Log("crash log: %s (serious exceptions are written here, once each)", ok ? "on" : "could not be installed");
+}
+
+void Stop() {
+    if (g_registration) RemoveVectoredExceptionHandler(g_registration);
+    g_registration = nullptr;
 }
 
 }  // namespace nbn::crashlog

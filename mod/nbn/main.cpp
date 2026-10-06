@@ -2025,6 +2025,7 @@ DWORD WINAPI MainThread(LPVOID) {
     fastintro::Stop();  // before the overlay: it uninitializes MinHook
     overlay::Stop();
     timeEndPeriod(1);
+    crashlog::Stop();  // or the game's next exception calls into the freed DLL (seen: it crashed the game)
     Log("Note-by-Note unloaded");
     LogClose();
     FreeLibraryAndExitThread(g_self, 0);
