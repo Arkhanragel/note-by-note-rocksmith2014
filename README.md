@@ -18,7 +18,7 @@ A free, fan-made mod for **Rocksmith 2014 Edition - Remastered** (PC, Steam): th
 - **Shows the music coming up** as guitar tab, with bar lines, beats and rhythm (stems and beams). It can scroll past a fixed line, or show pages that stand still while a cursor moves over them. With pages you can use up to **four rows**: the next pages already wait in the rows below, so there's no page turn to wait for. Each new page starts by repeating the end of the page before it (how much is up to you), dimmed, and while the cursor plays that part a dimmed copy of the cursor shows on the next row too, so your eyes can move down in time. The cursor stops exactly on the note the song waits for, and the note to play is highlighted. Notes the song has passed get a colour: green = played on time, amber = the song waited for it, red = skipped or not played.
 - **Follows the game.** It uses the difficulty (Dynamic Difficulty) you are playing at. Tested mostly with guitar in Learn a Song; Riff Repeater and bass are supported, but less tested.
 - **Starts simple.** A new install shows the note to play with its fretboard and a plain tab. The next notes, fingers and hand position, pick strokes and the rhythm under the tab are switched on in the menu when you want them.
-- **In-game menu (F8):** choose the mode (Off, Show the notes, Wait for each note), wait for chords too or only single notes, timing, and tab and display options. You can drag and resize everything with the mouse while the menu is open. On the game's progress bar, click a phrase or drag over a part to practise only that. Colour themes (Default, High contrast, Midnight, Vintage, Paper), and any colour can be changed with a colour wheel or a hex code; the string colours stay the game's. F9 skips the note it's waiting for.
+- **In-game menu (F5):** choose the mode (Off, Show the notes, Wait for each note), wait for chords too or only single notes, timing, and tab and display options. You can drag and resize everything with the mouse while the menu is open. On the game's progress bar, click a phrase or drag over a part to practise only that. Colour themes (Default, High contrast, Midnight, Vintage, Paper), and any colour can be changed with a colour wheel or a hex code; the string colours stay the game's. F6 skips the note it's waiting for.
 - Extras: closes the Ubisoft login popups at start-up, can play the start-up logos faster (off unless you switch it on in the menu), and works around one of the game's own random crashes.
 
 **The [user guide](docs/GUIDE.md)** explains everything on screen and every menu option, with pictures.
@@ -44,7 +44,7 @@ Not sure which one you have? The setup tells you when it finds your game folder.
 
 1. Download the latest `NoteByNote-<version>.zip` from [Releases](../../releases) and unzip it.
 2. Close Rocksmith, run **`Note-by-Note Setup.exe`**, check the game folder it found and press **Install**.
-3. Start the game as usual. In a song, press **F8** for the menu.
+3. Start the game as usual. In a song, press **F5** for the menu.
 
 The setup backs up every game-folder file it replaces, and **Uninstall** puts them back exactly as they were (a copy of the setup stays in `<game>\NoteByNote_install\`). Settings live in `NoteByNote.ini` in the game folder. Your settings, practice records and the log stay after an uninstall, so a later install finds them again; tick **"also delete my settings, records and logs"** to remove everything the mod created.
 

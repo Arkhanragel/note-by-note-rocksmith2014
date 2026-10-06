@@ -13,7 +13,7 @@
 //     step with the highway (left of the highway, below the lyrics by default),
 //     with bar lines + bar numbers, faint beat lines, tails on held notes and rhythm stems/beams
 //     under the staff, to read the rhythm; fast passages spread out so every fret stays readable
-//   - the MENU (toggle key, F8 by default): mode on/off, skip note, timing settings. While it is
+//   - the MENU (toggle key, F5 by default): mode on/off, skip note, timing settings. While it is
 //     open the banner, clock and tab can be dragged with the mouse (body = move, bottom-right
 //     corner = resize); the menu has a button to put them all back
 //
@@ -277,6 +277,12 @@ struct View {
     bool calibrating = false;
     bool calibrated = false;
 };
+
+// The keys the on-screen texts name ("F6 = skip   F5 = menu", the menu's buttons): the virtual-key
+// codes main.cpp read from the ini. Call before Start (the texts are built once, not locked).
+void SetKeys(int menuVk, int skipVk);
+// A key's name for the player: "F5" for a function key, the code for any other ("key 0x4D").
+std::string KeyName(int vk);
 
 // Starts a thread that waits for d3d9.dll and installs the hooks. Returns immediately.
 void Start(const Settings& initial);

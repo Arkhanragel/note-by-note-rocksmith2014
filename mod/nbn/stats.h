@@ -4,7 +4,7 @@
 //
 // Each note has a "trouble" value between 0 and 1, from the times it went wrong:
 //   waited for, then played           0.25 + up to 0.5 for a long wait (4 s or more) + 0.25 after a wrong note
-//   skipped (F9 / the menu)           1
+//   skipped (the skip key / the menu)           1
 //   missed ("Show the notes": the song passed it while the player was playing)   0.75
 // A new one counts as much as all the earlier ones together. Played on time (no stop) counts towards
 // clearing it instead: after `clearAfter` times in a row (the player's setting) the note is no trouble

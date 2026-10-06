@@ -4,7 +4,7 @@ Note-by-Note is a mod for Rocksmith 2014: the song waits at each note and chord 
 
 The pictures are drawings, not screenshots. Their notes, chords and song parts are made-up examples, so each picture can show exactly the case it explains.
 
-Most of what is described here can be changed. Where it can, the guide names the option and the menu page it is on, like this: ("Late notes count", Playing page). The menu opens with F8, and [The menu](#the-menu) lists every option.
+Most of what is described here can be changed. Where it can, the guide names the option and the menu page it is on, like this: ("Late notes count", Playing page). The menu opens with F5, and [The menu](#the-menu) lists every option.
 
 ## What you see on screen
 
@@ -22,17 +22,17 @@ Each part can be moved and resized with the mouse while the menu is open (see [M
 ## Getting started
 
 1. Install it with `Note-by-Note Setup.exe` (the README that comes with it has the steps) and start the game as usual.
-2. Open a song in **Learn a Song**. When the song starts you see the message "Note-by-Note ON - F8 menu".
+2. Open a song in **Learn a Song**. When the song starts you see the message "Note-by-Note ON - F5 menu".
 3. Play. When a note reaches the line and you have not played it, the song stops and the banner shows that note. Play it and the song goes on.
 
 Two keys are all you need:
 
 | Key | What it does |
 |---|---|
-| **F8** | Opens and closes the Note-by-Note menu. The song is held while the menu is open. |
-| **F9** | Skips the note or chord the song is waiting for. |
+| **F5** | Opens and closes the Note-by-Note menu. The song is held while the menu is open. |
+| **F6** | Skips the note or chord the song is waiting for. |
 
-Both keys can be changed, in the settings file only (`MenuKey` and `SkipKey`, see [Files](#files)).
+Both keys can be changed, in the settings file only (`MenuKey` and `SkipKey`, see [Files](#files)). Up to version 0.3.1 they were F8 and F9: those are also keys of the RSModsPlus drop pedal, so one press did two things. The first start of a newer version moves them to F5 and F6 by itself, unless you had chosen other keys.
 
 Note-by-Note follows the game: it uses the arrangement you chose (lead, rhythm or bass) and the difficulty level the game is showing you. If the game gives you fewer notes, Note-by-Note waits for fewer notes.
 
@@ -40,7 +40,7 @@ Note-by-Note follows the game: it uses the arrangement you chose (lead, rhythm o
 
 ![Off, Show the notes, Wait for each note](guide/modes.svg)
 
-You choose the mode at the top of the menu (F8).
+You choose the mode at the top of the menu (F5).
 
 - **Wait for each note**: the song stops at every note you have not played, music and highway together, and goes on the moment you play it. Notes you play on time do not stop anything. It waits for chords as well as single notes; to let chords pass by themselves, switch off "Wait for chords too" (Playing page).
 - **Show the notes**: the song plays as usual and never stops. The banner names each note as it comes and moves on as the song passes it. Use it when you can nearly keep up and want the banner as a guide.
@@ -275,14 +275,14 @@ Note-by-Note remembers, for each song and arrangement, where the song had to wai
 
 ![The Note-by-Note menu on its Screen page](guide/menu.svg)
 
-Press **F8** during a song. The song is held while the menu is open, and everything you change is saved at once.
+Press **F5** during a song. The song is held while the menu is open, and everything you change is saved at once.
 
 1. **The mode**: Off, Show the notes, Wait for each note.
 2. **The song line**: green when the song's notes were read, with the instrument and how many difficulty levels the song has.
-3. **Skip**: the same as F9.
+3. **Skip**: the same as F6.
 4. **The pages**, one for each topic.
 5. **(?)**: rest the mouse on it for an explanation of the option.
-6. **Close**: or press F8 or Esc.
+6. **Close**: or press F5 or Esc.
 
 ### Playing page
 
@@ -377,7 +377,7 @@ All of these are in the game's folder.
 - **"Couldn't read this song's notes, it plays normally."** Go back to the song list, pick the song again and start it. If it keeps happening with one song, report it with the log.
 - **The song stops although I played the note.** Check the tuning first: a string a little off is the usual reason. Then make "Late notes count" longer. A very distorted sound is harder to hear right, so try a cleaner one.
 - **The song stops for an instant at every note.** "Late notes count" is at 0 or too short. Put it back to 150 ms.
-- **It waits for a chord I cannot play yet.** Switch off "Wait for chords too", or press F9 to skip it.
+- **It waits for a chord I cannot play yet.** Switch off "Wait for chords too", or press F6 to skip it.
 - **The banner covers something.** Open the menu and drag it somewhere else, or make it smaller by its corner.
 - **I want only the tab, without the song stopping.** Choose Off: the tab and the clock stay.
 

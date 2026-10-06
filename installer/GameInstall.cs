@@ -199,7 +199,7 @@ class GameInstall {
 
         m.Version = AppVersion();
         m.Save(manifestPath);
-        log($"Note-by-Note {m.Version} is installed. Start the game as usual; press F8 in a song for its menu.");
+        log($"Note-by-Note {m.Version} is installed. Start the game as usual; press F5 in a song for its menu.");
         log($"To uninstall: run \"{Path.Combine(InstallDirName, SetupExeName)}\" in the game folder.");
     }
 

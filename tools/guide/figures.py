@@ -14,7 +14,7 @@ def P_chordchip(name):
 
 
 def keys_line(x, y, extra=''):
-    return T(x, y, extra + 'F9 = skip   F8 = menu', 14, DIM, w=400)
+    return T(x, y, extra + 'F6 = skip   F5 = menu', 14, DIM, w=400)
 
 
 # ---------------------------------------------------------------- the whole screen
@@ -44,7 +44,7 @@ def fig_overview():
     g += T(318, 196, 'Then', 10, DIM, w=400)
     for k, (st, f) in enumerate(((2, 7), (3, 5), (3, 7))):
         g += rect(350 + k * 30, 187, 18, 18, SC[st], 4) + T(359 + k * 30, 196, f, 10, INK if LIGHT[st] else '#fff', 'middle', 700)
-    g += T(318, 234, 'F9 = skip   F8 = menu', 9.5, DIM, w=400)
+    g += T(318, 234, 'F6 = skip   F5 = menu', 9.5, DIM, w=400)
     nk = neck(536, 122, 1, 6, s=0.5, zone=(2, 5), used=[2], bright=[5])
     g += nk.g + dot(nk, 2, 5)
     # The wrong-note panel.
@@ -302,7 +302,7 @@ def fig_cards():
         for i, c in enumerate(cards):
             cg, h = card(x0 + i * (cw + gap), y, cw, hl=(i == now), dim=(i < now), **c)
             q += cg
-        q += rect(x0, y + h + 10, 196, 26, PANEL, 13, 0.85) + T(x0 + 16, y + h + 23, 'F9 = skip   F8 = menu', 12.5, DIM, w=400)
+        q += rect(x0, y + h + 10, 196, 26, PANEL, 13, 0.85) + T(x0 + 16, y + h + 23, 'F6 = skip   F5 = menu', 12.5, DIM, w=400)
         return q, h
 
     a = dict(st=3, fret=10, lo=8, finger=2, count='x2', pickkind='down')
@@ -425,7 +425,7 @@ def fig_messages():
         w = tw(text, 19, 700) + 44
         return rect(64, y - 23, w, 46, PANEL, 10, 0.9, '#3c3c46', 1) + T(64 + w / 2, y, text, 19, TEXT, 'middle', 700)
 
-    g = toast(72, 'Note-by-Note ON  -  F8 menu') + call(1, 36, 72)
+    g = toast(72, 'Note-by-Note ON  -  F5 menu') + call(1, 36, 72)
     g += toast(158, 'string 5 (A) sounds a bit low. Tune it up a little, to A') + call(3, 36, 158)
     cx = 880
     g += panel(cx - 100, 44, 200, 142, GOLD, 3) + T(cx, 72, 'the song goes on in', 15, DIM, 'middle', 400) + T(cx, 132, 3, 76, GOLD, 'middle', 700)
@@ -547,7 +547,7 @@ def fig_menu():
     g += call(3, at['skip_left'] - 20, at['song_y']) + call(4, at['tabs_end'] + 20, at['tabs_y'])
     g += call(5, 36 + 26 + tw('The note to play (the banner)', 13.5, 400) + 50, at['tabs_y'] + 62)
     g += call(6, at['close_left'] - 20, at['close_y'])
-    return svg(W, H, 'The Note-by-Note menu (F8), on its Screen page', g)
+    return svg(W, H, 'The Note-by-Note menu (F5), on its Screen page', g)
 
 
 def fig_practice_page():
@@ -595,7 +595,7 @@ def fig_themes():
         g += rect(x, 20, 190, 126, pan, 10, 1, SC[2], 2.2)
         g += T(x + 14, 46, [('Play fret 7 on ', text), ('string 4', SC[2])], 14, w=700)
         g += T(x + 14, 72, [('Play the chord  ', text), ('A5', chord)], 14, w=700)
-        g += T(x + 14, 98, 'F9 = skip   F8 = menu', 11.5, dim, w=400)
+        g += T(x + 14, 98, 'F6 = skip   F5 = menu', 11.5, dim, w=400)
         g += rect(x + 14, 114, 58, 18, menu, 3) + T(x + 43, 123, 'Menu', 11, '#ffffff', 'middle', 400)
         g += T(x + 95, 168, name, 15, TEXT, 'middle', 600)
     return svg(W, H, 'The five colour themes: Default, High contrast, Midnight, Vintage, Paper', g)

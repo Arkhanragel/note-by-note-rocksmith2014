@@ -1,4 +1,4 @@
-// theme.h: the overlay's colours ("skins"). The player picks a ready-made theme in the F8 menu and
+// theme.h: the overlay's colours ("skins"). The player picks a ready-made theme in the menu and
 // can change any single colour of it with a colour picker (or a hex code in NoteByNote.ini).
 //
 // The string colours are NOT part of a theme: they are the game's highway colours (red, yellow,

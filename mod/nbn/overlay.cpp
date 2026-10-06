@@ -49,6 +49,12 @@ struct Shared {
 } g;
 std::atomic<bool> g_menuOpen{false};
 
+// The texts that name the two keys. SetKeys rebuilds them before the render thread exists, so they
+// are read without a lock.
+std::string g_keysLine = "F6 = skip   F5 = menu";  // the last line of the banner
+std::string g_skipNoteText = "Skip this note (F6)", g_skipChordText = "Skip this chord (F6)";
+std::string g_closeText = "Close (F5)";
+
 // The mouse, for the practice bar (it works without the menu). The window hook records what it sees;
 // the render thread does the dragging. The bar's box (client pixels) says which clicks are ours.
 std::atomic<int> g_mouseX{-10000}, g_mouseY{-10000};
@@ -1026,7 +1032,7 @@ struct BannerBox {
     float k = 1;           // the text's scale (1 = its normal size)
     ImVec2 text;           // top-left of the text block: always the box's top, so "Play ..." never moves when
                            // lines come and go under it
-    float keysY = 0;       // top of the last line ("F9 = skip  F8 = menu"), pinned to the box's bottom
+    float keysY = 0;       // top of the last line ("F6 = skip  F5 = menu"), pinned to the box's bottom
     float thenY = 0;       // top of the "Then" row (bannerAhead), pinned above the last line: always the same
                            // place and size, whatever the text above it does (it changed size with the text
                            // from one note to the next and was hard to read)
@@ -1238,7 +1244,7 @@ void DrawBanner(ImDrawList* dl, const View& v, const Settings& st, float S, ImVe
     // The note's name, only with the small tab (the fretboard's dot has it in a tag).
     std::vector<Seg> line2;
     if (v.midi >= 0 && !st.bannerNeck) line2.push_back({"note " + music::NoteName(v.midi), Col(theme::kTextDim)});
-    const std::vector<Seg> line3 = {{v.fret == 0 ? "(no finger on the neck)   " : "", Col(theme::kTextDim)}, {"F9 = skip   F8 = menu", Col(theme::kTextDim)}};
+    const std::vector<Seg> line3 = {{v.fret == 0 ? "(no finger on the neck)   " : "", Col(theme::kTextDim)}, {g_keysLine, Col(theme::kTextDim)}};
     const std::vector<std::vector<Seg>> linesH = WrapLines(g_fontUi, mid, HintLines(v.hint), kBannerTextW * s);
     // How to play it (slide, bend, hammer-on...), from the song: "Slide: then slide UP to fret 9 ..."
     // Several steps (a note linked into the next ones: a vibrato that ends in a slide) are numbered.
@@ -1374,7 +1380,7 @@ void DrawChordBanner(ImDrawList* dl, const View& v, const Settings& st, float S,
         line2.push_back({v.frets[i] == 0 ? " open" : " fret " + std::to_string(v.frets[i]), Col(theme::kText)});
         if (v.notes[i] >= 0) line2.push_back({" = " + music::NoteName(v.notes[i], flats), Col(theme::kTextDim)});
     }
-    const std::vector<Seg> line3 = {{played < n ? "x = don't play that string   " : "", Col(theme::kTextDim)}, {"F9 = skip   F8 = menu", Col(theme::kTextDim)}};
+    const std::vector<Seg> line3 = {{played < n ? "x = don't play that string   " : "", Col(theme::kTextDim)}, {g_keysLine, Col(theme::kTextDim)}};
     const std::vector<std::vector<Seg>> linesH = WrapLines(g_fontUi, mid, HintLines(v.hint), kBannerTextW * s);
     // How to play it (palm mute, accent, a slide of the whole chord...).
     std::vector<std::vector<Seg>> linesT = HandLines(v, st);
@@ -1756,7 +1762,7 @@ void DrawCardsBanner(ImDrawList* dl, const View& v, const Settings& st, float S,
     dl->AddRectFilled(l0, l1, Col(theme::kPanel, 190), lineH * 0.5f);
     const ImVec2 lt(l0.x + 14 * s, l0.y + 5 * s);
     if (!DrawHoldCountdown(dl, v, st, lt, tiny * 0.9f, s * 0.9f))
-        dl->AddText(g_fontUi, tiny, lt, Col(theme::kTextDim), "F9 = skip   F8 = menu");
+        dl->AddText(g_fontUi, tiny, lt, Col(theme::kTextDim), g_keysLine.c_str());
 }
 
 // ------------------------------------------------------------------ the mistake panel
@@ -3108,7 +3114,7 @@ void DrawTab(ImDrawList* dl, const View& v, const Settings& st, float S, ImVec2 
 }
 
 // A short message in the middle of the screen, with opacity a (the caller fades it: a message repeated
-// quickly, like "Skipped" at every F9 in a fast passage, just stays up instead of blinking).
+// quickly, like "Skipped" at every skip key press in a fast passage, just stays up instead of blinking).
 void DrawToast(ImDrawList* dl, const std::string& text, float a, float s, ImVec2 ds) {
     if (text.empty() || a <= 0) return;
     const float size = 30 * s, pad = 16 * s;
@@ -3741,7 +3747,7 @@ void DrawMenu(const View& v, const Settings& st, float s, ImVec2 ds) {
         ImGui::AlignTextToFramePadding();
         ImGui::TextColored(v.chartOk ? ImVec4(0.45f, 0.85f, 0.45f, 1) : ImVec4(1.0f, 0.65f, 0.25f, 1), "%s",
                            v.chartInfo.empty() ? "No song playing" : v.chartInfo.c_str());
-        const char* skipText = v.chord ? "Skip this chord (F9)" : "Skip this note (F9)";
+        const char* skipText = v.chord ? g_skipChordText.c_str() : g_skipNoteText.c_str();
         const float skipW = ImGui::CalcTextSize(skipText).x + ImGui::GetStyle().FramePadding.x * 2;
         ImGui::SameLine(ImGui::GetContentRegionMax().x - skipW);
         ImGui::BeginDisabled(!v.waiting);
@@ -3773,7 +3779,7 @@ void DrawMenu(const View& v, const Settings& st, float s, ImVec2 ds) {
         ImGui::Separator();
         ImGui::AlignTextToFramePadding();
         ImGui::TextDisabled("Saved automatically. The song is held while this menu is open.");
-        const char* closeText = "Close (F8)";
+        const char* closeText = g_closeText.c_str();
         const float closeW = ImGui::CalcTextSize(closeText).x + ImGui::GetStyle().FramePadding.x * 2;
         ImGui::SameLine(ImGui::GetContentRegionMax().x - closeW);
         if (ImGui::Button(closeText)) open = false;
@@ -4200,6 +4206,21 @@ uint32_t Color(const Settings& st, theme::Slot slot) {
     if (st.colors[slot] >= 0) return (uint32_t)st.colors[slot] & 0xFFFFFF;
     const int t = st.theme >= 0 && st.theme < theme::kThemeCount ? st.theme : 0;
     return theme::kThemes[t].color[slot];
+}
+
+std::string KeyName(int vk) {
+    if (vk >= VK_F1 && vk <= VK_F24) return "F" + std::to_string(vk - VK_F1 + 1);
+    char code[16];
+    snprintf(code, sizeof code, "key 0x%02X", vk & 0xFF);
+    return code;
+}
+
+void SetKeys(int menuVk, int skipVk) {
+    const std::string menu = KeyName(menuVk), skip = KeyName(skipVk);
+    g_keysLine = skip + " = skip   " + menu + " = menu";
+    g_skipNoteText = "Skip this note (" + skip + ")";
+    g_skipChordText = "Skip this chord (" + skip + ")";
+    g_closeText = "Close (" + menu + ")";
 }
 
 void Start(const Settings& initial) {

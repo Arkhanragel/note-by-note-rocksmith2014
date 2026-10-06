@@ -569,7 +569,7 @@ def m_button(x, y, label, dis=False, anchor='start', fill='#771c1c', ink=TEXT, w
 
 
 def menu_window(x, y, w, h, active, body, song='Song notes read from the game (guitar, 25 levels)', mode=2):
-    """The F8 menu: title bar, the mode, the song's line and Skip, the pages' tabs, a page, the footer.
+    """The F5 menu: title bar, the mode, the song's line and Skip, the pages' tabs, a page, the footer.
     Returns (svg, places): places = x / y of the parts, for the callouts."""
     g = rect(x, y, w, h, '#0f0f14', 6, 1, '#3c3c46', 1) + rect(x, y, w, 26, MENU, 6) + rect(x, y + 14, w, 12, MENU)
     g += T(x + 10, y + 13, 'Note-by-Note', 13.5, TEXT, w=400)
@@ -581,7 +581,7 @@ def menu_window(x, y, w, h, active, body, song='Song notes read from the game (g
         px = end + 22
     mode_end = px - 22
     g += T(x + 16, y + 80, song, 13, '#73d973', w=400)
-    bg, bw = m_button(x + w - 16, y + 80, 'Skip this note (F9)', True, 'end')
+    bg, bw = m_button(x + w - 16, y + 80, 'Skip this note (F6)', True, 'end')
     g += bg
     tx_, ty_ = x + 16, y + 110
     tabs = {}
@@ -596,7 +596,7 @@ def menu_window(x, y, w, h, active, body, song='Song notes read from the game (g
     fy = y + h - 58
     g += line(x + 16, fy, x + w - 16, fy, '#52525f', 1)
     g += T(x + 16, fy + 20, 'Saved automatically. The song is held while this menu is open.', 12.5, '#7a7a86', w=400)
-    cg, cw = m_button(x + w - 16, fy + 20, 'Close (F8)', False, 'end')
+    cg, cw = m_button(x + w - 16, fy + 20, 'Close (F5)', False, 'end')
     g += cg
     g += T(x + 16, fy + 44, 'Thanks to RS_ASIO, Rocksmith2014.NET, MinHook and Dear ImGui. Not affiliated with Ubisoft.', 10, '#7a7a86', w=400)
     return g, {'mode_y': y + 50, 'mode_end': mode_end, 'song_y': y + 80, 'song_end': x + 16 + tw(song, 13, 400),

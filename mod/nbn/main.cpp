@@ -11,8 +11,9 @@
 //                            each pick attack, see detector.h)
 //                 tell the overlay (overlay.h) what to show: "play fret 3 on the BLUE string"...
 //
-// Keys (polled, only while the game window is focused): F8 = the Note-by-Note menu (mode on/off,
-// settings; the song is held while it is open), F9 = skip the note the song is waiting for.
+// Keys (polled, only while the game window is focused): F5 = the Note-by-Note menu (mode on/off,
+// settings; the song is held while it is open), F6 = skip the note the song is waiting for.
+// (F8 / F9 until 0.3.1: RSModsPlus uses those for its drop pedal. See MigrateKeys.)
 //
 // "The next note on the highway" = the next note of the chart, where each phrase iteration uses its
 // CURRENT Dynamic Difficulty level. Both the chart (all levels) and the current levels are read from
@@ -56,8 +57,8 @@ HMODULE g_self = nullptr;
 // Fixed settings (read once). The ones the player can change in the menu are overlay::Settings.
 struct Config {
     overlay::Settings initial;           // Enabled, LeadMs, EarlyMs, AcceptOctaves, ShowBanner, WaitChords, ShowClock, Tab*
-    int menuKey = VK_F8;
-    int skipKey = VK_F9;
+    int menuKey = VK_F5;
+    int skipKey = VK_F6;
     std::string menuSuffix = "_Game";    // the mode only acts on screens whose name ends like this
     std::string menuSound = "Nav_InGame_Options";
     bool saveWaitAudio = false;          // record each wait to NoteByNote_debug\ (for bug reports)
@@ -104,6 +105,24 @@ int ParseKey(const std::wstring& k, int def) {
     return def;
 }
 
+// Until 0.3.1 the keys were F8 (menu) and F9 (skip), which RSModsPlus uses for its drop pedal: one
+// press did both things. An ini from those versions is moved to F5 / F6 once. Only a key still on its
+// old default moves (a key the player chose stays), and KeysVersion marks the file as done, so F8 or
+// F9 chosen on purpose afterwards is kept.
+void MigrateKeys(const std::wstring& ini) {
+    if (GetPrivateProfileIntW(L"NoteByNote", L"KeysVersion", 1, ini.c_str()) >= 2) return;
+    wchar_t key[32];
+    auto moveKey = [&](const wchar_t* name, const wchar_t* was, const wchar_t* now) {
+        GetPrivateProfileStringW(L"NoteByNote", name, was, key, 32, ini.c_str());
+        if (_wcsicmp(key, was) == 0) WritePrivateProfileStringW(L"NoteByNote", name, now, ini.c_str());
+    };
+    // (An ini older than MenuKey has ToggleKey instead: MenuKey is then written here, and it wins.)
+    GetPrivateProfileStringW(L"NoteByNote", L"ToggleKey", L"F8", key, 32, ini.c_str());
+    if (_wcsicmp(key, L"F8") == 0) moveKey(L"MenuKey", L"F8", L"F5");
+    moveKey(L"SkipKey", L"F9", L"F6");
+    WritePrivateProfileStringW(L"NoteByNote", L"KeysVersion", L"2", ini.c_str());
+}
+
 Config LoadConfig() {
     const std::wstring ini = IniPath();
     if (GetFileAttributesW(ini.c_str()) == INVALID_FILE_ATTRIBUTES) {
@@ -114,14 +133,16 @@ Config LoadConfig() {
                 "; Note-by-Note for Rocksmith 2014 - settings\n"
                 "; The song waits at each note and chord until you play it.\n"
                 "[NoteByNote]\n"
-                "; Most of these can be changed in the game: press the menu key (F8) during a song.\n"
+                "; Most of these can be changed in the game: press the menu key (F5) during a song.\n"
                 "; 1 = the mode is switched on, 0 = off (the menu changes and saves this)\n"
                 "Enabled=1\n"
                 "; Key that opens the Note-by-Note menu (F1..F12). Avoid F10 (Windows menu key), F11 and\n"
-                "; F12 (Steam screenshot).\n"
-                "MenuKey=F8\n"
+                "; F12 (Steam screenshot), and the keys of other mods: RSModsPlus uses F7 to F10.\n"
+                "MenuKey=F5\n"
                 "; Key that skips the note the song is waiting for\n"
-                "SkipKey=F9\n"
+                "SkipKey=F6\n"
+                "; Internal: 2 = this file has the F5 / F6 keys (older files had F8 / F9 and are moved once)\n"
+                "KeysVersion=2\n"
                 "; Stop this many milliseconds BEFORE the note reaches the line (0 = exactly on it; a little\n"
                 ";     before keeps the game from counting the note as passed if you pause while it waits)\n"
                 "LeadMs=30\n"
@@ -139,9 +160,9 @@ Config LoadConfig() {
                 "; 1 = say when a string (or the whole guitar) sounds out of tune with the song\n"
                 "TuningCheck=1\n"
                 "; 1 = after a wrong single note, show only the spot you really played it on (told by its\n"
-                ";     sound). Needs the calibration in the F8 menu (Playing page) and a clean guitar sound\n"
+                ";     sound). Needs the calibration in the menu (Playing page) and a clean guitar sound\n"
                 "StringDetect=1\n"
-                "; Written by the F8 menu's Calibrate (each open string's sound); empty = not calibrated\n"
+                "; Written by the menu's Calibrate (each open string's sound); empty = not calibrated\n"
                 "StringCalibration=\n"
                 "; 1 = the banner with the note to play, while the song waits for it (with StopSong=0 the\n"
                 ";     banner is always shown: it is what that mode does)\n"
@@ -216,7 +237,7 @@ Config LoadConfig() {
                 "; Tab background, percent: 0 = see-through, 100 = solid (hides the game's text behind it)\n"
                 "TabBackground=69\n"
                 "; Colours of the banner, clock, tab and menu: Default, High contrast, Midnight, Vintage or\n"
-                ";     Paper. Any single colour can be changed in the F8 menu (Colours), or here as a hex\n"
+                ";     Paper. Any single colour can be changed in the menu (Colours), or here as a hex\n"
                 ";     code, e.g. ColorChord=#FFCE54 (keys: ColorPanel, ColorText, ColorTextDim, ColorChord,\n"
                 ";     ColorWarning, ColorHighlight, ColorGrid, ColorRhythm, ColorMenu; missing = the theme's).\n"
                 ";     The string colours are the game's and don't change.\n"
@@ -273,8 +294,9 @@ Config LoadConfig() {
     };
     c.initial.enabled = GetPrivateProfileIntW(L"NoteByNote", L"Enabled", 1, ini.c_str()) != 0;
     // MenuKey; older ini files called it ToggleKey (it used to switch the mode directly).
-    c.menuKey = ParseKey(str(L"MenuKey", str(L"ToggleKey", L"F8").c_str()), VK_F8);
-    c.skipKey = ParseKey(str(L"SkipKey", L"F9"), VK_F9);
+    MigrateKeys(ini);
+    c.menuKey = ParseKey(str(L"MenuKey", str(L"ToggleKey", L"F5").c_str()), VK_F5);
+    c.skipKey = ParseKey(str(L"SkipKey", L"F6"), VK_F6);
     c.initial.leadMs = GetPrivateProfileIntW(L"NoteByNote", L"LeadMs", 30, ini.c_str());
     c.initial.earlyMs = GetPrivateProfileIntW(L"NoteByNote", L"EarlyMs", 300, ini.c_str());
     c.initial.lateMs = std::max(0, std::min(400, (int)GetPrivateProfileIntW(L"NoteByNote", L"LateMs", 150, ini.c_str())));
@@ -1460,7 +1482,7 @@ struct MainLoop {
                 Log("chart: couldn't read the song's notes from memory");
                 overlay::Toast("Note-by-Note: couldn't read this song's notes, it plays normally", 4000);
             } else if (st.enabled) {
-                overlay::Toast("Note-by-Note ON  -  F8 menu", 3500);
+                overlay::Toast("Note-by-Note ON  -  " + overlay::KeyName(cfg.menuKey) + " menu", 3500);
             }
         }
     }
@@ -1725,7 +1747,7 @@ struct MainLoop {
     // Stops the song at `next` (t = the song time now).
     void FreezeAt(const Target& next, double t, DWORD now) {
         // Only a FAILED freeze waits 0.5 s before the next try (e.g. the song is still loading).
-        // (It used to wait after every freeze: with fast notes, or right after F9, the next stop
+        // (It used to wait after every freeze: with fast notes, or right after a skip, the next stop
         // then came up to ~0.35 s late and the song ran past the note.)
         if (!game::Freeze()) {
             nextFreezeTry = now + 500;
@@ -1990,6 +2012,7 @@ DWORD WINAPI MainThread(LPVOID) {
         fastintro::Start(st.fastIntro);  // the logos are already playing
     else
         Log("fast intro: off (this game version isn't verified yet; TestFastIntro=1 tries it)");
+    overlay::SetKeys(cfg.menuKey, cfg.skipKey);
     overlay::Start(st);
 
     timeBeginPeriod(1);
