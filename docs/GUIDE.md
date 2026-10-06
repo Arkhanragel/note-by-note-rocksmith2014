@@ -201,6 +201,7 @@ Note-by-Note compares the notes you play with the song's, string by string. When
 1. Short messages appear in the middle of the screen and fade: the mode switched on, a note skipped.
 2. The count-in after a long wait, under the banner: the beats left before the song goes on. ("Count-in after a wait", Playing page.)
 3. A string that sounds out of tune, and which way to turn it. ("Tell me when my guitar sounds out of tune", Playing page.)
+4. "I can't hear your guitar", on the banner's last line, when the song has waited six seconds without any sound arriving from the guitar. It is not a wrong note: nothing is reaching the mod. It goes away as soon as it hears something. See [If something is not right](#if-something-is-not-right).
 
 ## The tab
 
@@ -366,7 +367,7 @@ All of these are in the game's folder.
 
 | File | What it is |
 |---|---|
-| `NoteByNote.ini` | Your settings. The menu writes it; you can also edit it with Notepad while the game is closed. The menu and skip keys can only be changed here (`MenuKey`, `SkipKey`). |
+| `NoteByNote.ini` | Your settings. The menu writes it; you can also edit it with Notepad while the game is closed. The menu and skip keys can only be changed here (`MenuKey`, `SkipKey`), and so can the input the mod listens to (`TapInput`). |
 | `NoteByNote_stats` | A folder with your trouble spots, one small file for each song and arrangement. |
 | `NoteByNote.log` | What the mod did in the last session, and where the game crashed if it did. Send it when you report a problem. |
 | `NoteByNote_report.txt` | A short summary of the last session: your game's version and whether the mod's checks passed. Send it too. |
@@ -376,6 +377,7 @@ All of these are in the game's folder.
 - **Nothing shows in the game.** Look at `NoteByNote.log`. "UNSUPPORTED game version" means your copy of the game is a version the mod does not know, and it stays switched off there.
 - **"Couldn't read this song's notes, it plays normally."** Go back to the song list, pick the song again and start it. If it keeps happening with one song, report it with the log.
 - **The song stops although I played the note.** Check the tuning first: a string a little off is the usual reason. Then make "Late notes count" longer. A very distorted sound is harder to hear right, so try a cleaner one.
+- **"I can't hear your guitar."** No sound is reaching the mod. Check the guitar is plugged in and its volume is up (and the battery, with a wireless set). If the game itself hears you but the mod does not, the mod may be listening to another input of your audio interface: `NoteByNote.log` has a line "guitar input: listening to [Asio.Input.0], channel 0". It follows the first guitar input that is switched on in `RS_ASIO.ini`, the one the game uses. To make it listen to another one, set `TapInput` in `NoteByNote.ini` (0 or 1 for `[Asio.Input.0]` or `[Asio.Input.1]`, 2 for the microphone input, -1 to choose by itself) and start the game again.
 - **The song stops for an instant at every note.** "Late notes count" is at 0 or too short. Put it back to 150 ms.
 - **It waits for a chord I cannot play yet.** Switch off "Wait for chords too", or press F6 to skip it.
 - **The banner covers something.** Open the menu and drag it somewhere else, or make it smaller by its corner.

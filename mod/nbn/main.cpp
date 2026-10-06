@@ -143,6 +143,10 @@ Config LoadConfig() {
                 "SkipKey=F6\n"
                 "; Internal: 2 = this file has the F5 / F6 keys (older files had F8 / F9 and are moved once)\n"
                 "KeysVersion=2\n"
+                "; Which RS_ASIO input the mod listens to: -1 = the first guitar input that is switched on in\n"
+                ";     RS_ASIO.ini (the one the game uses). 0 or 1 = always [Asio.Input.0] / [Asio.Input.1],\n"
+                ";     2 = [Asio.Input.Mic]. Read when the game starts.\n"
+                "TapInput=-1\n"
                 "; Stop this many milliseconds BEFORE the note reaches the line (0 = exactly on it; a little\n"
                 ";     before keeps the game from counting the note as passed if you pause while it waits)\n"
                 "LeadMs=30\n"
@@ -662,6 +666,12 @@ struct MainLoop {
     int clockStill = 0;  // seconds the clock stood still (the song has not started yet)
     double clockT = 0;
     long long totalSamples = 0;
+    // The guitar input's level: the loudest sample since the last status line, and since the wait began.
+    // A wait that hears NOTHING is not a wrong note: the guitar isn't reaching the mod (unplugged, its
+    // volume down, a flat wireless battery, the wrong input in RS_ASIO.ini). The banner says so.
+    float statusPeak = 0, waitPeak = 0;
+    bool silenceTold = false;         // the "can't hear your guitar" line is up for this wait
+    uint32_t tapInputId = 0;          // TapReader::InputId when it was last logged
     DebugAudio debugAudio;
     long long waitAudioStart = 0;
     const std::wstring debugDir = DllDir() + L"NoteByNote_debug\\";
@@ -1081,12 +1091,23 @@ struct MainLoop {
             lastTapTry = now;
             if (tap.Open()) Log("guitar input connected (GuitarTap, %u Hz)", tap.SampleRate());
         }
+        // Which of RS_ASIO's inputs the tap carries (it can change: an input that stops hands over).
+        if (tap.IsOpen() && tap.InputId() != tapInputId) {
+            tapInputId = tap.InputId();
+            Log("guitar input: listening to %s", tap.InputName().c_str());
+            report::Limited("tapinput", 3, "  Guitar input: %s", tap.InputName().c_str());
+        }
         events.clear();
         eventPos.clear();
         chordResults.clear();
         samples.clear();
         tap.ReadNew(samples);
         totalSamples += (long long)samples.size();
+        for (const float s : samples) {
+            const float a = std::fabs(s);
+            if (a > statusPeak) statusPeak = a;
+            if (a > waitPeak) waitPeak = a;
+        }
         debugAudio.Push(samples);
         pending.insert(pending.end(), samples.begin(), samples.end());
         // The chord to check: the one we're waiting for, or the next one on the highway (early hits).
@@ -1412,9 +1433,41 @@ struct MainLoop {
         double ht = -1;
         const bool tOk = game::GetSongTime(&ht);
         game::GetPhraseLevels(&levels);
-        Log("status: menu=%s key=%s chart=%s enabled=%d t=%s%.3f cursor=%.3f frozen=%d hold=%d tap=%d samples=%lld levels=[%s]",
+        // peak = the loudest the guitar input got since the last status line (dB below full scale;
+        // around -85 is an input with nothing playing, -120 = no samples at all).
+        Log("status: menu=%s key=%s chart=%s enabled=%d t=%s%.3f cursor=%.3f frozen=%d hold=%d tap=%d samples=%lld peak=%.0fdB levels=[%s]",
             menuOk ? menu.c_str() : "?", lastKey.c_str(), chartOk ? chart.arrangement.c_str() : "-", st.enabled,
-            tOk ? "" : "(n/a)", ht, cursor, frozen, menuHold, tap.IsOpen(), totalSamples, Join(levels).c_str());
+            tOk ? "" : "(n/a)", ht, cursor, frozen, menuHold, tap.IsOpen(), totalSamples, PeakDb(statusPeak),
+            Join(levels).c_str());
+        statusPeak = 0;
+    }
+
+    static double PeakDb(float peak) { return peak > 1e-6f ? 20.0 * std::log10((double)peak) : -120.0; }
+
+    // A wait that has heard nothing for a while: say that the guitar isn't arriving, instead of leaving
+    // the player in front of a song that just doesn't move. Below kSilentPeak is an input's own noise
+    // (a quiet pluck is far above it); the line goes away as soon as anything is heard.
+    void TellSilence(DWORD now) {
+        constexpr float kSilentPeak = 0.003f;  // -50 dB: the detector's gate is -45 dB
+        constexpr DWORD kSilentMs = 6000;
+        if (waitPeak >= kSilentPeak) {
+            if (silenceTold) {
+                silenceTold = false;
+                waitHint.clear();
+                Log("  the guitar is heard again (peak %.0f dB)", PeakDb(waitPeak));
+            }
+            return;
+        }
+        if (silenceTold || now - frozenTick < kSilentMs) return;
+        silenceTold = true;
+        const std::string input = tap.InputName();
+        waitHint = {{tap.IsOpen() ? "I can't hear your guitar: check it is plugged in and its volume is up"
+                                  : "I can't hear your guitar: the guitar input didn't start",
+                     hint::kWhite}};
+        Log("  no sound from the guitar for %.0f s (tap %s, peak %.0f dB, listening to %s)", kSilentMs / 1000.0,
+            tap.IsOpen() ? "open" : "NOT open", PeakDb(waitPeak), input.empty() ? "an input the tap doesn't name" : input.c_str());
+        report::Limited("silence", 2, "  A wait heard no sound from the guitar for %.0f s (peak %.0f dB, input %s)",
+                        kSilentMs / 1000.0, PeakDb(waitPeak), input.empty() ? "?" : input.c_str());
     }
 
     // Pause menu, song end, other screens: the game is in charge. If we were holding the song, just
@@ -1761,6 +1814,8 @@ struct MainLoop {
         waitMarks.clear();
         waitWrong = false;
         frozenTick = now;
+        waitPeak = 0;
+        silenceTold = false;
         waitAudioStart = debugAudio.Pos() - 2LL * 48000;
         // "+N ms": how far past the note the song stopped (chords: up to 200 ms, see Follow()).
         Log("WAIT %.3f (phrase iteration %d, level %d, stopped at %+d ms): play %s", next.time, next.pi, next.level,
@@ -1788,6 +1843,7 @@ struct MainLoop {
             ReleaseWait();
             return;
         }
+        TellSilence(now);
         if (!HeardWaitedNote(now)) return;
         Log("HIT  %.3f %s after waiting %.2f s", waitFor.time, Describe(chart, waitFor).c_str(), (now - frozenTick) / 1000.0);
         RecordNote(waitFor.time, stats::Result::kWaited, (now - frozenTick) / 1000.0, waitWrong);

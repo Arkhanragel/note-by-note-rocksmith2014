@@ -1,5 +1,5 @@
 diff --git a/RS_ASIO/RSAsioAudioClient.cpp b/RS_ASIO/RSAsioAudioClient.cpp
-index db9e39f..c564af4 100644
+index db9e39f..76f8820 100644
 --- a/RS_ASIO/RSAsioAudioClient.cpp
 +++ b/RS_ASIO/RSAsioAudioClient.cpp
 @@ -8,6 +8,7 @@
@@ -10,20 +10,22 @@ index db9e39f..c564af4 100644
  
  RSAsioAudioClient::RSAsioAudioClient(RSAsioDevice& asioDevice)
  	: m_AsioDevice(asioDevice)
-@@ -615,6 +616,19 @@ void RSAsioAudioClient::OnAsioBufferSwitch(unsigned buffIdx)
+@@ -615,6 +616,21 @@ void RSAsioAudioClient::OnAsioBufferSwitch(unsigned buffIdx)
  			}
  		}
  
 +		// Note-by-Note: share the raw guitar signal (game channel 0, before software volume)
-+		// through the GuitarTap shared-memory ring buffer.
++		// through the GuitarTap shared-memory ring buffer. Every input offers its buffer; the tap
++		// keeps one (the first guitar input, see GuitarTap.h).
 +		if (!m_ChannelMap.empty() && m_ChannelMap[0] >= 0)
 +		{
 +			const ASIOChannelInfo* tapInfo = m_AsioSharedHost.GetInputChannelInfo(m_ChannelMap[0]);
 +			ASIOBufferInfo* tapBuffer = m_AsioSharedHost.GetInputBuffer(m_ChannelMap[0]);
 +			if (tapInfo && tapBuffer)
 +			{
-+				GuitarTap::Write(this, tapBuffer->buffers[buffIdx], tapInfo->type, GetAsioSampleTypeNumBytes(tapInfo->type),
-+					m_bufferNumFrames, m_WaveFormat.Format.nSamplesPerSec);
++				GuitarTap::Write(this, m_AsioDevice.GetIdRef().c_str(), m_AsioDevice.GetConfig().isMicrophone,
++					(unsigned)m_ChannelMap[0], tapBuffer->buffers[buffIdx], tapInfo->type,
++					GetAsioSampleTypeNumBytes(tapInfo->type), m_bufferNumFrames, m_WaveFormat.Format.nSamplesPerSec);
 +			}
 +		}
 +

@@ -171,23 +171,30 @@ The mod never reads song files at run time. When `[song+0x78]` changes it reads 
 
 ## Guitar audio (RS_ASIO tap)
 
-RS_ASIO owns the ASIO device, so nothing else can open it. Our RS_ASIO build is upstream **v0.7.5** plus [one patch](../mod/rs_asio_tap/rs_asio_v0.7.5_guitartap.patch): in the input branch of `RSAsioAudioClient::OnAsioBufferSwitch`, before RS_ASIO's software volume, input channel 0 is copied as float into a named file mapping. The same patch loads `NoteByNote.dll` on a thread from `DllMain`.
+RS_ASIO owns the ASIO device, so nothing else can open it. Our RS_ASIO build is upstream **v0.7.5** plus [one patch](../mod/rs_asio_tap/rs_asio_v0.7.5_guitartap.patch): in the input branch of `RSAsioAudioClient::OnAsioBufferSwitch`, before RS_ASIO's software volume, the guitar input's channel is copied as float into a named file mapping. The same patch loads `NoteByNote.dll` on a thread from `DllMain`.
 
 ```cpp
 // mod/common/GuitarTapShared.h
-name  "Local\\NoteByNote_GuitarInput"
+name  "Local\\NoteByNote_GuitarInput_<process id>"   // one tap per game process
 struct GuitarTapHeader {        // 64 bytes
     uint32_t magic;             // 'NBN1'
     uint32_t version, sampleRate, capacity;   // capacity = 65536 samples (1.37 s at 48 kHz)
     volatile int64_t writePos;  // total samples written, published with InterlockedExchange64
     uint32_t writerPid, blockFrames;
     volatile uint32_t lastWriteTick;
-    uint32_t reserved[7];
+    volatile uint32_t input;    // 1 + N for [Asio.Input.N], 100 = [Asio.Input.Mic]; 0 = not known
+    volatile uint32_t channel;  // 1 + the ASIO channel
+    uint32_t reserved[5];
 };
 float samples[65536];           // ring: sample i lives at samples[i % capacity]
 ```
 
 Readers must map it **read + write** (a 64-bit atomic read is done with `InterlockedCompareExchange64`, which writes). The Python tools read the same mapping while the game runs.
+
+Two rules, both from version 0.3.2 and both from problems seen in play:
+
+- **One tap per game process.** The name ends with the process id, and the mod only accepts a tap whose `writerPid` is its own process. With one fixed name a second game instance wrote into the same ring (two signals interleaved: no note found), and a game started while the previous one was still closing attached to the dying instance's tap and heard nothing all session.
+- **The tap carries one input, chosen on purpose.** RS_ASIO can have `[Asio.Input.0]`, `[Asio.Input.1]` and `[Asio.Input.Mic]` enabled, and it calls them in the order of their memory addresses. Every input offers its buffer; the tap keeps the enabled guitar input with the lowest number (the one the game listens to for a single player), the microphone input only when there is no other, and a less preferred input only while the preferred one has been silent for a second (`GuitarTapTakesOver`, tested by `nbn_tap_test`). `TapInput=` in `NoteByNote.ini` forces one. RS_ASIO's log and the mod's log name the input.
 
 ## Detection and the wait logic
 

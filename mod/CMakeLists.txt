@@ -49,6 +49,8 @@ add_executable(nbn_stats_test nbn/test_stats.cpp nbn/stats.cpp)
 add_executable(nbn_tuning_test nbn/test_tuning.cpp nbn/tuning.cpp nbn/music.cpp nbn/detector.cpp)
 # Pick strokes: suggested from the rhythm, or the song's own when they make sense.
 add_executable(nbn_picking_test nbn/test_picking.cpp nbn/picking.cpp nbn/chart.cpp nbn/music.cpp nbn/technique.cpp)
+# Guitar tap: which RS_ASIO input feeds it, whatever order RS_ASIO calls its inputs in; the tap's name.
+add_executable(nbn_tap_test nbn/test_tap.cpp)
 
 # Dev injector: loads a DLL into the running game.
 add_executable(nbn_inject injector/inject.cpp)

@@ -65,7 +65,14 @@ def tap_blocks():
     header = struct.Struct("<IIIIqIII7I")  # magic, version, sampleRate, capacity, writePos, pid, blockFrames, lastTick, reserved
     capacity = 1 << 16
     size = header.size + 4 * capacity
-    m = mmap.mmap(-1, size, tagname="Local\\NoteByNote_GuitarInput")
+    # One tap per game process since 0.3.2: the name ends with the game's process id.
+    import subprocess
+    listing = subprocess.run(["tasklist", "/FI", "IMAGENAME eq Rocksmith2014.exe", "/FO", "CSV", "/NH"],
+                             capture_output=True, text=True).stdout
+    pids = [line.split(",")[1].strip('"') for line in listing.splitlines() if line.startswith('"Rocksmith2014.exe"')]
+    if not pids:
+        raise SystemExit("The game isn't running.")
+    m = mmap.mmap(-1, size, tagname="Local\\NoteByNote_GuitarInput_" + pids[0])
     magic, _, sr, _cap, write_pos, *_ = header.unpack_from(m, 0)
     if magic != 0x314E424E:
         raise SystemExit("GuitarTap not active: is the game running with our RS_ASIO build installed?")

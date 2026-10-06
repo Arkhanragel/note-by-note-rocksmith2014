@@ -7,26 +7,55 @@
 
 namespace nbn {
 
-bool TapReader::Open() {
-    if (shared_) return true;
+namespace {
+
+// Maps the tap called `name`, or returns null when it doesn't exist or isn't this process's.
+GuitarTapShared* OpenTap(const wchar_t* name) {
     // Mapped read/WRITE even though we only read: the atomic 64-bit read below uses
     // InterlockedCompareExchange64 (lock cmpxchg8b), which needs write access. With a read-only view it
     // raised an access violation that silently killed the mod's thread (first in-game test).
-    HANDLE map = OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, FALSE, kGuitarTapName);
-    if (!map) return false;  // RS_ASIO hasn't created it yet (or this isn't our RS_ASIO build)
+    HANDLE map = OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, FALSE, name);
+    if (!map) return nullptr;  // RS_ASIO hasn't created it yet (or this isn't our RS_ASIO build)
     auto* p = (GuitarTapShared*)MapViewOfFile(map, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, sizeof(GuitarTapShared));
     CloseHandle(map);  // the view keeps the mapping alive
-    if (!p) return false;
-    if (p->h.magic != kGuitarTapMagic || p->h.capacity != kGuitarTapCapacity) {
+    if (!p) return nullptr;
+    // writerPid: the tap must be written by THIS game. (Seen with the fixed name of 0.3.1: a game started
+    // while the previous one was still closing attached to the old one's tap. The name went away with the
+    // old process, our view kept its memory, and the mod heard nothing until the next start.)
+    if (p->h.magic != kGuitarTapMagic || p->h.capacity != kGuitarTapCapacity || p->h.writerPid != GetCurrentProcessId()) {
         UnmapViewOfFile(p);
-        return false;
+        return nullptr;
     }
+    return p;
+}
+
+}  // namespace
+
+bool TapReader::Open() {
+    if (shared_) return true;
+    wchar_t name[64];
+    GuitarTapNameFor(GetCurrentProcessId(), name, 64);
+    GuitarTapShared* p = OpenTap(name);
+    // An RS_ASIO build from 0.3.1 or before (the setup installs the pair, but a file can be copied by
+    // hand): its tap has the bare name. Still only accepted when this process writes it.
+    if (!p) p = OpenTap(kGuitarTapName);
+    if (!p) return false;
     shared_ = p;
     readPos_ = -1;
     return true;
 }
 
 unsigned TapReader::SampleRate() const { return shared_ ? shared_->h.sampleRate : 0; }
+
+uint32_t TapReader::InputId() const { return shared_ ? shared_->h.input * 1000 + shared_->h.channel : 0; }
+
+std::string TapReader::InputName() const {
+    if (!shared_ || !shared_->h.input) return "";
+    const uint32_t input = shared_->h.input, channel = shared_->h.channel;
+    std::string s = input == kGuitarTapMicInput ? "[Asio.Input.Mic]" : "[Asio.Input." + std::to_string(input - 1) + "]";
+    if (channel) s += ", channel " + std::to_string(channel - 1);
+    return s;
+}
 
 void TapReader::ReadNew(std::vector<float>& out) {
     if (!shared_) return;
