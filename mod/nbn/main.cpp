@@ -13,7 +13,7 @@
 //
 // Keys (polled, only while the game window is focused): F5 = the Note-by-Note menu (mode on/off,
 // settings; the song is held while it is open), F6 = skip the note the song is waiting for.
-// (F8 / F9 until 0.3.1: RSModsPlus uses those for its drop pedal. See MigrateKeys.)
+// (F8 / F9 until 0.3.1: RSModsPlus uses those for its drop pedal. See keys.h.)
 //
 // "The next note on the highway" = the next note of the chart, where each phrase iteration uses its
 // CURRENT Dynamic Difficulty level. Both the chart (all levels) and the current levels are read from
@@ -39,9 +39,11 @@
 #include "crashlog.h"
 #include "fastintro.h"
 #include "game.h"
+#include "keys.h"
 #include "log.h"
 #include "overlay.h"
 #include "report.h"
+#include "silence.h"
 #include "startup.h"
 #include "stats.h"
 #include "stringid.h"
@@ -57,8 +59,8 @@ HMODULE g_self = nullptr;
 // Fixed settings (read once). The ones the player can change in the menu are overlay::Settings.
 struct Config {
     overlay::Settings initial;           // Enabled, LeadMs, EarlyMs, AcceptOctaves, ShowBanner, WaitChords, ShowClock, Tab*
-    int menuKey = VK_F5;
-    int skipKey = VK_F6;
+    int menuKey = keys::kDefaultMenu;
+    int skipKey = keys::kDefaultSkip;
     std::string menuSuffix = "_Game";    // the mode only acts on screens whose name ends like this
     std::string menuSound = "Nav_InGame_Options";
     bool saveWaitAudio = false;          // record each wait to NoteByNote_debug\ (for bug reports)
@@ -94,33 +96,6 @@ std::string Narrow(const std::wstring& w) {
     s.reserve(w.size());
     for (const wchar_t ch : w) s += ch < 128 ? (char)ch : '?';
     return s;
-}
-
-int ParseKey(const std::wstring& k, int def) {
-    if (k.size() >= 2 && (k[0] == L'F' || k[0] == L'f')) {
-        int n = _wtoi(k.c_str() + 1);
-        if (n >= 1 && n <= 24) return VK_F1 + n - 1;
-    }
-    if (k.rfind(L"0x", 0) == 0) return (int)wcstol(k.c_str(), nullptr, 16);
-    return def;
-}
-
-// Until 0.3.1 the keys were F8 (menu) and F9 (skip), which RSModsPlus uses for its drop pedal: one
-// press did both things. An ini from those versions is moved to F5 / F6 once. Only a key still on its
-// old default moves (a key the player chose stays), and KeysVersion marks the file as done, so F8 or
-// F9 chosen on purpose afterwards is kept.
-void MigrateKeys(const std::wstring& ini) {
-    if (GetPrivateProfileIntW(L"NoteByNote", L"KeysVersion", 1, ini.c_str()) >= 2) return;
-    wchar_t key[32];
-    auto moveKey = [&](const wchar_t* name, const wchar_t* was, const wchar_t* now) {
-        GetPrivateProfileStringW(L"NoteByNote", name, was, key, 32, ini.c_str());
-        if (_wcsicmp(key, was) == 0) WritePrivateProfileStringW(L"NoteByNote", name, now, ini.c_str());
-    };
-    // (An ini older than MenuKey has ToggleKey instead: MenuKey is then written here, and it wins.)
-    GetPrivateProfileStringW(L"NoteByNote", L"ToggleKey", L"F8", key, 32, ini.c_str());
-    if (_wcsicmp(key, L"F8") == 0) moveKey(L"MenuKey", L"F8", L"F5");
-    moveKey(L"SkipKey", L"F9", L"F6");
-    WritePrivateProfileStringW(L"NoteByNote", L"KeysVersion", L"2", ini.c_str());
 }
 
 Config LoadConfig() {
@@ -298,9 +273,10 @@ Config LoadConfig() {
     };
     c.initial.enabled = GetPrivateProfileIntW(L"NoteByNote", L"Enabled", 1, ini.c_str()) != 0;
     // MenuKey; older ini files called it ToggleKey (it used to switch the mode directly).
-    MigrateKeys(ini);
-    c.menuKey = ParseKey(str(L"MenuKey", str(L"ToggleKey", L"F5").c_str()), VK_F5);
-    c.skipKey = ParseKey(str(L"SkipKey", L"F6"), VK_F6);
+    // The two keys (keys.h): an ini from 0.3.1 or older is moved from F8 / F9 to F5 / F6 first, once.
+    keys::MigrateIni(ini);
+    c.menuKey = keys::MenuKey(ini);
+    c.skipKey = keys::SkipKey(ini);
     c.initial.leadMs = GetPrivateProfileIntW(L"NoteByNote", L"LeadMs", 30, ini.c_str());
     c.initial.earlyMs = GetPrivateProfileIntW(L"NoteByNote", L"EarlyMs", 300, ini.c_str());
     c.initial.lateMs = std::max(0, std::min(400, (int)GetPrivateProfileIntW(L"NoteByNote", L"LateMs", 150, ini.c_str())));
@@ -667,10 +643,9 @@ struct MainLoop {
     double clockT = 0;
     long long totalSamples = 0;
     // The guitar input's level: the loudest sample since the last status line, and since the wait began.
-    // A wait that hears NOTHING is not a wrong note: the guitar isn't reaching the mod (unplugged, its
-    // volume down, a flat wireless battery, the wrong input in RS_ASIO.ini). The banner says so.
+    // A wait that hears NOTHING is not a wrong note: the banner says the guitar isn't arriving (silence.h).
     float statusPeak = 0, waitPeak = 0;
-    bool silenceTold = false;         // the "can't hear your guitar" line is up for this wait
+    SilenceWatch silence;
     uint32_t tapInputId = 0;          // TapReader::InputId when it was last logged
     DebugAudio debugAudio;
     long long waitAudioStart = 0;
@@ -1445,21 +1420,16 @@ struct MainLoop {
     static double PeakDb(float peak) { return peak > 1e-6f ? 20.0 * std::log10((double)peak) : -120.0; }
 
     // A wait that has heard nothing for a while: say that the guitar isn't arriving, instead of leaving
-    // the player in front of a song that just doesn't move. Below kSilentPeak is an input's own noise
-    // (a quiet pluck is far above it); the line goes away as soon as anything is heard.
+    // the player in front of a song that just doesn't move (the rule: silence.h). The line goes away as
+    // soon as anything is heard.
     void TellSilence(DWORD now) {
-        constexpr float kSilentPeak = 0.003f;  // -50 dB: the detector's gate is -45 dB
-        constexpr DWORD kSilentMs = 6000;
-        if (waitPeak >= kSilentPeak) {
-            if (silenceTold) {
-                silenceTold = false;
-                waitHint.clear();
-                Log("  the guitar is heard again (peak %.0f dB)", PeakDb(waitPeak));
-            }
-            return;
+        constexpr unsigned kSilentMs = SilenceWatch::kSilentMs;
+        const SilenceWatch::Event event = silence.Update(waitPeak, now - frozenTick);
+        if (event == SilenceWatch::Event::kHeardAgain) {
+            waitHint.clear();
+            Log("  the guitar is heard again (peak %.0f dB)", PeakDb(waitPeak));
         }
-        if (silenceTold || now - frozenTick < kSilentMs) return;
-        silenceTold = true;
+        if (event != SilenceWatch::Event::kSilent) return;
         const std::string input = tap.InputName();
         waitHint = {{tap.IsOpen() ? "I can't hear your guitar: check it is plugged in and its volume is up"
                                   : "I can't hear your guitar: the guitar input didn't start",
@@ -1535,7 +1505,7 @@ struct MainLoop {
                 Log("chart: couldn't read the song's notes from memory");
                 overlay::Toast("Note-by-Note: couldn't read this song's notes, it plays normally", 4000);
             } else if (st.enabled) {
-                overlay::Toast("Note-by-Note ON  -  " + overlay::KeyName(cfg.menuKey) + " menu", 3500);
+                overlay::Toast("Note-by-Note ON  -  " + keys::Name(cfg.menuKey) + " menu", 3500);
             }
         }
     }
@@ -1815,7 +1785,7 @@ struct MainLoop {
         waitWrong = false;
         frozenTick = now;
         waitPeak = 0;
-        silenceTold = false;
+        silence.Reset();
         waitAudioStart = debugAudio.Pos() - 2LL * 48000;
         // "+N ms": how far past the note the song stopped (chords: up to 200 ms, see Follow()).
         Log("WAIT %.3f (phrase iteration %d, level %d, stopped at %+d ms): play %s", next.time, next.pi, next.level,

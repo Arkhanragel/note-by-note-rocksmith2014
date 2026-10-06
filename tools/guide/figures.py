@@ -13,8 +13,12 @@ def P_chordchip(name):
     return rect(0, -15, w, 30, PANEL, 7, 1, GOLD, 2) + T(w / 2, 0, name, 15, GOLD, 'middle', 700), w
 
 
+# The banner's last line: the two keys (overlay.cpp builds it from the configured keys; these are the defaults).
+KEYS_LINE = 'F6 = skip   F5 = menu'
+
+
 def keys_line(x, y, extra=''):
-    return T(x, y, extra + 'F6 = skip   F5 = menu', 14, DIM, w=400)
+    return T(x, y, extra + KEYS_LINE, 14, DIM, w=400)
 
 
 # ---------------------------------------------------------------- the whole screen
@@ -44,7 +48,7 @@ def fig_overview():
     g += T(318, 196, 'Then', 10, DIM, w=400)
     for k, (st, f) in enumerate(((2, 7), (3, 5), (3, 7))):
         g += rect(350 + k * 30, 187, 18, 18, SC[st], 4) + T(359 + k * 30, 196, f, 10, INK if LIGHT[st] else '#fff', 'middle', 700)
-    g += T(318, 234, 'F6 = skip   F5 = menu', 9.5, DIM, w=400)
+    g += T(318, 234, KEYS_LINE, 9.5, DIM, w=400)
     nk = neck(536, 122, 1, 6, s=0.5, zone=(2, 5), used=[2], bright=[5])
     g += nk.g + dot(nk, 2, 5)
     # The wrong-note panel.
@@ -302,7 +306,7 @@ def fig_cards():
         for i, c in enumerate(cards):
             cg, h = card(x0 + i * (cw + gap), y, cw, hl=(i == now), dim=(i < now), **c)
             q += cg
-        q += rect(x0, y + h + 10, 196, 26, PANEL, 13, 0.85) + T(x0 + 16, y + h + 23, 'F6 = skip   F5 = menu', 12.5, DIM, w=400)
+        q += rect(x0, y + h + 10, 196, 26, PANEL, 13, 0.85) + T(x0 + 16, y + h + 23, KEYS_LINE, 12.5, DIM, w=400)
         return q, h
 
     a = dict(st=3, fret=10, lo=8, finger=2, count='x2', pickkind='down')
@@ -595,7 +599,7 @@ def fig_themes():
         g += rect(x, 20, 190, 126, pan, 10, 1, SC[2], 2.2)
         g += T(x + 14, 46, [('Play fret 7 on ', text), ('string 4', SC[2])], 14, w=700)
         g += T(x + 14, 72, [('Play the chord  ', text), ('A5', chord)], 14, w=700)
-        g += T(x + 14, 98, 'F6 = skip   F5 = menu', 11.5, dim, w=400)
+        g += T(x + 14, 98, KEYS_LINE, 11.5, dim, w=400)
         g += rect(x + 14, 114, 58, 18, menu, 3) + T(x + 43, 123, 'Menu', 11, '#ffffff', 'middle', 400)
         g += T(x + 95, 168, name, 15, TEXT, 'middle', 600)
     return svg(W, H, 'The five colour themes: Default, High contrast, Midnight, Vintage, Paper', g)

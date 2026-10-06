@@ -33,7 +33,7 @@ target_include_directories(imgui PUBLIC ${IMGUI_DIR} ${IMGUI_DIR}/backends)
 target_compile_definitions(imgui PUBLIC IMGUI_DISABLE_DEMO_WINDOWS IMGUI_IMPL_WIN32_DISABLE_GAMEPAD)
 
 # THE MOD: NoteByNote.dll (loaded by our RS_ASIO build from the game folder).
-add_library(NoteByNote SHARED nbn/main.cpp nbn/game.cpp nbn/detector.cpp nbn/tap.cpp nbn/chart.cpp nbn/log.cpp nbn/overlay.cpp nbn/theme.cpp nbn/music.cpp nbn/technique.cpp nbn/hint.cpp nbn/stringid.cpp nbn/startup.cpp nbn/fastintro.cpp nbn/crashfix.cpp nbn/crashlog.cpp nbn/report.cpp nbn/stats.cpp nbn/tuning.cpp nbn/picking.cpp)
+add_library(NoteByNote SHARED nbn/main.cpp nbn/game.cpp nbn/detector.cpp nbn/tap.cpp nbn/chart.cpp nbn/log.cpp nbn/overlay.cpp nbn/theme.cpp nbn/music.cpp nbn/technique.cpp nbn/hint.cpp nbn/stringid.cpp nbn/startup.cpp nbn/fastintro.cpp nbn/crashfix.cpp nbn/crashlog.cpp nbn/report.cpp nbn/stats.cpp nbn/tuning.cpp nbn/picking.cpp nbn/keys.cpp)
 target_link_libraries(NoteByNote PRIVATE imgui minhook imagehlp winmm)
 target_compile_definitions(NoteByNote PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE _CRT_SECURE_NO_WARNINGS)
 
@@ -50,7 +50,11 @@ add_executable(nbn_tuning_test nbn/test_tuning.cpp nbn/tuning.cpp nbn/music.cpp 
 # Pick strokes: suggested from the rhythm, or the song's own when they make sense.
 add_executable(nbn_picking_test nbn/test_picking.cpp nbn/picking.cpp nbn/chart.cpp nbn/music.cpp nbn/technique.cpp)
 # Guitar tap: which RS_ASIO input feeds it, whatever order RS_ASIO calls its inputs in; the tap's name.
-add_executable(nbn_tap_test nbn/test_tap.cpp)
+add_executable(nbn_tap_test nbn/test_tap.cpp nbn/tap.cpp)
+# The menu and skip keys: reading, names, and the move of an older ini from F8 / F9 to F5 / F6.
+add_executable(nbn_keys_test nbn/test_keys.cpp nbn/keys.cpp)
+target_compile_definitions(nbn_keys_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE _CRT_SECURE_NO_WARNINGS)
+target_compile_definitions(nbn_tap_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 
 # Dev injector: loads a DLL into the running game.
 add_executable(nbn_inject injector/inject.cpp)

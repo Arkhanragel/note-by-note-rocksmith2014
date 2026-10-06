@@ -26,6 +26,7 @@
 #include "imgui.h"
 #include "imgui_impl_dx9.h"
 #include "imgui_impl_win32.h"
+#include "keys.h"
 #include "log.h"
 #include "music.h"
 
@@ -4208,15 +4209,8 @@ uint32_t Color(const Settings& st, theme::Slot slot) {
     return theme::kThemes[t].color[slot];
 }
 
-std::string KeyName(int vk) {
-    if (vk >= VK_F1 && vk <= VK_F24) return "F" + std::to_string(vk - VK_F1 + 1);
-    char code[16];
-    snprintf(code, sizeof code, "key 0x%02X", vk & 0xFF);
-    return code;
-}
-
 void SetKeys(int menuVk, int skipVk) {
-    const std::string menu = KeyName(menuVk), skip = KeyName(skipVk);
+    const std::string menu = keys::Name(menuVk), skip = keys::Name(skipVk);
     g_keysLine = skip + " = skip   " + menu + " = menu";
     g_skipNoteText = "Skip this note (" + skip + ")";
     g_skipChordText = "Skip this chord (" + skip + ")";

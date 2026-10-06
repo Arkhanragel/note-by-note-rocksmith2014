@@ -1,5 +1,5 @@
 diff --git a/RS_ASIO/RSAsioAudioClient.cpp b/RS_ASIO/RSAsioAudioClient.cpp
-index db9e39f..76f8820 100644
+index db9e39f..b48fb4d 100644
 --- a/RS_ASIO/RSAsioAudioClient.cpp
 +++ b/RS_ASIO/RSAsioAudioClient.cpp
 @@ -8,6 +8,7 @@
@@ -10,7 +10,7 @@ index db9e39f..76f8820 100644
  
  RSAsioAudioClient::RSAsioAudioClient(RSAsioDevice& asioDevice)
  	: m_AsioDevice(asioDevice)
-@@ -615,6 +616,21 @@ void RSAsioAudioClient::OnAsioBufferSwitch(unsigned buffIdx)
+@@ -615,6 +616,23 @@ void RSAsioAudioClient::OnAsioBufferSwitch(unsigned buffIdx)
  			}
  		}
  
@@ -23,9 +23,11 @@ index db9e39f..76f8820 100644
 +			ASIOBufferInfo* tapBuffer = m_AsioSharedHost.GetInputBuffer(m_ChannelMap[0]);
 +			if (tapInfo && tapBuffer)
 +			{
-+				GuitarTap::Write(this, m_AsioDevice.GetIdRef().c_str(), m_AsioDevice.GetConfig().isMicrophone,
-+					(unsigned)m_ChannelMap[0], tapBuffer->buffers[buffIdx], tapInfo->type,
-+					GetAsioSampleTypeNumBytes(tapInfo->type), m_bufferNumFrames, m_WaveFormat.Format.nSamplesPerSec);
++				const GuitarTap::Source tapSource = { this, m_AsioDevice.GetIdRef().c_str(),
++					m_AsioDevice.GetConfig().isMicrophone, (unsigned)m_ChannelMap[0] };
++				const GuitarTap::Block tapBlock = { tapBuffer->buffers[buffIdx], tapInfo->type,
++					GetAsioSampleTypeNumBytes(tapInfo->type), m_bufferNumFrames, m_WaveFormat.Format.nSamplesPerSec };
++				GuitarTap::Write(tapSource, tapBlock);
 +			}
 +		}
 +

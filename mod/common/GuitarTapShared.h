@@ -21,6 +21,7 @@
 #pragma once
 #include <stdint.h>
 #include <stdio.h>
+#include <wchar.h>
 
 namespace nbn {
 
@@ -58,6 +59,16 @@ inline void GuitarTapNameFor(uint32_t pid, wchar_t* out, size_t count) {
 }
 
 // ---- which input feeds the tap
+// N of [Asio.Input.N] from RS_ASIO's name for an input, "{ASIO IN 2}" (the microphone input is the
+// third: 2). 0 when the name isn't like that.
+inline int GuitarTapInputIndex(const wchar_t* deviceId) {
+    static const wchar_t kPrefix[] = L"{ASIO IN ";
+    const size_t prefixLen = sizeof(kPrefix) / sizeof(kPrefix[0]) - 1;
+    if (!deviceId || wcsncmp(deviceId, kPrefix, prefixLen) != 0) return 0;
+    const long n = wcstol(deviceId + prefixLen, nullptr, 10);
+    return n >= 0 && n < 64 ? (int)n : 0;
+}
+
 // The game listens to its first guitar input for a single player (seen on both game builds: with
 // [Asio.Input.0] on an empty channel and the guitar on [Asio.Input.1], the game hears no guitar). So the
 // tap follows the same rule: the enabled guitar input with the lowest number, and the microphone input
